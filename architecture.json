@@ -1,0 +1,50 @@
+{
+  "architecture": "clean",
+  "layers": [
+    {
+      "name": "domain",
+      "allowed_imports": [
+        "domain"
+      ],
+      "forbidden_imports": [
+        "application",
+        "infrastructure",
+        "interfaces"
+      ]
+    },
+    {
+      "name": "application",
+      "allowed_imports": [
+        "domain",
+        "application"
+      ],
+      "forbidden_imports": [
+        "infrastructure",
+        "interfaces"
+      ]
+    },
+    {
+      "name": "infrastructure",
+      "allowed_imports": [
+        "domain",
+        "application",
+        "infrastructure"
+      ],
+      "forbidden_imports": [
+        "interfaces"
+      ]
+    },
+    {
+      "name": "interfaces",
+      "allowed_imports": [
+        "application",
+        "interfaces"
+      ],
+      "forbidden_imports": [
+        "domain",
+        "infrastructure"
+      ]
+    }
+  ],
+  "dependency_rule": "Dependencies must ONLY point inward: interfaces → application → domain. Infrastructure implements interfaces from domain/application."
+}
