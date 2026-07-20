@@ -6,12 +6,12 @@ Contains the business rules for which transitions are allowed.
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
-from src.domain.exceptions import BusinessRuleViolation
+from src.domain.exceptions import BusinessRuleViolationError
 
 
-class ApplicationStatus(str, Enum):
+class ApplicationStatus(StrEnum):
     """The status of a job application."""
 
     DRAFT = "draft"
@@ -21,18 +21,18 @@ class ApplicationStatus(str, Enum):
     REJECTED = "rejected"
     WITHDRAWN = "withdrawn"
 
-    def can_transition_to(self, target: "ApplicationStatus") -> bool:
+    def can_transition_to(self, target: ApplicationStatus) -> bool:
         """Return whether a transition to ``target`` is permitted."""
         return target in _ALLOWED_TRANSITIONS[self]
 
-    def transition_to(self, target: "ApplicationStatus") -> "ApplicationStatus":
+    def transition_to(self, target: ApplicationStatus) -> ApplicationStatus:
         """Return the target status if the transition is valid.
 
         Raises:
-            BusinessRuleViolation: if the transition is not allowed.
+            BusinessRuleViolationError: if the transition is not allowed.
         """
         if not self.can_transition_to(target):
-            raise BusinessRuleViolation(
+            raise BusinessRuleViolationError(
                 f"Cannot move application from '{self.value}' to '{target.value}'."
             )
         return target

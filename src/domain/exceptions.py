@@ -13,7 +13,7 @@ class InvalidValueError(DomainError):
     """Raised when a value object receives an invalid value."""
 
 
-class BusinessRuleViolation(DomainError):
+class BusinessRuleViolationError(DomainError):
     """Raised when an operation would break an entity invariant."""
 
 

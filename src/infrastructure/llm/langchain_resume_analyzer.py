@@ -7,6 +7,9 @@ application layer. The use case has no idea LangChain or OpenAI exists.
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING, Any
+
+from pydantic import SecretStr
 
 from src.application.exceptions import ExternalServiceError
 from src.application.ports.resume_analyzer_port import (
@@ -14,6 +17,9 @@ from src.application.ports.resume_analyzer_port import (
     ResumeAnalyzerPort,
 )
 from src.infrastructure.config import Settings
+
+if TYPE_CHECKING:
+    from langchain_core.runnables import Runnable
 
 _SYSTEM_PROMPT = (
     "You are an expert career coach. Compare a candidate's resume to a job "
@@ -28,7 +34,7 @@ class LangChainResumeAnalyzer(ResumeAnalyzerPort):
         self._settings = settings
         self._chain = self._build_chain()
 
-    def _build_chain(self):
+    def _build_chain(self) -> Runnable[dict[str, Any], Any]:
         # Imported lazily so the app can boot without LangChain installed in
         # non-LLM contexts (tests, migrations).
         from langchain_core.prompts import ChatPromptTemplate
@@ -37,7 +43,7 @@ class LangChainResumeAnalyzer(ResumeAnalyzerPort):
         llm = ChatOpenAI(
             model=self._settings.llm_model,
             temperature=self._settings.llm_temperature,
-            api_key=self._settings.openai_api_key,
+            api_key=SecretStr(self._settings.openai_api_key),
         )
         prompt = ChatPromptTemplate.from_messages(
             [
@@ -63,9 +69,7 @@ class LangChainResumeAnalyzer(ResumeAnalyzerPort):
                 cover_letter=str(payload["cover_letter"]),
             )
         except Exception as exc:  # noqa: BLE001 - re-thrown as app-level error
-            raise ExternalServiceError(
-                f"Resume analysis failed: {exc}"
-            ) from exc
+            raise ExternalServiceError(f"Resume analysis failed: {exc}") from exc
 
 
 def _extract_content(response: object) -> str:

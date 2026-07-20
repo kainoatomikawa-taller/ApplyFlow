@@ -27,7 +27,7 @@ from src.application.use_cases.submit_job_application import (
 )
 from src.domain.exceptions import (
     ApplicationNotFoundError,
-    BusinessRuleViolation,
+    BusinessRuleViolationError,
     InvalidValueError,
 )
 from src.interfaces.http.dependencies import (
@@ -64,7 +64,7 @@ async def create_application(
             )
         )
     except InvalidValueError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     return ApplicationResponse(**output.__dict__)
 
 
@@ -81,7 +81,7 @@ async def analyze_application(
             )
         )
     except ApplicationNotFoundError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc))
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     return ApplicationResponse(**output.__dict__)
 
 
@@ -93,9 +93,9 @@ async def submit_application(
     try:
         output = await use_case.execute(application_id)
     except ApplicationNotFoundError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc))
-    except BusinessRuleViolation as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except BusinessRuleViolationError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return ApplicationResponse(**output.__dict__)
 
 

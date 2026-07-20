@@ -6,6 +6,7 @@ controllers and cross-cutting concerns (CORS, error handling).
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -18,7 +19,7 @@ from src.interfaces.http.controllers import (
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Startup / shutdown hooks (DB warmup, etc.) go here.
     yield
 

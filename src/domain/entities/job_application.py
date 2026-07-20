@@ -8,7 +8,7 @@ in controllers or use cases.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from src.domain.exceptions import InvalidValueError
 from src.domain.value_objects.application_status import ApplicationStatus
@@ -17,7 +17,7 @@ from src.domain.value_objects.match_score import MatchScore
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 @dataclass

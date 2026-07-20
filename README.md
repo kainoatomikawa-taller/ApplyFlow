@@ -124,11 +124,15 @@ npm run dev
 Run from the repo root (see the `Makefile`):
 
 ```bash
-make test      # run the pytest suite
-make lint      # ruff + mypy
-make format    # black + ruff --fix
-make migrate   # alembic upgrade head
-make up        # docker compose up --build
+make test              # run the pytest suite
+make lint              # ruff + mypy
+make format            # black + ruff --fix
+make migrate           # alembic upgrade head
+make up                # docker compose up --build
+make frontend-install  # npm install
+make frontend-build    # tsc -b && vite build
+make frontend-lint     # eslint
+make frontend-format   # prettier --write
 ```
 
 CLI example:

@@ -1,7 +1,7 @@
 import pytest
 
 from src.domain.entities.job_application import JobApplication
-from src.domain.exceptions import BusinessRuleViolation, InvalidValueError
+from src.domain.exceptions import BusinessRuleViolationError, InvalidValueError
 from src.domain.value_objects.application_status import ApplicationStatus
 from src.domain.value_objects.email_address import EmailAddress
 from src.domain.value_objects.match_score import MatchScore
@@ -30,7 +30,7 @@ def test_submit_moves_to_applied():
 def test_invalid_status_transition_raises():
     app = _app()
     app.submit()  # APPLIED
-    with pytest.raises(BusinessRuleViolation):
+    with pytest.raises(BusinessRuleViolationError):
         app.change_status(ApplicationStatus.OFFER)  # not allowed from APPLIED
 
 

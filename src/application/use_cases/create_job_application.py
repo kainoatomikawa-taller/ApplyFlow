@@ -28,9 +28,7 @@ class CreateJobApplication:
         self._repository = repository
         self._id_generator = id_generator
 
-    async def execute(
-        self, dto: CreateJobApplicationInput
-    ) -> JobApplicationOutput:
+    async def execute(self, dto: CreateJobApplicationInput) -> JobApplicationOutput:
         application = JobApplication(
             id=self._id_generator.new_id(),
             candidate_email=EmailAddress(dto.candidate_email),

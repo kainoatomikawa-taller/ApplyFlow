@@ -47,9 +47,7 @@ def _repository(
 def get_create_use_case(
     repository: SqlAlchemyJobApplicationRepository = Depends(_repository),
 ) -> CreateJobApplication:
-    return CreateJobApplication(
-        repository=repository, id_generator=UuidIdGenerator()
-    )
+    return CreateJobApplication(repository=repository, id_generator=UuidIdGenerator())
 
 
 def get_analyze_use_case(

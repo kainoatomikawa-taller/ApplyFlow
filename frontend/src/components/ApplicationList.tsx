@@ -19,9 +19,7 @@ export function ApplicationList({ applications, onSubmit }: Props) {
           </h3>
           <p>
             <span className="status">{app.status}</span>
-            {app.match_score !== null && (
-              <> · Match score: {app.match_score}/100</>
-            )}
+            {app.match_score !== null && <> · Match score: {app.match_score}/100</>}
           </p>
           {app.status === 'draft' && (
             <button onClick={() => onSubmit(app.id)}>Submit</button>

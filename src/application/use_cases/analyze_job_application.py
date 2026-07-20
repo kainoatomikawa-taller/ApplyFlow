@@ -28,9 +28,7 @@ class AnalyzeJobApplication:
         self._repository = repository
         self._analyzer = analyzer
 
-    async def execute(
-        self, dto: AnalyzeApplicationInput
-    ) -> JobApplicationOutput:
+    async def execute(self, dto: AnalyzeApplicationInput) -> JobApplicationOutput:
         application = await self._repository.get_by_id(dto.application_id)
         if application is None:
             raise ApplicationNotFoundError(dto.application_id)

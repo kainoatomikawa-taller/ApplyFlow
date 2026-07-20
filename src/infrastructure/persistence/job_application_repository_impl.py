@@ -28,9 +28,7 @@ class SqlAlchemyJobApplicationRepository(JobApplicationRepository):
 
     async def get_by_id(self, application_id: str) -> JobApplication | None:
         result = await self._session.execute(
-            select(JobApplicationModel).where(
-                JobApplicationModel.id == application_id
-            )
+            select(JobApplicationModel).where(JobApplicationModel.id == application_id)
         )
         model = result.scalar_one_or_none()
         return self._to_entity(model) if model else None
@@ -43,9 +41,7 @@ class SqlAlchemyJobApplicationRepository(JobApplicationRepository):
             self._apply_entity_to_model(application, model)
         await self._session.commit()
 
-    async def list_by_candidate(
-        self, candidate_email: str
-    ) -> list[JobApplication]:
+    async def list_by_candidate(self, candidate_email: str) -> list[JobApplication]:
         result = await self._session.execute(
             select(JobApplicationModel).where(
                 JobApplicationModel.candidate_email == candidate_email.lower()
@@ -55,9 +51,7 @@ class SqlAlchemyJobApplicationRepository(JobApplicationRepository):
 
     async def delete(self, application_id: str) -> None:
         await self._session.execute(
-            delete(JobApplicationModel).where(
-                JobApplicationModel.id == application_id
-            )
+            delete(JobApplicationModel).where(JobApplicationModel.id == application_id)
         )
         await self._session.commit()
 
@@ -105,9 +99,7 @@ class SqlAlchemyJobApplicationRepository(JobApplicationRepository):
             job_description=model.job_description,
             status=ApplicationStatus(model.status),
             match_score=(
-                MatchScore(model.match_score)
-                if model.match_score is not None
-                else None
+                MatchScore(model.match_score) if model.match_score is not None else None
             ),
             tailored_cover_letter=model.tailored_cover_letter,
             created_at=model.created_at,
