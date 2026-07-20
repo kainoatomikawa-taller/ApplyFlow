@@ -9,8 +9,6 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from pydantic import SecretStr
-
 from src.application.exceptions import ExternalServiceError
 from src.application.ports.resume_analyzer_port import (
     ResumeAnalysisResult,
@@ -43,7 +41,7 @@ class LangChainResumeAnalyzer(ResumeAnalyzerPort):
         llm = ChatOpenAI(
             model=self._settings.llm_model,
             temperature=self._settings.llm_temperature,
-            api_key=SecretStr(self._settings.openai_api_key),
+            api_key=self._settings.openai_api_key,
         )
         prompt = ChatPromptTemplate.from_messages(
             [
