@@ -26,7 +26,7 @@ async def test_live_completion_against_the_real_anthropic_api():
     client = AnthropicLlmClient(get_settings())
 
     text = await client.complete(
-        "Reply with exactly one word, lowercase, no punctuation: pong"
+        "Respond with only the single word 'acknowledged', nothing else."
     )
 
-    assert "pong" in text.lower()
+    assert "acknowledged" in text.lower()
