@@ -149,6 +149,36 @@ RUN_LIVE_LLM_TEST=1 ANTHROPIC_API_KEY=sk-ant-... \
 
 ---
 
+## Data-access layer
+
+`src/infrastructure/persistence/database.py` owns the one process-wide
+connection pool (`engine` / `async_session_factory`), so no later feature
+opens its own connection. It's sized from config (`DB_POOL_SIZE`,
+`DB_MAX_OVERFLOW`, `DB_POOL_RECYCLE_SECONDS`), pings a connection before
+handing it out (`pool_pre_ping=True`), and disables asyncpg's server-side
+prepared-statement cache (`statement_cache_size=0`) so the same code works
+whether `DATABASE_URL` points at local Postgres or Supabase's PgBouncer
+transaction-pooler — a plain Postgres connection ignores that setting, so
+it's safe either way. `dispose_engine()` is called from the FastAPI
+`lifespan` on shutdown so pooled connections are released cleanly instead
+of leaking until the process exits.
+
+Every aggregate gets typed read/write helpers the same way
+`SqlAlchemyJobApplicationRepository` does: implement the domain-defined
+repository interface (`src/domain/repositories/`), taking an `AsyncSession`
+via the constructor and mapping rows ↔ entities — never leak an ORM model
+past that class.
+
+`tests/infrastructure/test_persistence_smoke.py` proves the whole path
+against a **real** database — not a fake — by creating, reading, and
+deleting a `JobApplication` row through the repository. It skips (instead
+of failing) if nothing is reachable at `DATABASE_URL`, so `pytest` still
+runs without Postgres up; start one locally with `docker compose up db` (or
+point `DATABASE_URL` at any reachable Postgres) to have it actually run.
+CI provisions a Postgres service container so it always executes there.
+
+---
+
 ## Getting Started
 
 ### Option A — Docker (recommended)

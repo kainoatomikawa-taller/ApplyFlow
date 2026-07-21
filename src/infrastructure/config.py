@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     database_url: str = (
         "postgresql+asyncpg://applyflow:applyflow@localhost:5432/applyflow"
     )
+    db_pool_size: int = 5
+    db_max_overflow: int = 10
+    db_pool_recycle_seconds: int = 1800
 
     # Supabase (database host + auth provider)
     supabase_url: str = ""

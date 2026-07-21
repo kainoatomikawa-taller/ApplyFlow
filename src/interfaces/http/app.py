@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.infrastructure.persistence.database import dispose_engine
 from src.interfaces.http.controllers import (
     application_controller,
     health_controller,
@@ -20,8 +21,10 @@ from src.interfaces.http.controllers import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    # Startup / shutdown hooks (DB warmup, etc.) go here.
     yield
+    # Release every pooled DB connection on shutdown instead of leaking
+    # them until the process exits.
+    await dispose_engine()
 
 
 def create_app() -> FastAPI:

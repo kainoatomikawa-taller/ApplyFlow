@@ -8,6 +8,20 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: applyflow
+          POSTGRES_PASSWORD: applyflow
+          POSTGRES_DB: applyflow
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U applyflow"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -20,6 +34,8 @@ jobs:
           ruff check src tests
           mypy src
       - name: Test
+        env:
+          DATABASE_URL: postgresql+asyncpg://applyflow:applyflow@localhost:5432/applyflow
         run: pytest
 
   frontend:
