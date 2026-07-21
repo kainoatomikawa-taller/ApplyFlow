@@ -10,9 +10,13 @@ import argparse
 import asyncio
 
 from src.application.dtos.job_application_dtos import CreateJobApplicationInput
+from src.application.dtos.llm_dtos import LlmCompletionInput
 from src.application.use_cases.create_job_application import (
     CreateJobApplication,
 )
+from src.application.use_cases.get_llm_completion import GetLlmCompletion
+from src.infrastructure.config import get_settings
+from src.infrastructure.llm.anthropic_client import AnthropicLlmClient
 from src.infrastructure.persistence.database import async_session_factory
 from src.infrastructure.persistence.job_application_repository_impl import (
     SqlAlchemyJobApplicationRepository,
@@ -37,6 +41,12 @@ async def _create(args: argparse.Namespace) -> None:
         print(f"Created application {output.id} ({output.status})")
 
 
+async def _llm_ping(args: argparse.Namespace) -> None:
+    use_case = GetLlmCompletion(llm_client=AnthropicLlmClient(get_settings()))
+    output = await use_case.execute(LlmCompletionInput(prompt=args.prompt))
+    print(output.text)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="applyflow")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -47,6 +57,12 @@ def main() -> None:
     create.add_argument("--role", required=True)
     create.add_argument("--description", required=True)
     create.set_defaults(func=_create)
+
+    llm_ping = sub.add_parser(
+        "llm-ping", help="Send one prompt through the LLM integration layer"
+    )
+    llm_ping.add_argument("--prompt", required=True)
+    llm_ping.set_defaults(func=_llm_ping)
 
     args = parser.parse_args()
     asyncio.run(args.func(args))

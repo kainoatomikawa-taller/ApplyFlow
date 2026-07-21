@@ -25,7 +25,7 @@ class ConfigurationError(ValueError):
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_file=(".env", ".env.local"), env_file_encoding="utf-8", extra="ignore"
     )
 
     # App
@@ -53,8 +53,12 @@ class Settings(BaseSettings):
     llm_model: str = "gpt-4o-mini"
     llm_temperature: float = 0.2
 
-    # Anthropic (reserved for an upcoming Claude-based analyzer)
+    # Anthropic — the ONLY LLM credential path (see AnthropicLlmClient).
+    # Must be a pay-as-you-go API key from console.anthropic.com; never a
+    # claude.ai subscription/session credential.
     anthropic_api_key: SecretStr = SecretStr("")
+    anthropic_model: str = "claude-haiku-4-5-20251001"
+    anthropic_max_tokens: int = 1024
 
     # Job aggregator integration (reserved for an upcoming adapter)
     job_aggregator_api_key: SecretStr = SecretStr("")
@@ -76,6 +80,11 @@ class Settings(BaseSettings):
         if not self.supabase_jwt_secret.get_secret_value():
             raise ValueError(
                 "SUPABASE_JWT_SECRET is required when ENVIRONMENT is "
+                f"'{self.environment}'."
+            )
+        if not self.anthropic_api_key.get_secret_value():
+            raise ValueError(
+                "ANTHROPIC_API_KEY is required when ENVIRONMENT is "
                 f"'{self.environment}'."
             )
         return self

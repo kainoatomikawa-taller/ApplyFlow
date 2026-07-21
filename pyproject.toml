@@ -19,6 +19,7 @@ dependencies = [
     "langchain-core>=0.2",
     "langchain-openai>=0.1",
     "pyjwt>=2.8",
+    "anthropic>=0.40",
 ]
 
 [project.optional-dependencies]

@@ -42,17 +42,20 @@ Pure business logic with zero third-party imports.
 Orchestrates the domain to fulfill use cases. No DB, HTTP, or LLM code.
 - `use_cases/` — one class per use case, each with an `execute(dto)` method
   (`CreateJobApplication`, `AnalyzeJobApplication`, `SubmitJobApplication`,
-  `ListCandidateApplications`)
+  `ListCandidateApplications`, `GetLlmCompletion`)
 - `dtos/` — input/output contracts (entities never cross the boundary)
 - `ports/` — outbound abstractions (`ResumeAnalyzerPort`, `TaskQueuePort`,
-  `IdGeneratorPort`, `AuthVerifierPort`) implemented by infrastructure
+  `IdGeneratorPort`, `AuthVerifierPort`, `LlmClientPort`) implemented by
+  infrastructure
 - `mappers/` — domain ↔ DTO translation
 
 ### `src/infrastructure/` — implementations (depends on domain + application)
 All I/O lives here. Implements the interfaces defined further in.
 - `persistence/` — SQLAlchemy models + `SqlAlchemyJobApplicationRepository`
   (implements the domain repository interface, maps rows ↔ entities)
-- `llm/` — `LangChainResumeAnalyzer` (implements `ResumeAnalyzerPort`)
+- `llm/` — `LangChainResumeAnalyzer` (implements `ResumeAnalyzerPort`) and
+  `AnthropicLlmClient` (implements `LlmClientPort` — the app's single LLM
+  integration; see below)
 - `tasks/` — Celery app, tasks, and `CeleryTaskQueue` (implements `TaskQueuePort`)
 - `services/` — `UuidIdGenerator` (implements `IdGeneratorPort`)
 - `auth/` — `SupabaseJwtVerifier` (implements `AuthVerifierPort`)
@@ -103,6 +106,46 @@ provider.
 No credentials are ever hard-coded — everything above is read through
 `src/infrastructure/config.py` (see `.env.example`), and `SUPABASE_JWT_SECRET`
 is required outside of `ENVIRONMENT=development`.
+
+---
+
+## LLM integration layer
+
+`src/infrastructure/llm/anthropic_client.py`'s `AnthropicLlmClient` is the
+**only** module in the codebase that talks to the Anthropic API. Every
+LLM-backed feature depends on the `LlmClientPort` abstraction
+(`src/application/ports/llm_client_port.py`) and receives this adapter from a
+composition root — nothing else imports the `anthropic` SDK directly.
+
+- **Auth**: a pay-as-you-go API key from
+  [console.anthropic.com](https://console.anthropic.com/settings/keys), read
+  from config as `ANTHROPIC_API_KEY` and passed explicitly as `api_key=` when
+  constructing the client. Subscription/claude.ai login credentials are never
+  used — there is no code path that reads an OAuth session or the `claude`
+  CLI's stored credentials.
+- **Required outside development**: like the other provider secrets,
+  `ANTHROPIC_API_KEY` must be set whenever `ENVIRONMENT` isn't `development`
+  (enforced in `src/infrastructure/config.py`).
+- **Model**: defaults to `claude-haiku-4-5-20251001`, configurable via
+  `ANTHROPIC_MODEL` / `ANTHROPIC_MAX_TOKENS`.
+
+Try the full path end-to-end with the CLI, which wires
+`AnthropicLlmClient` → `GetLlmCompletion` (the generic use case every future
+LLM feature can call through):
+
+```bash
+python -m src.interfaces.cli.main llm-ping --prompt "Say hello in one word."
+```
+
+Unit tests (`tests/infrastructure/test_anthropic_llm_client.py`,
+`tests/application/test_get_llm_completion.py`) mock the SDK so `pytest`
+never makes a network call or spends money. To prove a real completion
+against Anthropic's API, run the opt-in live test with a real key:
+
+```bash
+RUN_LIVE_LLM_TEST=1 ANTHROPIC_API_KEY=sk-ant-... \
+  pytest tests/infrastructure/test_anthropic_llm_client_live.py
+```
 
 ---
 

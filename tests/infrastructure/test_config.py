@@ -21,6 +21,15 @@ def test_secrets_are_never_exposed_via_repr_or_str():
     assert "sk-super-secret" not in repr(settings.openai_api_key)
 
 
+def test_anthropic_api_key_is_never_exposed_via_repr_or_str():
+    settings = Settings(
+        _env_file=None, anthropic_api_key=SecretStr("sk-ant-super-secret")
+    )
+    assert "sk-ant-super-secret" not in repr(settings)
+    assert "sk-ant-super-secret" not in str(settings)
+    assert "sk-ant-super-secret" not in repr(settings.anthropic_api_key)
+
+
 def test_invalid_environment_fails_fast_with_clear_error():
     with pytest.raises(ValidationError, match="environment"):
         Settings(_env_file=None, environment="not-a-real-env")
@@ -32,6 +41,7 @@ def test_missing_openai_key_fails_fast_outside_development():
             _env_file=None,
             environment="production",
             supabase_jwt_secret=SecretStr("jwt-secret"),
+            anthropic_api_key=SecretStr("sk-ant-real-key"),
         )
 
 
@@ -41,6 +51,17 @@ def test_missing_supabase_jwt_secret_fails_fast_outside_development():
             _env_file=None,
             environment="production",
             openai_api_key=SecretStr("sk-real-key"),
+            anthropic_api_key=SecretStr("sk-ant-real-key"),
+        )
+
+
+def test_missing_anthropic_api_key_fails_fast_outside_development():
+    with pytest.raises(ValidationError, match="ANTHROPIC_API_KEY"):
+        Settings(
+            _env_file=None,
+            environment="production",
+            openai_api_key=SecretStr("sk-real-key"),
+            supabase_jwt_secret=SecretStr("jwt-secret"),
         )
 
 
@@ -61,6 +82,7 @@ def test_all_required_secrets_present_satisfies_non_development_requirement():
         environment="production",
         openai_api_key=SecretStr("sk-real-key"),
         supabase_jwt_secret=SecretStr("jwt-secret"),
+        anthropic_api_key=SecretStr("sk-ant-real-key"),
     )
     assert settings.environment == "production"
 
