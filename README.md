@@ -126,21 +126,52 @@ composition root — nothing else imports the `anthropic` SDK directly.
 - **Required outside development**: like the other provider secrets,
   `ANTHROPIC_API_KEY` must be set whenever `ENVIRONMENT` isn't `development`
   (enforced in `src/infrastructure/config.py`).
-- **Model**: defaults to `claude-haiku-4-5-20251001`, configurable via
-  `ANTHROPIC_MODEL` / `ANTHROPIC_MAX_TOKENS`.
+
+### Model routing (cost control)
+
+Callers never name a model — they pass a **task type**
+(`LlmTaskType`, `src/application/ports/llm_client_port.py`) describing what
+the prompt is *for*, and the layer picks the model. This keeps cost control
+in one place: nobody can accidentally point a high-volume call at the
+expensive model by passing the wrong string, because there's no model
+string to pass.
+
+| Task type               | Tier   | Default model                | Rationale                                   |
+| ------------------------ | ------ | ----------------------------- | -------------------------------------------- |
+| `extraction`              | cheap  | `claude-haiku-4-5-20251001`  | High-volume, low-ambiguity                   |
+| `matching`                 | cheap  | `claude-haiku-4-5-20251001`  | High-volume, low-ambiguity                   |
+| `parsing`                  | cheap  | `claude-haiku-4-5-20251001`  | High-volume, low-ambiguity                   |
+| `resume_writing`           | strong | `claude-sonnet-5`             | Quality-sensitive, low-volume writing        |
+| `cover_letter_writing`     | strong | `claude-sonnet-5`             | Quality-sensitive, low-volume writing        |
+
+- **Default routing**: `TASK_TYPE_TIERS` in `llm_client_port.py` is the one
+  place that maps a task type to a tier (`LlmModelTier.CHEAP` /
+  `LlmModelTier.STRONG`). It's an application-layer policy decision — it
+  doesn't know or care which provider/model implements each tier.
+- **Overrides**: which concrete model backs each tier is config, not code —
+  override via `ANTHROPIC_MODEL_CHEAP` / `ANTHROPIC_MODEL_STRONG` (e.g. to
+  point "strong" at a newer Sonnet snapshot, or "cheap" at a cheaper model)
+  without touching any call site. `ANTHROPIC_MAX_TOKENS` applies to both
+  tiers.
 
 Try the full path end-to-end with the CLI, which wires
 `AnthropicLlmClient` → `GetLlmCompletion` (the generic use case every future
-LLM feature can call through):
+LLM feature can call through) and lets you pick the task type:
 
 ```bash
-python -m src.interfaces.cli.main llm-ping --prompt "Say hello in one word."
+python -m src.interfaces.cli.main llm-ping --task-type extraction \
+  --prompt "Say hello in one word."
+python -m src.interfaces.cli.main llm-ping --task-type resume_writing \
+  --prompt "Draft one sentence of a cover letter opener."
 ```
 
 Unit tests (`tests/infrastructure/test_anthropic_llm_client.py`,
 `tests/application/test_get_llm_completion.py`) mock the SDK so `pytest`
-never makes a network call or spends money. To prove a real completion
-against Anthropic's API, run the opt-in live test with a real key:
+never makes a network call or spends money — including dedicated tests that
+every cheap-tier task type resolves to the cheap model and every
+strong-tier one resolves to the strong model. To prove real completions
+from both tiers against Anthropic's API, run the opt-in live test with a
+real key:
 
 ```bash
 RUN_LIVE_LLM_TEST=1 ANTHROPIC_API_KEY=sk-ant-... \

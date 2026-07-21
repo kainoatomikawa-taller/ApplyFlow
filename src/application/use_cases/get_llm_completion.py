@@ -17,5 +17,7 @@ class GetLlmCompletion:
         self._llm_client = llm_client
 
     async def execute(self, dto: LlmCompletionInput) -> LlmCompletionOutput:
-        text = await self._llm_client.complete(dto.prompt, system=dto.system)
+        text = await self._llm_client.complete(
+            dto.prompt, task_type=dto.task_type, system=dto.system
+        )
         return LlmCompletionOutput(text=text)

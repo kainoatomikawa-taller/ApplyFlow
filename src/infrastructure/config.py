@@ -60,7 +60,11 @@ class Settings(BaseSettings):
     # Must be a pay-as-you-go API key from console.anthropic.com; never a
     # claude.ai subscription/session credential.
     anthropic_api_key: SecretStr = SecretStr("")
-    anthropic_model: str = "claude-haiku-4-5-20251001"
+    # Model routing: callers pick a LlmTaskType, never a model. These two
+    # settings are the only override point for which concrete model backs
+    # each cost tier — see AnthropicLlmClient and TASK_TYPE_TIERS.
+    anthropic_model_cheap: str = "claude-haiku-4-5-20251001"
+    anthropic_model_strong: str = "claude-sonnet-5"
     anthropic_max_tokens: int = 1024
 
     # Job aggregator integration (reserved for an upcoming adapter)

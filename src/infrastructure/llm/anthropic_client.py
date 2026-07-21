@@ -9,6 +9,12 @@ Authentication is a pay-as-you-go Anthropic API key, passed explicitly as
 `api_key=`. Subscription/claude.ai login credentials (OAuth session
 tokens, the `claude` CLI's stored credentials, etc.) are never read or
 accepted here — there is no code path in this class that looks for them.
+
+Model routing: this class's only job re: model selection is turning the
+`LlmModelTier` that `TASK_TYPE_TIERS` picked for a call's `LlmTaskType`
+into a concrete model id, sourced from config (`ANTHROPIC_MODEL_CHEAP` /
+`ANTHROPIC_MODEL_STRONG`). Callers never see a tier or a model — only a
+task type.
 """
 
 from __future__ import annotations
@@ -17,7 +23,12 @@ from anthropic import AsyncAnthropic, omit
 from anthropic.types import TextBlock
 
 from src.application.exceptions import ExternalServiceError
-from src.application.ports.llm_client_port import LlmClientPort
+from src.application.ports.llm_client_port import (
+    TASK_TYPE_TIERS,
+    LlmClientPort,
+    LlmModelTier,
+    LlmTaskType,
+)
 from src.infrastructure.config import Settings
 
 
@@ -30,13 +41,19 @@ class AnthropicLlmClient(LlmClientPort):
                 "Anthropic."
             )
         self._client = AsyncAnthropic(api_key=api_key)
-        self._model = settings.anthropic_model
+        self._models: dict[LlmModelTier, str] = {
+            LlmModelTier.CHEAP: settings.anthropic_model_cheap,
+            LlmModelTier.STRONG: settings.anthropic_model_strong,
+        }
         self._max_tokens = settings.anthropic_max_tokens
 
-    async def complete(self, prompt: str, *, system: str | None = None) -> str:
+    async def complete(
+        self, prompt: str, *, task_type: LlmTaskType, system: str | None = None
+    ) -> str:
+        model = self._models[TASK_TYPE_TIERS[task_type]]
         try:
             response = await self._client.messages.create(
-                model=self._model,
+                model=model,
                 max_tokens=self._max_tokens,
                 messages=[{"role": "user", "content": prompt}],
                 system=system if system is not None else omit,

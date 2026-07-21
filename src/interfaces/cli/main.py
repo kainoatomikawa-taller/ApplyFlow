@@ -11,6 +11,7 @@ import asyncio
 
 from src.application.dtos.job_application_dtos import CreateJobApplicationInput
 from src.application.dtos.llm_dtos import LlmCompletionInput
+from src.application.ports.llm_client_port import LlmTaskType
 from src.application.use_cases.create_job_application import (
     CreateJobApplication,
 )
@@ -43,7 +44,9 @@ async def _create(args: argparse.Namespace) -> None:
 
 async def _llm_ping(args: argparse.Namespace) -> None:
     use_case = GetLlmCompletion(llm_client=AnthropicLlmClient(get_settings()))
-    output = await use_case.execute(LlmCompletionInput(prompt=args.prompt))
+    output = await use_case.execute(
+        LlmCompletionInput(prompt=args.prompt, task_type=LlmTaskType(args.task_type))
+    )
     print(output.text)
 
 
@@ -62,6 +65,12 @@ def main() -> None:
         "llm-ping", help="Send one prompt through the LLM integration layer"
     )
     llm_ping.add_argument("--prompt", required=True)
+    llm_ping.add_argument(
+        "--task-type",
+        choices=[t.value for t in LlmTaskType],
+        default=LlmTaskType.EXTRACTION.value,
+        help="Task intent, not a model name — the LLM layer picks the model tier",
+    )
     llm_ping.set_defaults(func=_llm_ping)
 
     args = parser.parse_args()
