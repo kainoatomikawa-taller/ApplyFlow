@@ -28,7 +28,20 @@ def test_invalid_environment_fails_fast_with_clear_error():
 
 def test_missing_openai_key_fails_fast_outside_development():
     with pytest.raises(ValidationError, match="OPENAI_API_KEY"):
-        Settings(_env_file=None, environment="production")
+        Settings(
+            _env_file=None,
+            environment="production",
+            supabase_jwt_secret=SecretStr("jwt-secret"),
+        )
+
+
+def test_missing_supabase_jwt_secret_fails_fast_outside_development():
+    with pytest.raises(ValidationError, match="SUPABASE_JWT_SECRET"):
+        Settings(
+            _env_file=None,
+            environment="production",
+            openai_api_key=SecretStr("sk-real-key"),
+        )
 
 
 def test_get_settings_wraps_invalid_config_in_a_clear_error(monkeypatch):
@@ -42,11 +55,12 @@ def test_get_settings_wraps_invalid_config_in_a_clear_error(monkeypatch):
         get_settings.cache_clear()
 
 
-def test_openai_key_present_satisfies_non_development_requirement():
+def test_all_required_secrets_present_satisfies_non_development_requirement():
     settings = Settings(
         _env_file=None,
         environment="production",
         openai_api_key=SecretStr("sk-real-key"),
+        supabase_jwt_secret=SecretStr("jwt-secret"),
     )
     assert settings.environment == "production"
 

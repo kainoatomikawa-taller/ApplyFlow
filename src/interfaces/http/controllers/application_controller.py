@@ -33,6 +33,7 @@ from src.domain.exceptions import (
 from src.interfaces.http.dependencies import (
     get_analyze_use_case,
     get_create_use_case,
+    get_current_user,
     get_list_use_case,
     get_submit_use_case,
 )
@@ -42,7 +43,11 @@ from src.interfaces.http.schemas import (
     CreateApplicationRequest,
 )
 
-router = APIRouter(prefix="/api/applications", tags=["applications"])
+router = APIRouter(
+    prefix="/api/applications",
+    tags=["applications"],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 @router.post(

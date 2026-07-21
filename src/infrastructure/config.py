@@ -33,10 +33,15 @@ class Settings(BaseSettings):
     environment: Literal["development", "staging", "production"] = "development"
     debug: bool = True
 
-    # Database
+    # Database (point this at Supabase's connection string outside of
+    # local development — see README "Provisioning the database & auth".)
     database_url: str = (
         "postgresql+asyncpg://applyflow:applyflow@localhost:5432/applyflow"
     )
+
+    # Supabase (database host + auth provider)
+    supabase_url: str = ""
+    supabase_jwt_secret: SecretStr = SecretStr("")
 
     # Redis / Celery
     redis_url: str = "redis://localhost:6379/0"
@@ -66,6 +71,11 @@ class Settings(BaseSettings):
         if not self.openai_api_key.get_secret_value():
             raise ValueError(
                 "OPENAI_API_KEY is required when ENVIRONMENT is "
+                f"'{self.environment}'."
+            )
+        if not self.supabase_jwt_secret.get_secret_value():
+            raise ValueError(
+                "SUPABASE_JWT_SECRET is required when ENVIRONMENT is "
                 f"'{self.environment}'."
             )
         return self

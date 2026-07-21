@@ -45,7 +45,7 @@ Orchestrates the domain to fulfill use cases. No DB, HTTP, or LLM code.
   `ListCandidateApplications`)
 - `dtos/` — input/output contracts (entities never cross the boundary)
 - `ports/` — outbound abstractions (`ResumeAnalyzerPort`, `TaskQueuePort`,
-  `IdGeneratorPort`) implemented by infrastructure
+  `IdGeneratorPort`, `AuthVerifierPort`) implemented by infrastructure
 - `mappers/` — domain ↔ DTO translation
 
 ### `src/infrastructure/` — implementations (depends on domain + application)
@@ -55,6 +55,7 @@ All I/O lives here. Implements the interfaces defined further in.
 - `llm/` — `LangChainResumeAnalyzer` (implements `ResumeAnalyzerPort`)
 - `tasks/` — Celery app, tasks, and `CeleryTaskQueue` (implements `TaskQueuePort`)
 - `services/` — `UuidIdGenerator` (implements `IdGeneratorPort`)
+- `auth/` — `SupabaseJwtVerifier` (implements `AuthVerifierPort`)
 - `config.py` — the **only** place environment variables are read
 
 ### `src/interfaces/` — entry points (depends on application)
@@ -66,6 +67,42 @@ Thin adapters that translate external input into use case calls.
 
 > The dependency rule is enforced by convention and documented in each
 > layer's `CLAUDE.md`, plus `architecture.json` at the repo root.
+
+---
+
+## Provisioning the database & auth (Supabase)
+
+Local development runs against the Postgres container in `docker-compose.yml`
+by default — no external account is needed to hack on the app. Staging and
+production point at a [Supabase](https://supabase.com) free-tier project
+instead, which provides both the Postgres database and the single-user auth
+provider.
+
+1. Create a free project at supabase.com (Dashboard → New project).
+2. **Database connection** — Project Settings → Database → Connection string
+   → "Transaction pooler" (asyncpg-compatible). Convert it to the
+   `postgresql+asyncpg://` scheme and append `?ssl=require`, then set it as
+   `DATABASE_URL`:
+   ```
+   DATABASE_URL=postgresql+asyncpg://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres?ssl=require
+   ```
+3. **Auth** — Authentication → Providers → enable Email, then Authentication →
+   Users → add the one user this app supports. Copy Project Settings → API →
+   values into:
+   ```
+   SUPABASE_URL=https://<project-ref>.supabase.co
+   SUPABASE_JWT_SECRET=<Project Settings -> API -> JWT Settings -> JWT Secret>
+   ```
+4. Apply the baseline migration against the new database: `alembic upgrade head`.
+5. The frontend authenticates via Supabase Auth's password sign-in and sends
+   the resulting access token as `Authorization: Bearer <token>` on every
+   `/api/applications*` request — the API verifies its signature against
+   `SUPABASE_JWT_SECRET` (`src/infrastructure/auth/supabase_jwt_verifier.py`)
+   before any use case runs.
+
+No credentials are ever hard-coded — everything above is read through
+`src/infrastructure/config.py` (see `.env.example`), and `SUPABASE_JWT_SECRET`
+is required outside of `ENVIRONMENT=development`.
 
 ---
 
@@ -147,13 +184,15 @@ python -m src.interfaces.cli.main create \
 
 ## API Overview
 
-| Method | Path                                | Description                          |
-| ------ | ----------------------------------- | ------------------------------------ |
-| GET    | `/health`                           | Health check                         |
-| POST   | `/api/applications`                 | Create a job application             |
-| GET    | `/api/applications?candidate_email=`| List a candidate's ranked applications |
-| POST   | `/api/applications/{id}/analyze`    | AI resume/JD analysis + cover letter |
-| POST   | `/api/applications/{id}/submit`     | Move DRAFT → APPLIED                 |
+All `/api/applications*` routes require `Authorization: Bearer <supabase-jwt>`.
+
+| Method | Path                                | Description                          | Auth required |
+| ------ | ----------------------------------- | ------------------------------------ | ------------- |
+| GET    | `/health`                           | Health check                         | No            |
+| POST   | `/api/applications`                 | Create a job application             | Yes           |
+| GET    | `/api/applications?candidate_email=`| List a candidate's ranked applications | Yes         |
+| POST   | `/api/applications/{id}/analyze`    | AI resume/JD analysis + cover letter | Yes           |
+| POST   | `/api/applications/{id}/submit`     | Move DRAFT → APPLIED                 | Yes           |
 
 ---
 

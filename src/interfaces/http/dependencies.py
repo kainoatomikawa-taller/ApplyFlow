@@ -9,9 +9,12 @@ application-layer types — never on infrastructure directly.
 
 from __future__ import annotations
 
-from fastapi import Depends
+from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.application.dtos.auth_dtos import AuthenticatedUserDTO
+from src.application.exceptions import AuthenticationError
+from src.application.ports.auth_verifier_port import AuthVerifierPort
 from src.application.use_cases.analyze_job_application import (
     AnalyzeJobApplication,
 )
@@ -27,6 +30,7 @@ from src.application.use_cases.submit_job_application import (
 from src.domain.services.application_ranking_service import (
     ApplicationRankingService,
 )
+from src.infrastructure.auth.supabase_jwt_verifier import SupabaseJwtVerifier
 from src.infrastructure.config import get_settings
 from src.infrastructure.llm.langchain_resume_analyzer import (
     LangChainResumeAnalyzer,
@@ -72,3 +76,23 @@ def get_list_use_case(
         repository=repository,
         ranking_service=ApplicationRankingService(),
     )
+
+
+def _auth_verifier() -> AuthVerifierPort:
+    return SupabaseJwtVerifier(get_settings())
+
+
+def get_current_user(
+    authorization: str | None = Header(default=None),
+    verifier: AuthVerifierPort = Depends(_auth_verifier),
+) -> AuthenticatedUserDTO:
+    """Resolve the bearer token on the request to the single authenticated user."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, "Missing or malformed Authorization header."
+        )
+    token = authorization.split(" ", 1)[1]
+    try:
+        return verifier.verify(token)
+    except AuthenticationError as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc

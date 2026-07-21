@@ -15,3 +15,7 @@ class UseCaseError(ApplicationError):
 
 class ExternalServiceError(ApplicationError):
     """Raised when an outbound port (LLM, queue, etc.) fails."""
+
+
+class AuthenticationError(ApplicationError):
+    """Raised when a bearer token cannot be verified as the authenticated user."""
