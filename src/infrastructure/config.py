@@ -66,6 +66,13 @@ class Settings(BaseSettings):
     anthropic_model_cheap: str = "claude-haiku-4-5-20251001"
     anthropic_model_strong: str = "claude-sonnet-5"
     anthropic_max_tokens: int = 1024
+    # Retry/backoff for transient errors (rate limits, timeouts, 5xxs) — see
+    # AnthropicLlmClient. `anthropic_max_retries` is retries AFTER the initial
+    # attempt, so total attempts = anthropic_max_retries + 1. Delay doubles
+    # each attempt starting at the base and is capped at the max.
+    anthropic_max_retries: int = 3
+    anthropic_retry_base_delay_seconds: float = 1.0
+    anthropic_retry_max_delay_seconds: float = 20.0
 
     # Job aggregator integration (reserved for an upcoming adapter)
     job_aggregator_api_key: SecretStr = SecretStr("")
@@ -81,8 +88,7 @@ class Settings(BaseSettings):
             return self
         if not self.openai_api_key.get_secret_value():
             raise ValueError(
-                "OPENAI_API_KEY is required when ENVIRONMENT is "
-                f"'{self.environment}'."
+                f"OPENAI_API_KEY is required when ENVIRONMENT is '{self.environment}'."
             )
         if not self.supabase_jwt_secret.get_secret_value():
             raise ValueError(

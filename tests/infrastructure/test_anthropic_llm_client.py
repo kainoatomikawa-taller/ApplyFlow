@@ -8,8 +8,21 @@ live check of both model tiers.
 
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
-from anthropic import omit
+from anthropic import (
+    APIConnectionError,
+    APIStatusError,
+    AuthenticationError,
+    BadRequestError,
+    InternalServerError,
+    NotFoundError,
+    PermissionDeniedError,
+    RateLimitError,
+    RequestTooLargeError,
+    UnprocessableEntityError,
+    omit,
+)
 from anthropic.types import TextBlock, Usage
 from anthropic.types.message import Message
 from pydantic import SecretStr
@@ -50,6 +63,26 @@ def _mock_create(
 ) -> AsyncMock:
     mock = AsyncMock(return_value=_fake_response(text, usage))
     client._client.messages.create = mock  # type: ignore[method-assign]
+    return mock
+
+
+_FAKE_REQUEST = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+
+
+def _status_error(cls: type[APIStatusError], status_code: int) -> APIStatusError:
+    response = httpx.Response(status_code, request=_FAKE_REQUEST)
+    return cls(f"boom ({status_code})", response=response, body=None)
+
+
+def _connection_error() -> APIConnectionError:
+    return APIConnectionError(request=_FAKE_REQUEST)
+
+
+@pytest.fixture
+def no_sleep(monkeypatch):
+    """Patch out `asyncio.sleep` so retry-backoff tests don't wait for real."""
+    mock = AsyncMock()
+    monkeypatch.setattr("src.infrastructure.llm.anthropic_client.asyncio.sleep", mock)
     return mock
 
 
@@ -273,3 +306,153 @@ async def test_no_cache_activity_logs_nothing(caplog):
         await client.complete("ping", task_type=LlmTaskType.EXTRACTION)
 
     assert not caplog.records
+
+
+# ---- retry/backoff: the point of this ticket -------------------------------
+
+
+def _fails_then_succeeds(*exceptions: Exception, text: str = "pong") -> AsyncMock:
+    return AsyncMock(side_effect=[*exceptions, _fake_response(text)])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc",
+    [
+        RateLimitError,
+        InternalServerError,
+    ],
+)
+async def test_retries_on_transient_status_errors_and_then_succeeds(exc, no_sleep):
+    status_code = 429 if exc is RateLimitError else 503
+    client = AnthropicLlmClient(_settings())
+    client._client.messages.create = _fails_then_succeeds(  # type: ignore[method-assign]
+        _status_error(exc, status_code)
+    )
+
+    result = await client.complete("ping", task_type=LlmTaskType.EXTRACTION)
+
+    assert result == "pong"
+    assert client._client.messages.create.await_count == 2
+    no_sleep.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_retries_on_connection_errors(no_sleep):
+    client = AnthropicLlmClient(_settings())
+    client._client.messages.create = _fails_then_succeeds(  # type: ignore[method-assign]
+        _connection_error()
+    )
+
+    result = await client.complete("ping", task_type=LlmTaskType.EXTRACTION)
+
+    assert result == "pong"
+    assert client._client.messages.create.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_retries_on_lock_timeout_409(no_sleep):
+    from anthropic import ConflictError
+
+    client = AnthropicLlmClient(_settings())
+    client._client.messages.create = _fails_then_succeeds(  # type: ignore[method-assign]
+        _status_error(ConflictError, 409)
+    )
+
+    result = await client.complete("ping", task_type=LlmTaskType.EXTRACTION)
+
+    assert result == "pong"
+
+
+@pytest.mark.asyncio
+async def test_backoff_delay_doubles_and_is_capped():
+    client = AnthropicLlmClient(
+        _settings(
+            anthropic_retry_base_delay_seconds=1.0,
+            anthropic_retry_max_delay_seconds=5.0,
+        )
+    )
+
+    assert client._backoff_delay(1) == 1.0
+    assert client._backoff_delay(2) == 2.0
+    assert client._backoff_delay(3) == 4.0
+    assert client._backoff_delay(4) == 5.0  # capped
+    assert client._backoff_delay(10) == 5.0  # still capped
+
+
+@pytest.mark.asyncio
+async def test_exhausting_retries_on_a_persistent_transient_error_raises(no_sleep):
+    client = AnthropicLlmClient(_settings(anthropic_max_retries=2))
+    client._client.messages.create = AsyncMock(  # type: ignore[method-assign]
+        side_effect=_status_error(RateLimitError, 429)
+    )
+
+    with pytest.raises(ExternalServiceError, match="after 3 attempt"):
+        await client.complete("ping", task_type=LlmTaskType.EXTRACTION)
+
+    assert client._client.messages.create.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_max_retries_is_configurable(no_sleep):
+    client = AnthropicLlmClient(_settings(anthropic_max_retries=0))
+    client._client.messages.create = AsyncMock(  # type: ignore[method-assign]
+        side_effect=_status_error(RateLimitError, 429)
+    )
+
+    with pytest.raises(ExternalServiceError, match="after 1 attempt"):
+        await client.complete("ping", task_type=LlmTaskType.EXTRACTION)
+
+    assert client._client.messages.create.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc,match",
+    [
+        (AuthenticationError, "ANTHROPIC_API_KEY"),
+        (PermissionDeniedError, "denied permission"),
+        (NotFoundError, "could not find"),
+        (RequestTooLargeError, "too large"),
+        (BadRequestError, "invalid"),
+        (UnprocessableEntityError, "invalid"),
+    ],
+)
+async def test_non_retryable_status_errors_surface_immediately_with_a_clear_message(
+    exc, match
+):
+    status_codes = {
+        AuthenticationError: 401,
+        PermissionDeniedError: 403,
+        NotFoundError: 404,
+        RequestTooLargeError: 413,
+        BadRequestError: 400,
+        UnprocessableEntityError: 422,
+    }
+    client = AnthropicLlmClient(_settings())
+    mock_create = AsyncMock(side_effect=_status_error(exc, status_codes[exc]))
+    client._client.messages.create = mock_create  # type: ignore[method-assign]
+
+    with pytest.raises(ExternalServiceError, match=match):
+        await client.complete("ping", task_type=LlmTaskType.EXTRACTION)
+
+    mock_create.assert_awaited_once()  # no retry on a non-retryable error
+
+
+@pytest.mark.asyncio
+async def test_unexpected_non_anthropic_errors_are_not_retried():
+    client = AnthropicLlmClient(_settings())
+    mock_create = AsyncMock(side_effect=RuntimeError("boom"))
+    client._client.messages.create = mock_create  # type: ignore[method-assign]
+
+    with pytest.raises(ExternalServiceError, match="Anthropic completion failed"):
+        await client.complete("ping", task_type=LlmTaskType.EXTRACTION)
+
+    mock_create.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_sdk_internal_retries_are_disabled_in_favor_of_our_own():
+    client = AnthropicLlmClient(_settings())
+
+    assert client._client.max_retries == 0
