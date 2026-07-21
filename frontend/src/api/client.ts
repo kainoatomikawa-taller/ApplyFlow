@@ -1,4 +1,4 @@
-import type { CreateApplicationInput, JobApplication } from '../types';
+import type { CreateApplicationInput, HealthStatus, JobApplication } from '../types';
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? '';
 
@@ -15,6 +15,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const applyFlowApi = {
+  getHealth(): Promise<HealthStatus> {
+    return request<HealthStatus>('/health');
+  },
+
   listApplications(email: string): Promise<JobApplication[]> {
     return request<JobApplication[]>(
       `/api/applications?candidate_email=${encodeURIComponent(email)}`,

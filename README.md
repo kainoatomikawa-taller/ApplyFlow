@@ -20,6 +20,22 @@ Celery + Redis, and data is persisted in PostgreSQL.
 
 ---
 
+## Application shell
+
+The web app (`frontend/`) is the primary shell — the CLI
+(`src/interfaces/cli/`) is a secondary adapter for scripting and dev
+checks. See [ADR 0001](docs/decisions/0001-application-shell-web-vs-cli.md)
+for the decision and rationale (Epic 5's review-and-submit UI is
+inherently visual, which drove the choice).
+
+Both adapters select their environment through config rather than
+hardcoded endpoints: the backend reads `ENVIRONMENT` via
+`src/infrastructure/config.py`, and the frontend reads `VITE_API_URL` via
+`frontend/.env` (copy from `frontend/.env.example`). Opening the app shows
+a "hello world" status banner that calls `GET /health` and displays which
+environment the API is running in, proving the shell is wired end-to-end
+before any feature UI loads.
+
 ## Clean Architecture
 
 This project follows **Clean Architecture**. Source code lives under `src/`

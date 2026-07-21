@@ -19,3 +19,9 @@ export interface CreateApplicationInput {
   role_title: string;
   job_description: string;
 }
+
+export interface HealthStatus {
+  status: string;
+  service: string;
+  environment: string;
+}

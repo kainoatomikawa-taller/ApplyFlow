@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { applyFlowApi } from './api/client';
 import { ApplicationForm } from './components/ApplicationForm';
 import { ApplicationList } from './components/ApplicationList';
+import { StatusBanner } from './components/StatusBanner';
 import type { CreateApplicationInput, JobApplication } from './types';
 
 const DEMO_EMAIL = 'demo@example.com';
@@ -48,6 +49,8 @@ export function App() {
     <div className="container">
       <h1>ApplyFlow</h1>
       <p>AI-assisted job application tracking &amp; tailoring.</p>
+
+      <StatusBanner />
 
       <div className="field">
         <label>Viewing applications for</label>
