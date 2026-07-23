@@ -40,3 +40,6 @@ yarn-error.log*
 
 # Docker
 *.pid
+
+# Local resume file storage (src/infrastructure/storage/local_file_storage.py)
+var/

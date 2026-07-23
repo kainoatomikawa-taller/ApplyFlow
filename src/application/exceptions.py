@@ -19,3 +19,9 @@ class ExternalServiceError(ApplicationError):
 
 class AuthenticationError(ApplicationError):
     """Raised when a bearer token cannot be verified as the authenticated user."""
+
+
+class TextExtractionError(ApplicationError):
+    """Raised when an uploaded resume's content cannot be parsed into text
+    (e.g. a corrupt PDF, a DOCX with no readable body, or a non-UTF-8
+    "plain text" file)."""

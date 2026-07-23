@@ -51,12 +51,14 @@ Pure business logic with zero third-party imports.
 - `entities/` — `JobApplication` (aggregate root, protects its own invariants);
   `UserProfile` (aggregate root — a candidate's contact info plus their
   `WorkHistoryEntry`, `EducationEntry`, and `Skill` child entities — the data
-  spine matching, tailoring, and autofill read from)
+  spine matching, tailoring, and autofill read from); `Resume` (an uploaded
+  resume file's metadata + extracted text — enforces the accepted file
+  formats and size limit; see "Resume upload & file handling" below)
 - `value_objects/` — `ApplicationStatus` (state machine), `EmailAddress`,
   `MatchScore`, `ProficiencyLevel`, `ProvenanceSource` (source tag required
   on every stored fact — see "Provenance tagging" below)
-- `repositories/` — `JobApplicationRepository`, `ProfileRepository`
-  **interfaces** (WHAT, not HOW)
+- `repositories/` — `JobApplicationRepository`, `ProfileRepository`,
+  `ResumeRepository` **interfaces** (WHAT, not HOW)
 - `services/` — `ApplicationRankingService` (pure domain logic)
 - `exceptions.py` — domain exceptions
 
@@ -64,24 +66,29 @@ Pure business logic with zero third-party imports.
 Orchestrates the domain to fulfill use cases. No DB, HTTP, or LLM code.
 - `use_cases/` — one class per use case, each with an `execute(dto)` method
   (`CreateJobApplication`, `AnalyzeJobApplication`, `SubmitJobApplication`,
-  `ListCandidateApplications`, `GetLlmCompletion`)
+  `ListCandidateApplications`, `GetLlmCompletion`, `UploadResume`, `GetResume`,
+  `ListResumes`)
 - `dtos/` — input/output contracts (entities never cross the boundary)
 - `ports/` — outbound abstractions (`ResumeAnalyzerPort`, `TaskQueuePort`,
-  `IdGeneratorPort`, `AuthVerifierPort`, `LlmClientPort`) implemented by
-  infrastructure
+  `IdGeneratorPort`, `AuthVerifierPort`, `LlmClientPort`, `FileStoragePort`,
+  `TextExtractorPort`) implemented by infrastructure
 - `mappers/` — domain ↔ DTO translation
 
 ### `src/infrastructure/` — implementations (depends on domain + application)
 All I/O lives here. Implements the interfaces defined further in.
-- `persistence/` — SQLAlchemy models + `SqlAlchemyJobApplicationRepository` and
-  `SqlAlchemyProfileRepository` (implement the domain repository interfaces,
-  map rows ↔ entities)
+- `persistence/` — SQLAlchemy models + `SqlAlchemyJobApplicationRepository`,
+  `SqlAlchemyProfileRepository`, and `SqlAlchemyResumeRepository` (implement
+  the domain repository interfaces, map rows ↔ entities)
 - `llm/` — `LangChainResumeAnalyzer` (implements `ResumeAnalyzerPort`) and
   `AnthropicLlmClient` (implements `LlmClientPort` — the app's single LLM
   integration; see below)
 - `tasks/` — Celery app, tasks, and `CeleryTaskQueue` (implements `TaskQueuePort`)
 - `services/` — `UuidIdGenerator` (implements `IdGeneratorPort`)
 - `auth/` — `SupabaseJwtVerifier` (implements `AuthVerifierPort`)
+- `storage/` — `LocalFileStorage` (implements `FileStoragePort`; see "Resume
+  upload & file handling" below)
+- `text_extraction/` — `ResumeTextExtractor` (implements `TextExtractorPort`
+  with `pypdf` / `python-docx`)
 - `config.py` — the **only** place environment variables are read
 
 ### `src/interfaces/` — entry points (depends on application)
@@ -321,6 +328,53 @@ so it stays visible to whoever implements Epic 04.
 
 ---
 
+## Resume upload & file handling
+
+`POST /api/resumes` accepts a resume file (PDF, DOCX, or plain text),
+stores the raw bytes, extracts its text, and returns both the metadata and
+the extracted text in one response — the input the parsing/matching
+features further down the roadmap (and `ProvenanceSource.PARSED_RESUME`)
+will read from.
+
+- **Validation is a domain rule, not a controller check.** `Resume`
+  (`src/domain/entities/resume.py`) owns `ALLOWED_CONTENT_TYPES` (PDF,
+  DOCX, plain text) and `MAX_SIZE_BYTES` (10 MiB), and rejects anything
+  else via `UnsupportedFileFormatError` / `FileTooLargeError`. `UploadResume`
+  checks both *before* extracting text or writing bytes, so an invalid
+  upload fails cheaply.
+- **Text extraction is a port.** `TextExtractorPort` is implemented by
+  `ResumeTextExtractor` (`pypdf` for PDF, `python-docx` for DOCX, UTF-8
+  decoding for plain text). Any parsing failure — corrupt file, empty
+  body, undecodable bytes — is re-raised as `TextExtractionError`, the one
+  error type the use case and controller know how to handle.
+- **Raw storage is a port, addressed by an opaque key.** `FileStoragePort`
+  is implemented by `LocalFileStorage`
+  (`src/infrastructure/storage/local_file_storage.py`), which writes each
+  file under `RESUME_STORAGE_DIR` (default `./var/resumes`) keyed by a
+  server-generated id — never the candidate's filename. `UploadResume`
+  deletes the stored file if persisting its metadata row fails, so a
+  crash never leaves an orphaned file behind.
+- **No PII in logs or URLs.** The resume id (not a filename or email) is
+  the only identifier ever placed in a path or an exception message —
+  `GET /api/resumes/{resume_id}` takes the id from the path, never a
+  query string, and `original_filename`/`extracted_text` are flagged in
+  both the ORM model and the migration as "may contain PII — never log."
+  Fetching another user's resume by id returns `404` (via
+  `ResumeNotFoundError`), the same as an unknown id, so the endpoint never
+  confirms or denies which ids exist for someone else.
+- **Errors surface clearly.** The controller maps each domain/application
+  exception to a distinct HTTP status: `415` for an unsupported format,
+  `413` for an oversized file, `422` for a file that can't be parsed, and
+  `404` for an unknown/not-owned resume id.
+
+`tests/infrastructure/test_resume_text_extractor.py` exercises the
+extractor against real (small, hand-built) PDF/DOCX files rather than
+mocking the parsing libraries. `tests/infrastructure/test_resume_persistence_smoke.py`
+follows the same real-database, skip-if-unreachable pattern as the other
+smoke tests.
+
+---
+
 ## Getting Started
 
 ### Option A — Docker (recommended)
@@ -399,7 +453,8 @@ python -m src.interfaces.cli.main create \
 
 ## API Overview
 
-All `/api/applications*` routes require `Authorization: Bearer <supabase-jwt>`.
+All `/api/applications*` and `/api/resumes*` routes require
+`Authorization: Bearer <supabase-jwt>`.
 
 | Method | Path                                | Description                          | Auth required |
 | ------ | ----------------------------------- | ------------------------------------ | ------------- |
@@ -408,6 +463,9 @@ All `/api/applications*` routes require `Authorization: Bearer <supabase-jwt>`.
 | GET    | `/api/applications?candidate_email=`| List a candidate's ranked applications | Yes         |
 | POST   | `/api/applications/{id}/analyze`    | AI resume/JD analysis + cover letter | Yes           |
 | POST   | `/api/applications/{id}/submit`     | Move DRAFT → APPLIED                 | Yes           |
+| POST   | `/api/resumes`                      | Upload a resume (PDF/DOCX/text); stores it and returns extracted text | Yes |
+| GET    | `/api/resumes/{id}`                 | Fetch one resume's metadata + extracted text | Yes   |
+| GET    | `/api/resumes`                      | List the current user's uploaded resumes | Yes       |
 
 ---
 

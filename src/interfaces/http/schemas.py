@@ -36,3 +36,12 @@ class ApplicationResponse(BaseModel):
 
 class MessageResponse(BaseModel):
     message: str
+
+
+class ResumeResponse(BaseModel):
+    id: str
+    original_filename: str
+    content_type: str
+    size_bytes: int
+    extracted_text: str
+    created_at: datetime

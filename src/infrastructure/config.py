@@ -74,6 +74,12 @@ class Settings(BaseSettings):
     anthropic_retry_base_delay_seconds: float = 1.0
     anthropic_retry_max_delay_seconds: float = 20.0
 
+    # Resume file storage (src/infrastructure/storage/local_file_storage.py).
+    # Raw resume bytes are written here, addressed only by an opaque
+    # server-generated key — never a candidate's filename or email — so
+    # this directory's contents and any path logged from it carry no PII.
+    resume_storage_dir: str = "./var/resumes"
+
     # Job aggregator integration (reserved for an upcoming adapter)
     job_aggregator_api_key: SecretStr = SecretStr("")
     job_aggregator_base_url: str = ""

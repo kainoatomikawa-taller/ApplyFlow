@@ -119,6 +119,31 @@ class UserProfileModel(Base):
     )
 
 
+class ResumeModel(Base):
+    """A candidate's uploaded resume: metadata + extracted text.
+
+    Raw file bytes live outside the database (see `FileStoragePort` /
+    `LocalFileStorage`) — `storage_key` is the only link between this row
+    and the file on disk. `original_filename` and `extracted_text` may
+    contain PII, so never log them; log the row's `id` instead.
+    """
+
+    __tablename__ = "resumes"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    original_filename: Mapped[str] = mapped_column(
+        String(255), comment="May contain PII — never log."
+    )
+    content_type: Mapped[str] = mapped_column(String(128))
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    storage_key: Mapped[str] = mapped_column(String(64), unique=True)
+    extracted_text: Mapped[str] = mapped_column(
+        Text, comment="May contain PII — never log."
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class WorkHistoryModel(Base):
     __tablename__ = "work_history_entries"
 

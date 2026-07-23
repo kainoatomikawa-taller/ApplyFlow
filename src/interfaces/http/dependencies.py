@@ -9,6 +9,8 @@ application-layer types — never on infrastructure directly.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,12 +23,15 @@ from src.application.use_cases.analyze_job_application import (
 from src.application.use_cases.create_job_application import (
     CreateJobApplication,
 )
+from src.application.use_cases.get_resume import GetResume
 from src.application.use_cases.list_candidate_applications import (
     ListCandidateApplications,
 )
+from src.application.use_cases.list_resumes import ListResumes
 from src.application.use_cases.submit_job_application import (
     SubmitJobApplication,
 )
+from src.application.use_cases.upload_resume import UploadResume
 from src.domain.services.application_ranking_service import (
     ApplicationRankingService,
 )
@@ -39,7 +44,14 @@ from src.infrastructure.persistence.database import get_session
 from src.infrastructure.persistence.job_application_repository_impl import (
     SqlAlchemyJobApplicationRepository,
 )
+from src.infrastructure.persistence.resume_repository_impl import (
+    SqlAlchemyResumeRepository,
+)
 from src.infrastructure.services.uuid_id_generator import UuidIdGenerator
+from src.infrastructure.storage.local_file_storage import LocalFileStorage
+from src.infrastructure.text_extraction.resume_text_extractor import (
+    ResumeTextExtractor,
+)
 
 
 def _repository(
@@ -76,6 +88,40 @@ def get_list_use_case(
         repository=repository,
         ranking_service=ApplicationRankingService(),
     )
+
+
+def _resume_repository(
+    session: AsyncSession = Depends(get_session),
+) -> SqlAlchemyResumeRepository:
+    return SqlAlchemyResumeRepository(session)
+
+
+def _file_storage() -> LocalFileStorage:
+    return LocalFileStorage(Path(get_settings().resume_storage_dir))
+
+
+def get_upload_resume_use_case(
+    repository: SqlAlchemyResumeRepository = Depends(_resume_repository),
+    storage: LocalFileStorage = Depends(_file_storage),
+) -> UploadResume:
+    return UploadResume(
+        repository=repository,
+        storage=storage,
+        text_extractor=ResumeTextExtractor(),
+        id_generator=UuidIdGenerator(),
+    )
+
+
+def get_resume_use_case(
+    repository: SqlAlchemyResumeRepository = Depends(_resume_repository),
+) -> GetResume:
+    return GetResume(repository=repository)
+
+
+def get_list_resumes_use_case(
+    repository: SqlAlchemyResumeRepository = Depends(_resume_repository),
+) -> ListResumes:
+    return ListResumes(repository=repository)
 
 
 def _auth_verifier() -> AuthVerifierPort:
