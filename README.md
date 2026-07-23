@@ -48,9 +48,14 @@ infrastructure ─►  application  ──►  domain
 
 ### `src/domain/` — the core (depends on nothing)
 Pure business logic with zero third-party imports.
-- `entities/` — `JobApplication` (aggregate root, protects its own invariants)
-- `value_objects/` — `ApplicationStatus` (state machine), `EmailAddress`, `MatchScore`
-- `repositories/` — `JobApplicationRepository` **interface** (WHAT, not HOW)
+- `entities/` — `JobApplication` (aggregate root, protects its own invariants);
+  `UserProfile` (aggregate root — a candidate's contact info plus their
+  `WorkHistoryEntry`, `EducationEntry`, and `Skill` child entities — the data
+  spine matching, tailoring, and autofill read from)
+- `value_objects/` — `ApplicationStatus` (state machine), `EmailAddress`,
+  `MatchScore`, `ProficiencyLevel`
+- `repositories/` — `JobApplicationRepository`, `ProfileRepository`
+  **interfaces** (WHAT, not HOW)
 - `services/` — `ApplicationRankingService` (pure domain logic)
 - `exceptions.py` — domain exceptions
 
@@ -67,8 +72,9 @@ Orchestrates the domain to fulfill use cases. No DB, HTTP, or LLM code.
 
 ### `src/infrastructure/` — implementations (depends on domain + application)
 All I/O lives here. Implements the interfaces defined further in.
-- `persistence/` — SQLAlchemy models + `SqlAlchemyJobApplicationRepository`
-  (implements the domain repository interface, maps rows ↔ entities)
+- `persistence/` — SQLAlchemy models + `SqlAlchemyJobApplicationRepository` and
+  `SqlAlchemyProfileRepository` (implement the domain repository interfaces,
+  map rows ↔ entities)
 - `llm/` — `LangChainResumeAnalyzer` (implements `ResumeAnalyzerPort`) and
   `AnthropicLlmClient` (implements `LlmClientPort` — the app's single LLM
   integration; see below)
@@ -223,6 +229,19 @@ of failing) if nothing is reachable at `DATABASE_URL`, so `pytest` still
 runs without Postgres up; start one locally with `docker compose up db` (or
 point `DATABASE_URL` at any reachable Postgres) to have it actually run.
 CI provisions a Postgres service container so it always executes there.
+
+### Profile data model
+
+`user_profiles` is a candidate's profile (contact info); `work_history_entries`,
+`education_entries`, and `skills` each hang off it via a `profile_id` foreign
+key (`ON DELETE CASCADE`, one profile → many rows). `skills` also has a
+`(profile_id, name)` unique constraint so a candidate can't have the same
+skill twice. `SqlAlchemyProfileRepository` loads/saves the whole aggregate —
+profile plus its child entries — in one round trip; syncing a profile's
+child collections on `update()` relies on SQLAlchemy's `delete-orphan`
+cascade rather than manual diffing. `tests/infrastructure/test_profile_persistence_smoke.py`
+follows the same real-database, skip-if-unreachable pattern as
+`test_persistence_smoke.py` to create and read back a full profile.
 
 ---
 
