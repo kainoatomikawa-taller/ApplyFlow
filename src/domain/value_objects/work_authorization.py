@@ -15,6 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
+from src.domain.exceptions import InvalidValueError
+from src.domain.value_objects.provenance_source import ProvenanceSource
 from src.domain.value_objects.work_authorization_status import (
     WorkAuthorizationStatus,
 )
@@ -27,7 +29,14 @@ class WorkAuthorization:
     SENSITIVE: ClassVar[bool] = True
 
     status: WorkAuthorizationStatus
+    source: ProvenanceSource
     citizenship_country: str | None = None
     visa_type: str | None = None
     requires_sponsorship: bool | None = None
     details: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.source, ProvenanceSource):
+            raise InvalidValueError(
+                "WorkAuthorization requires a valid ProvenanceSource."
+            )

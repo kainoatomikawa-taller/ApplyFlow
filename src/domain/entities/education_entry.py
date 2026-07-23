@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from src.domain.exceptions import InvalidValueError
+from src.domain.value_objects.provenance_source import ProvenanceSource
 
 
 @dataclass
@@ -19,6 +20,7 @@ class EducationEntry:
     id: str
     institution_name: str
     degree: str
+    source: ProvenanceSource
     field_of_study: str | None = None
     start_date: date | None = None
     end_date: date | None = None
@@ -37,3 +39,7 @@ class EducationEntry:
             and self.end_date < self.start_date
         ):
             raise InvalidValueError("end_date cannot be before start_date.")
+        if not isinstance(self.source, ProvenanceSource):
+            raise InvalidValueError(
+                "EducationEntry requires a valid ProvenanceSource."
+            )

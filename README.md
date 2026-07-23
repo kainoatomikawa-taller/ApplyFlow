@@ -53,7 +53,8 @@ Pure business logic with zero third-party imports.
   `WorkHistoryEntry`, `EducationEntry`, and `Skill` child entities — the data
   spine matching, tailoring, and autofill read from)
 - `value_objects/` — `ApplicationStatus` (state machine), `EmailAddress`,
-  `MatchScore`, `ProficiencyLevel`
+  `MatchScore`, `ProficiencyLevel`, `ProvenanceSource` (source tag required
+  on every stored fact — see "Provenance tagging" below)
 - `repositories/` — `JobApplicationRepository`, `ProfileRepository`
   **interfaces** (WHAT, not HOW)
 - `services/` — `ApplicationRankingService` (pure domain logic)
@@ -275,6 +276,48 @@ enum offers, which is a real recorded choice, not an inferred one.
 `tests/infrastructure/test_profile_persistence_smoke.py` proves this
 against a real database: a fully-populated profile still comes back with
 `eeo_self_identification is None` until it's set explicitly.
+
+### Provenance tagging
+
+Every fact this app stores about a candidate is labeled with where it came
+from: `ProvenanceSource` (`src/domain/value_objects/provenance_source.py`)
+is one of `parsed_resume` (extracted from an uploaded resume),
+`user_entered` (typed directly into a form), or `answer` (given in response
+to a specific question, e.g. an EEO self-ID prompt). This is baked into the
+data model, not bolted on:
+
+- **Every fact carries a source.** `WorkHistoryEntry`, `EducationEntry`,
+  `Skill`, `WorkAuthorization`, and `EeoSelfIdentification` each have a
+  required `source: ProvenanceSource` field — you cannot construct one
+  without it, so it's enforced by the type system before it ever reaches
+  the database. The scalar fields flattened directly onto the
+  `user_profiles` row (`full_name`/`email`/`phone`/`headline`/`location`,
+  and the `address`/`links` value objects) don't each get their own row,
+  so they share grouped tags instead: `UserProfile.contact_source` (always
+  required — those fields are always present) and `address_source`/
+  `links_source` (required only once that group actually has data — an
+  empty `Address()`/`ProfileLinks()` isn't a fact yet, so it needs no
+  source; see `UserProfile._validate_optional_source`).
+- **Cannot be persisted without one.** Constructing any of the entities/
+  value objects above with a missing or invalid source raises
+  `InvalidValueError` immediately — there is no code path that reaches
+  `SqlAlchemyProfileRepository` with an unset provenance tag. The database
+  schema mirrors this with `NOT NULL` `source`/`contact_source` columns
+  (migration `0004_add_provenance_tagging.py`).
+- **Queryable and returned with facts.** Provenance isn't a side channel —
+  it's a normal typed column returned by `SqlAlchemyProfileRepository`
+  alongside every fact it maps, exactly like any other field. Anything
+  reading a `WorkHistoryEntry`/`Skill`/etc. off the repository gets
+  `.source` for free.
+
+**Downstream contract (Epic 04 — tailoring):** generated output (tailored
+resumes, cover letters, autofilled application answers) may only assert
+facts read through this data-access layer, each carrying a real
+`ProvenanceSource`. Epic 04 must never fabricate a claim about a candidate
+and present it as if it came from them — every generated statement has to
+trace back to a `parsed_resume`, `user_entered`, or `answer` fact already
+in the data model. This is documented directly on `ProvenanceSource` itself
+so it stays visible to whoever implements Epic 04.
 
 ---
 

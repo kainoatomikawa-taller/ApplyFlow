@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from src.domain.exceptions import InvalidValueError
 from src.domain.value_objects.proficiency_level import ProficiencyLevel
+from src.domain.value_objects.provenance_source import ProvenanceSource
 
 
 @dataclass
@@ -18,6 +19,7 @@ class Skill:
 
     id: str
     name: str
+    source: ProvenanceSource
     proficiency: ProficiencyLevel | None = None
     years_of_experience: int | None = None
 
@@ -28,3 +30,5 @@ class Skill:
             raise InvalidValueError("name cannot be empty.")
         if self.years_of_experience is not None and self.years_of_experience < 0:
             raise InvalidValueError("years_of_experience cannot be negative.")
+        if not isinstance(self.source, ProvenanceSource):
+            raise InvalidValueError("Skill requires a valid ProvenanceSource.")

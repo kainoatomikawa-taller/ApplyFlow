@@ -6,6 +6,12 @@ skills, address, links) -> read it back by id and by user_id -> update it
 (including setting and then clearing the sensitive work-authorization/EEO
 fields) -> delete it -> verify gone. Mirrors `test_persistence_smoke.py`.
 
+Also proves the provenance-tagging contract end to end: every fact is
+constructed with an explicit `ProvenanceSource`, and the tag comes back
+out of the data-access layer attached to that same fact (acceptance
+criterion 2 — "provenance is queryable and returned with facts through the
+data-access layer").
+
 Skips (rather than fails) when no database is reachable, so `pytest` still
 runs for contributors without Postgres running locally.
 """
@@ -32,6 +38,7 @@ from src.domain.value_objects.eeo_self_identification import EeoSelfIdentificati
 from src.domain.value_objects.email_address import EmailAddress
 from src.domain.value_objects.proficiency_level import ProficiencyLevel
 from src.domain.value_objects.profile_links import ProfileLinks
+from src.domain.value_objects.provenance_source import ProvenanceSource
 from src.domain.value_objects.work_authorization import WorkAuthorization
 from src.domain.value_objects.work_authorization_status import (
     WorkAuthorizationStatus,
@@ -61,6 +68,7 @@ def _full_profile(user_id: str) -> UserProfile:
         user_id=user_id,
         full_name="Smoke Test Candidate",
         email=EmailAddress("smoke-test@example.com"),
+        contact_source=ProvenanceSource.USER_ENTERED,
         phone="+1-555-0100",
         headline="Senior QA Engineer",
         location="Remote",
@@ -72,14 +80,16 @@ def _full_profile(user_id: str) -> UserProfile:
             state_or_region="IL",
             postal_code="62701",
             country="USA",
-        )
+        ),
+        source=ProvenanceSource.PARSED_RESUME,
     )
     profile.set_links(
         ProfileLinks(
             portfolio_url="https://jane.dev",
             linkedin_url="https://www.linkedin.com/in/janedoe",
             github_url="https://github.com/janedoe",
-        )
+        ),
+        source=ProvenanceSource.PARSED_RESUME,
     )
     profile.set_work_authorization(
         WorkAuthorization(
@@ -87,6 +97,7 @@ def _full_profile(user_id: str) -> UserProfile:
             citizenship_country="Canada",
             visa_type="H-1B",
             requires_sponsorship=True,
+            source=ProvenanceSource.ANSWER,
         )
     )
     # eeo_self_identification is deliberately left unset here — see the
@@ -100,6 +111,7 @@ def _full_profile(user_id: str) -> UserProfile:
             end_date=date(2022, 6, 30),
             location="Remote",
             description="Proved things work end to end.",
+            source=ProvenanceSource.PARSED_RESUME,
         )
     )
     profile.add_work_history(
@@ -108,6 +120,7 @@ def _full_profile(user_id: str) -> UserProfile:
             company_name="Persistence Layer Inc",
             job_title="Senior QA Engineer",
             start_date=date(2022, 7, 1),
+            source=ProvenanceSource.USER_ENTERED,
         )
     )
     profile.add_education(
@@ -118,6 +131,7 @@ def _full_profile(user_id: str) -> UserProfile:
             field_of_study="Computer Science",
             start_date=date(2016, 9, 1),
             end_date=date(2020, 5, 1),
+            source=ProvenanceSource.PARSED_RESUME,
         )
     )
     profile.add_skill(
@@ -126,9 +140,12 @@ def _full_profile(user_id: str) -> UserProfile:
             name="Python",
             proficiency=ProficiencyLevel.EXPERT,
             years_of_experience=6,
+            source=ProvenanceSource.PARSED_RESUME,
         )
     )
-    profile.add_skill(Skill(id=f"sk-{uuid.uuid4()}", name="SQL"))
+    profile.add_skill(
+        Skill(id=f"sk-{uuid.uuid4()}", name="SQL", source=ProvenanceSource.ANSWER)
+    )
     return profile
 
 
@@ -175,6 +192,24 @@ async def test_create_read_full_profile_round_trip_against_a_real_database(
             # candidate explicitly provides it.
             assert fetched.eeo_self_identification is None
 
+            # Provenance: every fact comes back tagged with the exact
+            # source it was created with — nothing is silently dropped or
+            # coerced to a default by the data-access layer.
+            assert fetched.contact_source is ProvenanceSource.USER_ENTERED
+            assert fetched.address_source is ProvenanceSource.PARSED_RESUME
+            assert fetched.links_source is ProvenanceSource.PARSED_RESUME
+            assert fetched.work_authorization.source is ProvenanceSource.ANSWER
+            sql_skill = next(s for s in fetched.skills if s.name == "SQL")
+            assert python_skill.source is ProvenanceSource.PARSED_RESUME
+            assert sql_skill.source is ProvenanceSource.ANSWER
+            education_entry = fetched.education[0]
+            assert education_entry.source is ProvenanceSource.PARSED_RESUME
+            work_sources = {w.company_name: w.source for w in fetched.work_history}
+            assert work_sources["Smoke Test Co"] is ProvenanceSource.PARSED_RESUME
+            assert (
+                work_sources["Persistence Layer Inc"] is ProvenanceSource.USER_ENTERED
+            )
+
             by_user = await repository.get_by_user_id(user_id)
             assert by_user is not None
             assert by_user.id == profile.id
@@ -188,10 +223,12 @@ async def test_create_read_full_profile_round_trip_against_a_real_database(
                     company_name="Another Co",
                     job_title="Staff Engineer",
                     start_date=date(2024, 1, 1),
+                    source=ProvenanceSource.USER_ENTERED,
                 )
             )
             fetched.set_eeo_self_identification(
                 EeoSelfIdentification(
+                    source=ProvenanceSource.ANSWER,
                     gender_identity=GenderIdentity.DECLINE_TO_SELF_IDENTIFY,
                     race_ethnicity=RaceEthnicity.DECLINE_TO_SELF_IDENTIFY,
                     veteran_status=VeteranStatus.NOT_A_PROTECTED_VETERAN,
@@ -208,6 +245,7 @@ async def test_create_read_full_profile_round_trip_against_a_real_database(
             assert updated.skills[0].name == "Python"
             assert updated.work_authorization is None
             assert updated.eeo_self_identification is not None
+            assert updated.eeo_self_identification.source is ProvenanceSource.ANSWER
             assert updated.eeo_self_identification.gender_identity is (
                 GenderIdentity.DECLINE_TO_SELF_IDENTIFY
             )

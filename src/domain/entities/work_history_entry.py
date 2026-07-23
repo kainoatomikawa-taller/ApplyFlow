@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from src.domain.exceptions import InvalidValueError
+from src.domain.value_objects.provenance_source import ProvenanceSource
 
 
 @dataclass
@@ -20,6 +21,7 @@ class WorkHistoryEntry:
     company_name: str
     job_title: str
     start_date: date
+    source: ProvenanceSource
     end_date: date | None = None
     location: str | None = None
     description: str | None = None
@@ -33,6 +35,10 @@ class WorkHistoryEntry:
             raise InvalidValueError("job_title cannot be empty.")
         if self.end_date is not None and self.end_date < self.start_date:
             raise InvalidValueError("end_date cannot be before start_date.")
+        if not isinstance(self.source, ProvenanceSource):
+            raise InvalidValueError(
+                "WorkHistoryEntry requires a valid ProvenanceSource."
+            )
 
     @property
     def is_current(self) -> bool:

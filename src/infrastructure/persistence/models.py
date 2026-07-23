@@ -29,6 +29,14 @@ from src.infrastructure.persistence.database import Base
 _SENSITIVE_COLUMN_INFO = {"sensitive": True}
 _SENSITIVE_COMMENT = "SENSITIVE: encrypt at rest / restrict access (Epic 07)."
 
+# Every stored fact carries a provenance tag mirroring the domain's
+# `ProvenanceSource` — see that module for the full Epic 04 contract.
+# `String(16)` comfortably fits the longest member ("parsed_resume").
+_PROVENANCE_COMMENT = (
+    "Fact provenance: parsed_resume | user_entered | answer. "
+    "Required — see src/domain/value_objects/provenance_source.py."
+)
+
 
 class JobApplicationModel(Base):
     __tablename__ = "job_applications"
@@ -52,6 +60,12 @@ class UserProfileModel(Base):
     user_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     full_name: Mapped[str] = mapped_column(String(255))
     email: Mapped[str] = mapped_column(String(320))
+    # Provenance for full_name/email/phone/headline/location as a bundle —
+    # see UserProfile's module docstring for why. Always required: those
+    # fields are always present once a profile exists.
+    contact_source: Mapped[str] = mapped_column(
+        String(16), comment=_PROVENANCE_COMMENT
+    )
     phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     headline: Mapped[str | None] = mapped_column(String(255), nullable=True)
     location: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -62,11 +76,20 @@ class UserProfileModel(Base):
     state_or_region: Mapped[str | None] = mapped_column(String(255), nullable=True)
     postal_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
     country: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Nullable: only required once the address above actually has data —
+    # enforced by UserProfile._validate_optional_source, not by the schema.
+    address_source: Mapped[str | None] = mapped_column(
+        String(16), nullable=True, comment=_PROVENANCE_COMMENT
+    )
 
     # Links — portfolio/LinkedIn/GitHub. Not sensitive-flagged.
     portfolio_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     linkedin_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     github_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    # Nullable for the same reason as address_source.
+    links_source: Mapped[str | None] = mapped_column(
+        String(16), nullable=True, comment=_PROVENANCE_COMMENT
+    )
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -109,6 +132,7 @@ class WorkHistoryModel(Base):
     start_date: Mapped[date] = mapped_column(Date)
     end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(String(16), comment=_PROVENANCE_COMMENT)
 
     profile: Mapped[UserProfileModel] = relationship(back_populates="work_history")
 
@@ -126,6 +150,7 @@ class EducationModel(Base):
     start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(String(16), comment=_PROVENANCE_COMMENT)
 
     profile: Mapped[UserProfileModel] = relationship(back_populates="education")
 
@@ -143,6 +168,7 @@ class SkillModel(Base):
     name: Mapped[str] = mapped_column(String(255))
     proficiency: Mapped[str | None] = mapped_column(String(32), nullable=True)
     years_of_experience: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source: Mapped[str] = mapped_column(String(16), comment=_PROVENANCE_COMMENT)
 
     profile: Mapped[UserProfileModel] = relationship(back_populates="skills")
 
@@ -187,6 +213,8 @@ class WorkAuthorizationModel(Base):
     details: Mapped[str | None] = mapped_column(
         Text, nullable=True, info=_SENSITIVE_COLUMN_INFO, comment=_SENSITIVE_COMMENT
     )
+    # Provenance metadata, not itself sensitive PII — no _SENSITIVE_* tags.
+    source: Mapped[str] = mapped_column(String(16), comment=_PROVENANCE_COMMENT)
 
     profile: Mapped[UserProfileModel] = relationship(
         back_populates="work_authorization"
@@ -232,6 +260,8 @@ class EeoSelfIdentificationModel(Base):
         info=_SENSITIVE_COLUMN_INFO,
         comment=_SENSITIVE_COMMENT,
     )
+    # Provenance metadata, not itself sensitive PII — no _SENSITIVE_* tags.
+    source: Mapped[str] = mapped_column(String(16), comment=_PROVENANCE_COMMENT)
 
     profile: Mapped[UserProfileModel] = relationship(
         back_populates="eeo_self_identification"

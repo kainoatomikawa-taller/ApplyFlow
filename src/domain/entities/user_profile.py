@@ -3,6 +3,18 @@
 Everything ApplyFlow knows about a candidate — contact details, work
 history, education, and skills — hangs off this aggregate. It is the data
 spine that matching, tailoring, and autofill all read from.
+
+Provenance: every fact here is tagged with a `ProvenanceSource` (see that
+module for the full downstream contract). List-shaped facts
+(`WorkHistoryEntry`, `EducationEntry`, `Skill`) and the facts that live in
+their own DB row (`WorkAuthorization`, `EeoSelfIdentification`) each carry
+their own `source`. The scalar contact fields (`full_name`, `email`,
+`phone`, `headline`, `location`) and the `address`/`links` value objects
+are flattened onto this single row rather than given their own table, so
+each of those groups shares one `*_source` tag here instead — `contact_source`
+(always required, since `full_name`/`email` are always present) and the
+optional `address_source`/`links_source` (required only once their group
+actually carries data; see `_validate_optional_source`).
 """
 
 from __future__ import annotations
@@ -18,6 +30,7 @@ from src.domain.value_objects.address import Address
 from src.domain.value_objects.eeo_self_identification import EeoSelfIdentification
 from src.domain.value_objects.email_address import EmailAddress
 from src.domain.value_objects.profile_links import ProfileLinks
+from src.domain.value_objects.provenance_source import ProvenanceSource
 from src.domain.value_objects.work_authorization import WorkAuthorization
 
 
@@ -33,14 +46,22 @@ class UserProfile:
     user_id: str
     full_name: str
     email: EmailAddress
+    # Provenance for full_name/email/phone/headline/location as a bundle —
+    # see the module docstring's "Provenance" section for why these five
+    # scalars share one tag instead of one each.
+    contact_source: ProvenanceSource
     phone: str | None = None
     headline: str | None = None
     location: str | None = None
     address: Address = field(default_factory=Address)
+    address_source: ProvenanceSource | None = None
     links: ProfileLinks = field(default_factory=ProfileLinks)
+    links_source: ProvenanceSource | None = None
     # Sensitive — see WorkAuthorization/EeoSelfIdentification docstrings.
     # Both default to None: an application's "always-asked" fields are only
-    # ever populated by an explicit candidate action, never assumed.
+    # ever populated by an explicit candidate action, never assumed. Each
+    # carries its own `source` internally (see their docstrings) since each
+    # lives in its own DB row, unlike address/links above.
     work_authorization: WorkAuthorization | None = None
     eeo_self_identification: EeoSelfIdentification | None = None
     work_history: list[WorkHistoryEntry] = field(default_factory=list)
@@ -56,15 +77,60 @@ class UserProfile:
             raise InvalidValueError("UserProfile requires a non-empty user_id.")
         if not self.full_name.strip():
             raise InvalidValueError("full_name cannot be empty.")
+        if not isinstance(self.contact_source, ProvenanceSource):
+            raise InvalidValueError(
+                "UserProfile requires a valid ProvenanceSource for contact_source."
+            )
+        self._validate_optional_source(
+            has_data=self.address != Address(),
+            source=self.address_source,
+            field_label="address_source",
+        )
+        self._validate_optional_source(
+            has_data=self.links != ProfileLinks(),
+            source=self.links_source,
+            field_label="links_source",
+        )
+
+    @staticmethod
+    def _validate_optional_source(
+        *, has_data: bool, source: ProvenanceSource | None, field_label: str
+    ) -> None:
+        """A group of optional fields needs a source once any of them is
+        set — but an all-empty group (nothing provided) is not a fact yet,
+        so it doesn't need one."""
+        if has_data and source is None:
+            raise InvalidValueError(f"{field_label} is required once data is set.")
+        if source is not None and not isinstance(source, ProvenanceSource):
+            raise InvalidValueError(f"{field_label} must be a valid ProvenanceSource.")
 
     # ---- Behaviors (business rules live here) --------------------------------
 
-    def set_address(self, address: Address) -> None:
+    def set_address(
+        self, address: Address, source: ProvenanceSource | None = None
+    ) -> None:
+        """Set or clear the candidate's address.
+
+        `source` is required whenever `address` carries any data — see
+        `_validate_optional_source`. Clearing back to an empty `Address()`
+        needs no source, since there is no fact left to attribute.
+        """
+        self._validate_optional_source(
+            has_data=address != Address(), source=source, field_label="source"
+        )
         self.address = address
+        self.address_source = source
         self._touch()
 
-    def set_links(self, links: ProfileLinks) -> None:
+    def set_links(
+        self, links: ProfileLinks, source: ProvenanceSource | None = None
+    ) -> None:
+        """Set or clear the candidate's links. Same source rule as `set_address`."""
+        self._validate_optional_source(
+            has_data=links != ProfileLinks(), source=source, field_label="source"
+        )
         self.links = links
+        self.links_source = source
         self._touch()
 
     def set_work_authorization(

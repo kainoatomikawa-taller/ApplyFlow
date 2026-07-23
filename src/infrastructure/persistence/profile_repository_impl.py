@@ -25,6 +25,7 @@ from src.domain.value_objects.eeo_self_identification import EeoSelfIdentificati
 from src.domain.value_objects.email_address import EmailAddress
 from src.domain.value_objects.proficiency_level import ProficiencyLevel
 from src.domain.value_objects.profile_links import ProfileLinks
+from src.domain.value_objects.provenance_source import ProvenanceSource
 from src.domain.value_objects.work_authorization import WorkAuthorization
 from src.domain.value_objects.work_authorization_status import (
     WorkAuthorizationStatus,
@@ -101,6 +102,7 @@ class SqlAlchemyProfileRepository(ProfileRepository):
             user_id=entity.user_id,
             full_name=entity.full_name,
             email=str(entity.email),
+            contact_source=entity.contact_source.value,
             phone=entity.phone,
             headline=entity.headline,
             location=entity.location,
@@ -109,9 +111,17 @@ class SqlAlchemyProfileRepository(ProfileRepository):
             state_or_region=entity.address.state_or_region,
             postal_code=entity.address.postal_code,
             country=entity.address.country,
+            address_source=(
+                entity.address_source.value
+                if entity.address_source is not None
+                else None
+            ),
             portfolio_url=entity.links.portfolio_url,
             linkedin_url=entity.links.linkedin_url,
             github_url=entity.links.github_url,
+            links_source=(
+                entity.links_source.value if entity.links_source is not None else None
+            ),
             created_at=entity.created_at,
             updated_at=entity.updated_at,
             work_history=[
@@ -152,6 +162,7 @@ class SqlAlchemyProfileRepository(ProfileRepository):
             start_date=entry.start_date,
             end_date=entry.end_date,
             description=entry.description,
+            source=entry.source.value,
         )
 
     @staticmethod
@@ -164,6 +175,7 @@ class SqlAlchemyProfileRepository(ProfileRepository):
             start_date=entry.start_date,
             end_date=entry.end_date,
             description=entry.description,
+            source=entry.source.value,
         )
 
     @staticmethod
@@ -175,6 +187,7 @@ class SqlAlchemyProfileRepository(ProfileRepository):
                 skill.proficiency.value if skill.proficiency is not None else None
             ),
             years_of_experience=skill.years_of_experience,
+            source=skill.source.value,
         )
 
     @staticmethod
@@ -187,6 +200,7 @@ class SqlAlchemyProfileRepository(ProfileRepository):
             visa_type=work_authorization.visa_type,
             requires_sponsorship=work_authorization.requires_sponsorship,
             details=work_authorization.details,
+            source=work_authorization.source.value,
         )
 
     @staticmethod
@@ -206,12 +220,14 @@ class SqlAlchemyProfileRepository(ProfileRepository):
                 if eeo.disability_status is not None
                 else None
             ),
+            source=eeo.source.value,
         )
 
     @staticmethod
     def _apply_entity_to_model(entity: UserProfile, model: UserProfileModel) -> None:
         model.full_name = entity.full_name
         model.email = str(entity.email)
+        model.contact_source = entity.contact_source.value
         model.phone = entity.phone
         model.headline = entity.headline
         model.location = entity.location
@@ -220,9 +236,15 @@ class SqlAlchemyProfileRepository(ProfileRepository):
         model.state_or_region = entity.address.state_or_region
         model.postal_code = entity.address.postal_code
         model.country = entity.address.country
+        model.address_source = (
+            entity.address_source.value if entity.address_source is not None else None
+        )
         model.portfolio_url = entity.links.portfolio_url
         model.linkedin_url = entity.links.linkedin_url
         model.github_url = entity.links.github_url
+        model.links_source = (
+            entity.links_source.value if entity.links_source is not None else None
+        )
         model.updated_at = entity.updated_at
 
         model.work_history = [
@@ -257,6 +279,7 @@ class SqlAlchemyProfileRepository(ProfileRepository):
             user_id=model.user_id,
             full_name=model.full_name,
             email=EmailAddress(model.email),
+            contact_source=ProvenanceSource(model.contact_source),
             phone=model.phone,
             headline=model.headline,
             location=model.location,
@@ -267,10 +290,20 @@ class SqlAlchemyProfileRepository(ProfileRepository):
                 postal_code=model.postal_code,
                 country=model.country,
             ),
+            address_source=(
+                ProvenanceSource(model.address_source)
+                if model.address_source is not None
+                else None
+            ),
             links=ProfileLinks(
                 portfolio_url=model.portfolio_url,
                 linkedin_url=model.linkedin_url,
                 github_url=model.github_url,
+            ),
+            links_source=(
+                ProvenanceSource(model.links_source)
+                if model.links_source is not None
+                else None
             ),
             work_authorization=(
                 SqlAlchemyProfileRepository._work_authorization_to_entity(
@@ -295,6 +328,7 @@ class SqlAlchemyProfileRepository(ProfileRepository):
                     end_date=m.end_date,
                     location=m.location,
                     description=m.description,
+                    source=ProvenanceSource(m.source),
                 )
                 for m in model.work_history
             ],
@@ -307,6 +341,7 @@ class SqlAlchemyProfileRepository(ProfileRepository):
                     start_date=m.start_date,
                     end_date=m.end_date,
                     description=m.description,
+                    source=ProvenanceSource(m.source),
                 )
                 for m in model.education
             ],
@@ -320,6 +355,7 @@ class SqlAlchemyProfileRepository(ProfileRepository):
                         else None
                     ),
                     years_of_experience=m.years_of_experience,
+                    source=ProvenanceSource(m.source),
                 )
                 for m in model.skills
             ],
@@ -337,11 +373,13 @@ class SqlAlchemyProfileRepository(ProfileRepository):
             visa_type=model.visa_type,
             requires_sponsorship=model.requires_sponsorship,
             details=model.details,
+            source=ProvenanceSource(model.source),
         )
 
     @staticmethod
     def _eeo_to_entity(model: EeoSelfIdentificationModel) -> EeoSelfIdentification:
         return EeoSelfIdentification(
+            source=ProvenanceSource(model.source),
             gender_identity=(
                 GenderIdentity(model.gender_identity)
                 if model.gender_identity is not None
