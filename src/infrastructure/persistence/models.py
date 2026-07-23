@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import date, datetime
 
 from sqlalchemy import (
+    Boolean,
     Date,
     DateTime,
     ForeignKey,
@@ -20,6 +21,13 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.infrastructure.persistence.database import Base
+
+# Mirrors the `SENSITIVE = True` flag on the domain value objects
+# (`WorkAuthorization`, `EeoSelfIdentification`) at the schema level, so
+# Epic 07 can find every column requiring encryption-at-rest/restricted
+# access without re-deriving the list from application code.
+_SENSITIVE_COLUMN_INFO = {"sensitive": True}
+_SENSITIVE_COMMENT = "SENSITIVE: encrypt at rest / restrict access (Epic 07)."
 
 
 class JobApplicationModel(Base):
@@ -47,6 +55,19 @@ class UserProfileModel(Base):
     phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     headline: Mapped[str | None] = mapped_column(String(255), nullable=True)
     location: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # Contact info — postal address. Not sensitive-flagged.
+    street_address: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    city: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    state_or_region: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    postal_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    country: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # Links — portfolio/LinkedIn/GitHub. Not sensitive-flagged.
+    portfolio_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    linkedin_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    github_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
@@ -64,6 +85,14 @@ class UserProfileModel(Base):
         back_populates="profile",
         cascade="all, delete-orphan",
         order_by="SkillModel.name",
+    )
+    # One-to-one, optional — see WorkAuthorizationModel/EeoSelfIdentificationModel
+    # docstrings for why these live in their own sensitive-flagged tables.
+    work_authorization: Mapped[WorkAuthorizationModel | None] = relationship(
+        back_populates="profile", cascade="all, delete-orphan", uselist=False
+    )
+    eeo_self_identification: Mapped[EeoSelfIdentificationModel | None] = relationship(
+        back_populates="profile", cascade="all, delete-orphan", uselist=False
     )
 
 
@@ -116,3 +145,94 @@ class SkillModel(Base):
     years_of_experience: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     profile: Mapped[UserProfileModel] = relationship(back_populates="skills")
+
+
+class WorkAuthorizationModel(Base):
+    """A profile's work-authorization/citizenship data.
+
+    Kept in its own one-to-one table (`profile_id` is both primary key and
+    foreign key) rather than columns on `user_profiles`, so Epic 07 can
+    apply encryption-at-rest and restricted access to this table without
+    touching the general profile row. Every column is flagged sensitive via
+    both `info=` (machine-readable) and `comment=` (visible in `\\d` /
+    migrations) — mirrors `WorkAuthorization.SENSITIVE` in the domain layer.
+    """
+
+    __tablename__ = "work_authorizations"
+
+    profile_id: Mapped[str] = mapped_column(
+        ForeignKey("user_profiles.id", ondelete="CASCADE"), primary_key=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(32), info=_SENSITIVE_COLUMN_INFO, comment=_SENSITIVE_COMMENT
+    )
+    citizenship_country: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
+    )
+    visa_type: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
+    )
+    requires_sponsorship: Mapped[bool | None] = mapped_column(
+        Boolean,
+        nullable=True,
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
+    )
+    details: Mapped[str | None] = mapped_column(
+        Text, nullable=True, info=_SENSITIVE_COLUMN_INFO, comment=_SENSITIVE_COMMENT
+    )
+
+    profile: Mapped[UserProfileModel] = relationship(
+        back_populates="work_authorization"
+    )
+
+
+class EeoSelfIdentificationModel(Base):
+    """A profile's voluntary EEO self-identification data.
+
+    Optional one-to-one table, same rationale as `WorkAuthorizationModel`:
+    isolated for Epic 07's encryption/access-control work, every column
+    flagged sensitive. The absence of a row for a profile means "not
+    provided" — there is no code path that creates one except an explicit
+    candidate submission (see `UserProfile.set_eeo_self_identification`).
+    """
+
+    __tablename__ = "eeo_self_identifications"
+
+    profile_id: Mapped[str] = mapped_column(
+        ForeignKey("user_profiles.id", ondelete="CASCADE"), primary_key=True
+    )
+    gender_identity: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
+    )
+    race_ethnicity: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
+    )
+    veteran_status: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
+    )
+    disability_status: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
+    )
+
+    profile: Mapped[UserProfileModel] = relationship(
+        back_populates="eeo_self_identification"
+    )

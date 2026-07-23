@@ -14,7 +14,11 @@ from src.domain.entities.education_entry import EducationEntry
 from src.domain.entities.skill import Skill
 from src.domain.entities.work_history_entry import WorkHistoryEntry
 from src.domain.exceptions import BusinessRuleViolationError, InvalidValueError
+from src.domain.value_objects.address import Address
+from src.domain.value_objects.eeo_self_identification import EeoSelfIdentification
 from src.domain.value_objects.email_address import EmailAddress
+from src.domain.value_objects.profile_links import ProfileLinks
+from src.domain.value_objects.work_authorization import WorkAuthorization
 
 
 def _utcnow() -> datetime:
@@ -32,6 +36,13 @@ class UserProfile:
     phone: str | None = None
     headline: str | None = None
     location: str | None = None
+    address: Address = field(default_factory=Address)
+    links: ProfileLinks = field(default_factory=ProfileLinks)
+    # Sensitive — see WorkAuthorization/EeoSelfIdentification docstrings.
+    # Both default to None: an application's "always-asked" fields are only
+    # ever populated by an explicit candidate action, never assumed.
+    work_authorization: WorkAuthorization | None = None
+    eeo_self_identification: EeoSelfIdentification | None = None
     work_history: list[WorkHistoryEntry] = field(default_factory=list)
     education: list[EducationEntry] = field(default_factory=list)
     skills: list[Skill] = field(default_factory=list)
@@ -47,6 +58,36 @@ class UserProfile:
             raise InvalidValueError("full_name cannot be empty.")
 
     # ---- Behaviors (business rules live here) --------------------------------
+
+    def set_address(self, address: Address) -> None:
+        self.address = address
+        self._touch()
+
+    def set_links(self, links: ProfileLinks) -> None:
+        self.links = links
+        self._touch()
+
+    def set_work_authorization(
+        self, work_authorization: WorkAuthorization | None
+    ) -> None:
+        """Set or clear work-authorization data.
+
+        Accepting `None` lets a candidate withdraw previously-provided data;
+        nothing here ever fills in a value on the candidate's behalf.
+        """
+        self.work_authorization = work_authorization
+        self._touch()
+
+    def set_eeo_self_identification(
+        self, eeo_self_identification: EeoSelfIdentification | None
+    ) -> None:
+        """Set or clear voluntary EEO self-identification data.
+
+        Accepting `None` lets a candidate withdraw previously-provided data;
+        nothing here ever fills in a value on the candidate's behalf.
+        """
+        self.eeo_self_identification = eeo_self_identification
+        self._touch()
 
     def add_work_history(self, entry: WorkHistoryEntry) -> None:
         if any(e.id == entry.id for e in self.work_history):

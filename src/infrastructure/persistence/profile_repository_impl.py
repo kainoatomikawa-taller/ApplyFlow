@@ -14,12 +14,27 @@ from src.domain.entities.skill import Skill
 from src.domain.entities.user_profile import UserProfile
 from src.domain.entities.work_history_entry import WorkHistoryEntry
 from src.domain.repositories.profile_repository import ProfileRepository
+from src.domain.value_objects.address import Address
+from src.domain.value_objects.eeo_categories import (
+    DisabilityStatus,
+    GenderIdentity,
+    RaceEthnicity,
+    VeteranStatus,
+)
+from src.domain.value_objects.eeo_self_identification import EeoSelfIdentification
 from src.domain.value_objects.email_address import EmailAddress
 from src.domain.value_objects.proficiency_level import ProficiencyLevel
+from src.domain.value_objects.profile_links import ProfileLinks
+from src.domain.value_objects.work_authorization import WorkAuthorization
+from src.domain.value_objects.work_authorization_status import (
+    WorkAuthorizationStatus,
+)
 from src.infrastructure.persistence.models import (
     EducationModel,
+    EeoSelfIdentificationModel,
     SkillModel,
     UserProfileModel,
+    WorkAuthorizationModel,
     WorkHistoryModel,
 )
 
@@ -27,6 +42,8 @@ _EAGER_LOAD_OPTIONS = (
     selectinload(UserProfileModel.work_history),
     selectinload(UserProfileModel.education),
     selectinload(UserProfileModel.skills),
+    selectinload(UserProfileModel.work_authorization),
+    selectinload(UserProfileModel.eeo_self_identification),
 )
 
 
@@ -87,6 +104,14 @@ class SqlAlchemyProfileRepository(ProfileRepository):
             phone=entity.phone,
             headline=entity.headline,
             location=entity.location,
+            street_address=entity.address.street_address,
+            city=entity.address.city,
+            state_or_region=entity.address.state_or_region,
+            postal_code=entity.address.postal_code,
+            country=entity.address.country,
+            portfolio_url=entity.links.portfolio_url,
+            linkedin_url=entity.links.linkedin_url,
+            github_url=entity.links.github_url,
             created_at=entity.created_at,
             updated_at=entity.updated_at,
             work_history=[
@@ -101,6 +126,20 @@ class SqlAlchemyProfileRepository(ProfileRepository):
                 SqlAlchemyProfileRepository._skill_to_model(skill)
                 for skill in entity.skills
             ],
+            work_authorization=(
+                SqlAlchemyProfileRepository._work_authorization_to_model(
+                    entity.work_authorization
+                )
+                if entity.work_authorization is not None
+                else None
+            ),
+            eeo_self_identification=(
+                SqlAlchemyProfileRepository._eeo_to_model(
+                    entity.eeo_self_identification
+                )
+                if entity.eeo_self_identification is not None
+                else None
+            ),
         )
 
     @staticmethod
@@ -139,12 +178,51 @@ class SqlAlchemyProfileRepository(ProfileRepository):
         )
 
     @staticmethod
+    def _work_authorization_to_model(
+        work_authorization: WorkAuthorization,
+    ) -> WorkAuthorizationModel:
+        return WorkAuthorizationModel(
+            status=work_authorization.status.value,
+            citizenship_country=work_authorization.citizenship_country,
+            visa_type=work_authorization.visa_type,
+            requires_sponsorship=work_authorization.requires_sponsorship,
+            details=work_authorization.details,
+        )
+
+    @staticmethod
+    def _eeo_to_model(eeo: EeoSelfIdentification) -> EeoSelfIdentificationModel:
+        return EeoSelfIdentificationModel(
+            gender_identity=(
+                eeo.gender_identity.value if eeo.gender_identity is not None else None
+            ),
+            race_ethnicity=(
+                eeo.race_ethnicity.value if eeo.race_ethnicity is not None else None
+            ),
+            veteran_status=(
+                eeo.veteran_status.value if eeo.veteran_status is not None else None
+            ),
+            disability_status=(
+                eeo.disability_status.value
+                if eeo.disability_status is not None
+                else None
+            ),
+        )
+
+    @staticmethod
     def _apply_entity_to_model(entity: UserProfile, model: UserProfileModel) -> None:
         model.full_name = entity.full_name
         model.email = str(entity.email)
         model.phone = entity.phone
         model.headline = entity.headline
         model.location = entity.location
+        model.street_address = entity.address.street_address
+        model.city = entity.address.city
+        model.state_or_region = entity.address.state_or_region
+        model.postal_code = entity.address.postal_code
+        model.country = entity.address.country
+        model.portfolio_url = entity.links.portfolio_url
+        model.linkedin_url = entity.links.linkedin_url
+        model.github_url = entity.links.github_url
         model.updated_at = entity.updated_at
 
         model.work_history = [
@@ -159,6 +237,18 @@ class SqlAlchemyProfileRepository(ProfileRepository):
             SqlAlchemyProfileRepository._skill_to_model(skill)
             for skill in entity.skills
         ]
+        model.work_authorization = (
+            SqlAlchemyProfileRepository._work_authorization_to_model(
+                entity.work_authorization
+            )
+            if entity.work_authorization is not None
+            else None
+        )
+        model.eeo_self_identification = (
+            SqlAlchemyProfileRepository._eeo_to_model(entity.eeo_self_identification)
+            if entity.eeo_self_identification is not None
+            else None
+        )
 
     @staticmethod
     def _to_entity(model: UserProfileModel) -> UserProfile:
@@ -170,6 +260,32 @@ class SqlAlchemyProfileRepository(ProfileRepository):
             phone=model.phone,
             headline=model.headline,
             location=model.location,
+            address=Address(
+                street_address=model.street_address,
+                city=model.city,
+                state_or_region=model.state_or_region,
+                postal_code=model.postal_code,
+                country=model.country,
+            ),
+            links=ProfileLinks(
+                portfolio_url=model.portfolio_url,
+                linkedin_url=model.linkedin_url,
+                github_url=model.github_url,
+            ),
+            work_authorization=(
+                SqlAlchemyProfileRepository._work_authorization_to_entity(
+                    model.work_authorization
+                )
+                if model.work_authorization is not None
+                else None
+            ),
+            eeo_self_identification=(
+                SqlAlchemyProfileRepository._eeo_to_entity(
+                    model.eeo_self_identification
+                )
+                if model.eeo_self_identification is not None
+                else None
+            ),
             work_history=[
                 WorkHistoryEntry(
                     id=m.id,
@@ -209,4 +325,41 @@ class SqlAlchemyProfileRepository(ProfileRepository):
             ],
             created_at=model.created_at,
             updated_at=model.updated_at,
+        )
+
+    @staticmethod
+    def _work_authorization_to_entity(
+        model: WorkAuthorizationModel,
+    ) -> WorkAuthorization:
+        return WorkAuthorization(
+            status=WorkAuthorizationStatus(model.status),
+            citizenship_country=model.citizenship_country,
+            visa_type=model.visa_type,
+            requires_sponsorship=model.requires_sponsorship,
+            details=model.details,
+        )
+
+    @staticmethod
+    def _eeo_to_entity(model: EeoSelfIdentificationModel) -> EeoSelfIdentification:
+        return EeoSelfIdentification(
+            gender_identity=(
+                GenderIdentity(model.gender_identity)
+                if model.gender_identity is not None
+                else None
+            ),
+            race_ethnicity=(
+                RaceEthnicity(model.race_ethnicity)
+                if model.race_ethnicity is not None
+                else None
+            ),
+            veteran_status=(
+                VeteranStatus(model.veteran_status)
+                if model.veteran_status is not None
+                else None
+            ),
+            disability_status=(
+                DisabilityStatus(model.disability_status)
+                if model.disability_status is not None
+                else None
+            ),
         )

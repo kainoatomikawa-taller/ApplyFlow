@@ -243,6 +243,39 @@ cascade rather than manual diffing. `tests/infrastructure/test_profile_persisten
 follows the same real-database, skip-if-unreachable pattern as
 `test_persistence_smoke.py` to create and read back a full profile.
 
+### Standard "always-asked" application fields
+
+`user_profiles` also carries the contact/link fields nearly every job
+application asks for: a postal address (`street_address`/`city`/
+`state_or_region`/`postal_code`/`country`) and portfolio/LinkedIn/GitHub
+URLs. None of that is sensitive.
+
+Work authorization/citizenship and EEO self-identification are a different
+category — real PII this app must protect — so they live in their own
+one-to-one tables (`work_authorizations`, `eeo_self_identifications`, each
+keyed by `profile_id` as both primary key and foreign key) instead of
+columns on `user_profiles`. That isolation is deliberate: it lets Epic 07
+apply encryption-at-rest and restricted access to exactly those tables
+without touching the general profile row. Every column on both tables is
+flagged sensitive twice over — `WorkAuthorization.SENSITIVE` /
+`EeoSelfIdentification.SENSITIVE` in the domain layer
+(`src/domain/value_objects/`), and matching `info={"sensitive": True}` +
+`comment=` metadata on the SQLAlchemy columns
+(`src/infrastructure/persistence/models.py`) — so Epic 07 can find every
+field requiring protection from either layer.
+
+EEO self-identification is additionally modeled so it can never be
+defaulted or auto-asserted: `UserProfile.eeo_self_identification` is
+`None` until a candidate explicitly submits one via
+`set_eeo_self_identification()`, and every field inside
+`EeoSelfIdentification` (gender identity, race/ethnicity, veteran status,
+disability status) itself defaults to `None` rather than any category
+value — including the explicit "decline to self-identify" option each
+enum offers, which is a real recorded choice, not an inferred one.
+`tests/infrastructure/test_profile_persistence_smoke.py` proves this
+against a real database: a fully-populated profile still comes back with
+`eeo_self_identification is None` until it's set explicitly.
+
 ---
 
 ## Getting Started
