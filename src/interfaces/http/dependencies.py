@@ -29,6 +29,9 @@ from src.application.use_cases.create_job_application import (
 from src.application.use_cases.detect_job_requirement_gaps import (
     DetectJobRequirementGaps,
 )
+from src.application.use_cases.generate_gap_resolution_questions import (
+    GenerateGapResolutionQuestions,
+)
 from src.application.use_cases.get_resume import GetResume
 from src.application.use_cases.list_candidate_applications import (
     ListCandidateApplications,
@@ -41,6 +44,7 @@ from src.application.use_cases.parse_resume import ParseResume
 from src.application.use_cases.rank_matched_job_postings import (
     RankMatchedJobPostings,
 )
+from src.application.use_cases.resolve_gap_answer import ResolveGapAnswer
 from src.application.use_cases.submit_job_application import (
     SubmitJobApplication,
 )
@@ -57,6 +61,9 @@ from src.infrastructure.llm.anthropic_client import AnthropicLlmClient
 from src.infrastructure.llm.langchain_resume_analyzer import (
     LangChainResumeAnalyzer,
 )
+from src.infrastructure.llm.llm_gap_resolution_question_generator import (
+    LlmGapResolutionQuestionGenerator,
+)
 from src.infrastructure.llm.llm_job_fit_rationale_generator import (
     LlmJobFitRationaleGenerator,
 )
@@ -64,6 +71,7 @@ from src.infrastructure.llm.llm_requirement_gap_detector import (
     LlmRequirementGapDetector,
 )
 from src.infrastructure.llm.llm_resume_parser import LlmResumeParser
+from src.infrastructure.llm.openai_embedding_client import OpenAiEmbeddingClient
 from src.infrastructure.persistence.answer_memory_repository_impl import (
     SqlAlchemyAnswerMemoryRepository,
 )
@@ -219,6 +227,24 @@ def get_detect_job_requirement_gaps_use_case(
         profile_repository=profile_repository,
         answer_memory_repository=answer_memory_repository,
         detector=LlmRequirementGapDetector(AnthropicLlmClient(get_settings())),
+    )
+
+
+def get_generate_gap_resolution_questions_use_case() -> GenerateGapResolutionQuestions:
+    return GenerateGapResolutionQuestions(
+        generator=LlmGapResolutionQuestionGenerator(AnthropicLlmClient(get_settings()))
+    )
+
+
+def get_resolve_gap_answer_use_case(
+    answer_memory_repository: SqlAlchemyAnswerMemoryRepository = Depends(
+        _answer_memory_repository
+    ),
+) -> ResolveGapAnswer:
+    return ResolveGapAnswer(
+        repository=answer_memory_repository,
+        embedding_client=OpenAiEmbeddingClient(get_settings()),
+        id_generator=UuidIdGenerator(),
     )
 
 

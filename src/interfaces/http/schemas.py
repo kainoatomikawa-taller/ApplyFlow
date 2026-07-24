@@ -135,6 +135,27 @@ class JobRequirementGapsResponse(BaseModel):
     gaps: list[str]
 
 
+class GenerateGapQuestionsRequest(BaseModel):
+    gaps: list[str] = Field(default_factory=list)
+
+
+class GapResolutionQuestionResponse(BaseModel):
+    gap: str
+    question: str
+
+
+class ResolveGapAnswerRequest(BaseModel):
+    gap: str = Field(min_length=1)
+    question: str = Field(min_length=1)
+    answer: str = ""
+
+
+class ResolveGapAnswerResponse(BaseModel):
+    gap: str
+    captured: bool
+    answer_memory_id: str | None = None
+
+
 class SubmitJobMatchFeedbackRequest(BaseModel):
     rating: Literal["thumbs_up", "thumbs_down"]
     score_at_feedback: int = Field(ge=0, le=100)
