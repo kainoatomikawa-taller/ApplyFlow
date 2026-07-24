@@ -55,6 +55,14 @@ class ResumeNotFoundError(DomainError):
         self.resume_id = resume_id
 
 
+class AnswerMemoryNotFoundError(DomainError):
+    """Raised when a remembered answer cannot be located."""
+
+    def __init__(self, answer_memory_id: str) -> None:
+        super().__init__(f"Answer memory '{answer_memory_id}' was not found.")
+        self.answer_memory_id = answer_memory_id
+
+
 class ProfileMissingContactInfoError(DomainError):
     """Raised when a new profile would be created without a full name or
     email — both required to identify the profile's owner. Parsing must

@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import date, datetime
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     Date,
     DateTime,
@@ -141,6 +142,44 @@ class ResumeModel(Base):
     extracted_text: Mapped[str] = mapped_column(
         Text, comment="May contain PII — never log."
     )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AnswerMemoryModel(Base):
+    """A candidate's remembered answer to an application question, plus the
+    embedding of its question text — the foundation for semantic retrieval
+    (matching a future application's questions against ones already
+    answered).
+
+    SENSITIVE: unlike `WorkAuthorizationModel`/`EeoSelfIdentificationModel`,
+    this table has no fixed set of columns per topic — `question_text` and
+    `answer_text` can be about anything an application asked, so they can
+    just as easily contain a salary expectation, a disability
+    accommodation, or a visa/citizenship detail as something innocuous.
+    Every column (including the embedding, which is derived from the
+    question text) is flagged sensitive here as the conservative default,
+    mirroring `AnswerMemory.SENSITIVE` in the domain layer, until Epic 07
+    has a finer-grained classification.
+    """
+
+    __tablename__ = "answer_memories"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    question_text: Mapped[str] = mapped_column(
+        Text, info=_SENSITIVE_COLUMN_INFO, comment=_SENSITIVE_COMMENT
+    )
+    answer_text: Mapped[str] = mapped_column(
+        Text, info=_SENSITIVE_COLUMN_INFO, comment=_SENSITIVE_COMMENT
+    )
+    # A plain JSON array of floats rather than a pgvector column: this
+    # ticket only covers storage, not similarity search, and pgvector
+    # isn't a dependency yet — a future retrieval epic can migrate this
+    # column once it needs indexed nearest-neighbor queries.
+    embedding: Mapped[list[float]] = mapped_column(
+        JSON, info=_SENSITIVE_COLUMN_INFO, comment=_SENSITIVE_COMMENT
+    )
+    source: Mapped[str] = mapped_column(String(16), comment=_PROVENANCE_COMMENT)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 

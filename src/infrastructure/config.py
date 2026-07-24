@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     openai_api_key: SecretStr = SecretStr("")
     llm_model: str = "gpt-4o-mini"
     llm_temperature: float = 0.2
+    # Embeddings (part of the Epic 00 LLM layer, see OpenAiEmbeddingClient).
+    # Anthropic has no embeddings endpoint, so this reuses the OpenAI
+    # credential above rather than the Anthropic one below.
+    openai_embedding_model: str = "text-embedding-3-small"
 
     # Anthropic — the ONLY LLM credential path (see AnthropicLlmClient).
     # Must be a pay-as-you-go API key from console.anthropic.com; never a
