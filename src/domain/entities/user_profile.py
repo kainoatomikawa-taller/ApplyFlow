@@ -27,6 +27,8 @@ from src.domain.entities.skill import Skill
 from src.domain.entities.work_history_entry import WorkHistoryEntry
 from src.domain.exceptions import BusinessRuleViolationError, InvalidValueError
 from src.domain.value_objects.address import Address
+from src.domain.value_objects.clearance_level import ClearanceLevel
+from src.domain.value_objects.degree_level import DegreeLevel
 from src.domain.value_objects.eeo_self_identification import EeoSelfIdentification
 from src.domain.value_objects.email_address import EmailAddress
 from src.domain.value_objects.profile_links import ProfileLinks
@@ -63,6 +65,15 @@ class UserProfile:
     # carries its own `source` internally (see their docstrings) since each
     # lives in its own DB row, unlike address/links above.
     work_authorization: WorkAuthorization | None = None
+    # Candidate-held clearance/degree, compared against a job posting's
+    # `JobRequirements.clearance_level`/`degree_level` by
+    # `HardDisqualifierFilter` — reusing the same enums the job side
+    # extracts into, so no translation layer is needed between the two.
+    # Both default to None ("not provided"), never guessed: an unstated
+    # value is treated as unknown rather than "candidate has none", so
+    # filtering never disqualifies over a gap in the candidate's own data.
+    clearance_level: ClearanceLevel | None = None
+    highest_degree: DegreeLevel | None = None
     eeo_self_identification: EeoSelfIdentification | None = None
     work_history: list[WorkHistoryEntry] = field(default_factory=list)
     education: list[EducationEntry] = field(default_factory=list)
@@ -142,6 +153,16 @@ class UserProfile:
         nothing here ever fills in a value on the candidate's behalf.
         """
         self.work_authorization = work_authorization
+        self._touch()
+
+    def set_clearance_level(self, clearance_level: ClearanceLevel | None) -> None:
+        """Set or clear the candidate's held security clearance."""
+        self.clearance_level = clearance_level
+        self._touch()
+
+    def set_highest_degree(self, highest_degree: DegreeLevel | None) -> None:
+        """Set or clear the candidate's highest completed degree level."""
+        self.highest_degree = highest_degree
         self._touch()
 
     def set_eeo_self_identification(

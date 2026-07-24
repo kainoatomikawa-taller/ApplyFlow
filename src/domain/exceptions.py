@@ -71,6 +71,14 @@ class AnswerMemoryNotFoundError(DomainError):
         self.answer_memory_id = answer_memory_id
 
 
+class ProfileNotFoundError(DomainError):
+    """Raised when a candidate profile cannot be located."""
+
+    def __init__(self, profile_id: str) -> None:
+        super().__init__(f"Profile '{profile_id}' was not found.")
+        self.profile_id = profile_id
+
+
 class ProfileMissingContactInfoError(DomainError):
     """Raised when a new profile would be created without a full name or
     email — both required to identify the profile's owner. Parsing must

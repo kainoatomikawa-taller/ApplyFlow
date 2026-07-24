@@ -15,6 +15,8 @@ from src.domain.entities.user_profile import UserProfile
 from src.domain.entities.work_history_entry import WorkHistoryEntry
 from src.domain.repositories.profile_repository import ProfileRepository
 from src.domain.value_objects.address import Address
+from src.domain.value_objects.clearance_level import ClearanceLevel
+from src.domain.value_objects.degree_level import DegreeLevel
 from src.domain.value_objects.eeo_categories import (
     DisabilityStatus,
     GenderIdentity,
@@ -121,6 +123,16 @@ class SqlAlchemyProfileRepository(ProfileRepository):
             github_url=entity.links.github_url,
             links_source=(
                 entity.links_source.value if entity.links_source is not None else None
+            ),
+            clearance_level=(
+                entity.clearance_level.value
+                if entity.clearance_level is not None
+                else None
+            ),
+            highest_degree=(
+                entity.highest_degree.value
+                if entity.highest_degree is not None
+                else None
             ),
             created_at=entity.created_at,
             updated_at=entity.updated_at,
@@ -245,6 +257,12 @@ class SqlAlchemyProfileRepository(ProfileRepository):
         model.links_source = (
             entity.links_source.value if entity.links_source is not None else None
         )
+        model.clearance_level = (
+            entity.clearance_level.value if entity.clearance_level is not None else None
+        )
+        model.highest_degree = (
+            entity.highest_degree.value if entity.highest_degree is not None else None
+        )
         model.updated_at = entity.updated_at
 
         model.work_history = [
@@ -303,6 +321,16 @@ class SqlAlchemyProfileRepository(ProfileRepository):
             links_source=(
                 ProvenanceSource(model.links_source)
                 if model.links_source is not None
+                else None
+            ),
+            clearance_level=(
+                ClearanceLevel(model.clearance_level)
+                if model.clearance_level is not None
+                else None
+            ),
+            highest_degree=(
+                DegreeLevel(model.highest_degree)
+                if model.highest_degree is not None
                 else None
             ),
             work_authorization=(

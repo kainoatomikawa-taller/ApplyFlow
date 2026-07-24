@@ -157,6 +157,12 @@ class UserProfileModel(Base):
         String(16), nullable=True, comment=_PROVENANCE_COMMENT
     )
 
+    # Candidate-held clearance/degree — compared against a job posting's
+    # requirements by `HardDisqualifierFilter`. Nullable: an unstated value
+    # means "unknown", never "candidate has none" (see UserProfile).
+    clearance_level: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    highest_degree: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
