@@ -22,3 +22,21 @@ class AnswerMemoryOutput:
     embedding: list[float]
     source: str
     created_at: datetime
+
+
+@dataclass(frozen=True)
+class FindSimilarAnswerInput:
+    user_id: str
+    question_text: str
+    # Overrides AnswerSimilarityMatcher.DEFAULT_THRESHOLD when set, so
+    # callers can tune match strictness without a code change.
+    threshold: float | None = None
+
+
+@dataclass(frozen=True)
+class AnswerMatchOutput:
+    """A retrieved answer paired with its similarity score and — via the
+    nested `AnswerMemoryOutput.source` — its provenance."""
+
+    answer: AnswerMemoryOutput
+    similarity_score: float
