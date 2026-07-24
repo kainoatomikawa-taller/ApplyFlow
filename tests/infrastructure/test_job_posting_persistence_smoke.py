@@ -11,11 +11,13 @@ runs for contributors without Postgres running locally.
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import UTC, date, datetime
 
 import pytest
 
 from src.domain.entities.job_posting import JobPosting
+from src.domain.value_objects.job_posting_status import JobPostingStatus
+from src.domain.value_objects.link_check_outcome import LinkCheckOutcome
 from src.domain.value_objects.salary_range import SalaryPeriod, SalaryRange
 from src.infrastructure.persistence.database import (
     Base,
@@ -105,3 +107,50 @@ async def test_create_and_read_round_trip_against_a_real_database(
             normalized_location=job_posting.normalized_location,
         )
         assert no_match is None
+
+
+@pytest.mark.asyncio
+async def test_status_lifecycle_round_trips_against_a_real_database(
+    schema_ready: None,
+) -> None:
+    job_posting = JobPosting(
+        id=f"smoke-job-{uuid.uuid4()}",
+        source="adzuna",
+        company="Smoke Test Co",
+        title="Backend Engineer",
+        apply_url="https://smoketestco.example.com/careers/1",
+        description="Build things.",
+    )
+
+    async with async_session_factory() as session:
+        repository = SqlAlchemyJobPostingRepository(session)
+        await repository.add(job_posting)
+
+        # A never-checked ACTIVE posting is due for a staleness check.
+        due = await repository.list_due_for_staleness_check(
+            as_of=datetime.now(UTC), recheck_after_days=3, batch_size=1000
+        )
+        assert any(p.id == job_posting.id for p in due)
+
+        active = await repository.list_active(limit=1000)
+        assert any(p.id == job_posting.id for p in active)
+
+        job_posting.apply_link_check(
+            LinkCheckOutcome.CONFIRMED_DEAD, checked_at=datetime.now(UTC)
+        )
+        await repository.update(job_posting)
+
+        fetched = await repository.get_by_id(job_posting.id)
+        assert fetched is not None
+        assert fetched.status == JobPostingStatus.DEAD_LINK
+        assert fetched.consecutive_link_failures == 1
+        assert fetched.last_checked_at is not None
+
+        # No longer ACTIVE, so excluded from both the sweep and the active set.
+        due_after = await repository.list_due_for_staleness_check(
+            as_of=datetime.now(UTC), recheck_after_days=3, batch_size=1000
+        )
+        assert all(p.id != job_posting.id for p in due_after)
+
+        active_after = await repository.list_active(limit=1000)
+        assert all(p.id != job_posting.id for p in active_after)

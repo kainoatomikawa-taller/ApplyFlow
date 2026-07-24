@@ -132,6 +132,27 @@ class Settings(BaseSettings):
     ats_board_retry_base_delay_seconds: float = 1.0
     ats_board_retry_max_delay_seconds: float = 20.0
 
+    # Stale-posting / dead-apply-link detection
+    # (src/application/use_cases/detect_stale_job_postings.py,
+    # src/infrastructure/link_checking/http_apply_url_checker.py). Runs on
+    # a schedule via Celery beat (see celery_app.py) to keep job_postings'
+    # active set free of postings too old to still be open, or whose
+    # apply link no longer resolves.
+    apply_url_check_timeout_seconds: float = 10.0
+    # A posting is presumed expired this many days after posted_at (or
+    # created_at, absent one), absent any other signal.
+    stale_posting_after_days: int = 45
+    # How many days may pass before an ACTIVE posting is due another
+    # reachability check.
+    stale_posting_recheck_after_days: int = 3
+    # Consecutive ambiguous (timeout/5xx/connection-error) reachability
+    # failures required before flagging DEAD_LINK. A single unambiguous
+    # 404/410 always flags immediately, bypassing this threshold.
+    stale_posting_dead_link_after_failures: int = 3
+    # How many due postings one sweep pass processes — bounds a single
+    # scheduled run's work (and outbound HTTP calls) on an unbounded table.
+    stale_posting_sweep_batch_size: int = 200
+
     @model_validator(mode="after")
     def _require_secrets_outside_development(self) -> Settings:
         if self.environment == "development":

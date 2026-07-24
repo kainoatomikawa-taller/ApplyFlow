@@ -62,6 +62,11 @@ class JobPostingModel(Base):
     derived, indexed copies of `company`/`title`/`location` — the dedup
     key fields matching/dedup logic queries against instead of
     re-normalizing on every read.
+
+    `status`/`last_checked_at`/`consecutive_link_failures` back the
+    stale-posting / dead-apply-link sweep (see `DetectStaleJobPostings`) —
+    `status` is indexed alone (fast "active job set" reads) and together
+    with `last_checked_at` (the sweep's "what's due for a check" query).
     """
 
     __tablename__ = "job_postings"
@@ -81,6 +86,11 @@ class JobPostingModel(Base):
     normalized_location: Mapped[str | None] = mapped_column(
         String(255), nullable=True, index=True
     )
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    consecutive_link_failures: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 

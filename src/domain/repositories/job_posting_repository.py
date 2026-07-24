@@ -8,6 +8,7 @@ on this abstraction, never on a specific database.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from datetime import datetime
 
 from src.domain.entities.job_posting import JobPosting
 
@@ -18,6 +19,13 @@ class JobPostingRepository(ABC):
     @abstractmethod
     async def add(self, job_posting: JobPosting) -> None:
         """Persist a newly normalized job posting."""
+
+    @abstractmethod
+    async def update(self, job_posting: JobPosting) -> None:
+        """Persist changes to an already-persisted posting — status,
+        `last_checked_at`, `consecutive_link_failures` — made via its
+        behavior methods (see `JobPosting.mark_stale_if_expired` /
+        `apply_link_check`)."""
 
     @abstractmethod
     async def get_by_id(self, job_posting_id: str) -> JobPosting | None:
@@ -37,3 +45,20 @@ class JobPostingRepository(ABC):
         aggregator fetch (pagination retries, a scheduled re-poll) never
         creates duplicate rows for a posting already ingested from the same
         source."""
+
+    @abstractmethod
+    async def list_due_for_staleness_check(
+        self, *, as_of: datetime, recheck_after_days: int, batch_size: int
+    ) -> list[JobPosting]:
+        """Return up to `batch_size` ACTIVE postings whose `apply_url` is
+        due a reachability check — never checked, or last checked more
+        than `recheck_after_days` before `as_of` — never-checked and
+        oldest-checked first, so a bounded periodic sweep eventually
+        covers every posting without re-hitting the same ones every run."""
+
+    @abstractmethod
+    async def list_active(self, *, limit: int = 100) -> list[JobPosting]:
+        """Return up to `limit` ACTIVE postings, most recent first — the
+        active job set downstream matching/browsing should read from
+        instead of the raw table, so STALE/DEAD_LINK postings are never
+        surfaced to a candidate."""

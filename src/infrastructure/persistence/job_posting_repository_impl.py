@@ -5,11 +5,14 @@ Maps DB rows <-> domain entities. Never leaks ORM types outward.
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from datetime import datetime, timedelta
+
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.domain.entities.job_posting import JobPosting
 from src.domain.repositories.job_posting_repository import JobPostingRepository
+from src.domain.value_objects.job_posting_status import JobPostingStatus
 from src.domain.value_objects.salary_range import SalaryPeriod, SalaryRange
 from src.infrastructure.persistence.models import JobPostingModel
 
@@ -20,6 +23,10 @@ class SqlAlchemyJobPostingRepository(JobPostingRepository):
 
     async def add(self, job_posting: JobPosting) -> None:
         self._session.add(self._to_model(job_posting))
+        await self._session.commit()
+
+    async def update(self, job_posting: JobPosting) -> None:
+        await self._session.merge(self._to_model(job_posting))
         await self._session.commit()
 
     async def get_by_id(self, job_posting_id: str) -> JobPosting | None:
@@ -47,6 +54,33 @@ class SqlAlchemyJobPostingRepository(JobPostingRepository):
         model = result.scalars().first()
         return self._to_entity(model) if model else None
 
+    async def list_due_for_staleness_check(
+        self, *, as_of: datetime, recheck_after_days: int, batch_size: int
+    ) -> list[JobPosting]:
+        cutoff = as_of - timedelta(days=recheck_after_days)
+        result = await self._session.execute(
+            select(JobPostingModel)
+            .where(
+                JobPostingModel.status == JobPostingStatus.ACTIVE.value,
+                or_(
+                    JobPostingModel.last_checked_at.is_(None),
+                    JobPostingModel.last_checked_at <= cutoff,
+                ),
+            )
+            .order_by(JobPostingModel.last_checked_at.asc().nulls_first())
+            .limit(batch_size)
+        )
+        return [self._to_entity(m) for m in result.scalars().all()]
+
+    async def list_active(self, *, limit: int = 100) -> list[JobPosting]:
+        result = await self._session.execute(
+            select(JobPostingModel)
+            .where(JobPostingModel.status == JobPostingStatus.ACTIVE.value)
+            .order_by(JobPostingModel.created_at.desc())
+            .limit(limit)
+        )
+        return [self._to_entity(m) for m in result.scalars().all()]
+
     # ---- mapping helpers -----------------------------------------------------
 
     @staticmethod
@@ -65,6 +99,9 @@ class SqlAlchemyJobPostingRepository(JobPostingRepository):
             normalized_company=entity.normalized_company,
             normalized_title=entity.normalized_title,
             normalized_location=entity.normalized_location,
+            status=entity.status.value,
+            last_checked_at=entity.last_checked_at,
+            consecutive_link_failures=entity.consecutive_link_failures,
             created_at=entity.created_at,
         )
 
@@ -82,6 +119,9 @@ class SqlAlchemyJobPostingRepository(JobPostingRepository):
             salary=SqlAlchemyJobPostingRepository._salary_from_dict(model.salary),
             posted_at=model.posted_at,
             created_at=model.created_at,
+            status=JobPostingStatus(model.status),
+            last_checked_at=model.last_checked_at,
+            consecutive_link_failures=model.consecutive_link_failures,
         )
         return entity
 

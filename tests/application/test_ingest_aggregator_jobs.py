@@ -9,7 +9,7 @@ dedup-by-normalized-key behavior.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -99,6 +99,12 @@ class FakeJobPostingRepository(JobPostingRepository):
     async def add(self, job_posting: JobPosting) -> None:
         self.saved.append(job_posting)
 
+    async def update(self, job_posting: JobPosting) -> None:
+        for index, existing in enumerate(self.saved):
+            if existing.id == job_posting.id:
+                self.saved[index] = job_posting
+                return
+
     async def get_by_id(self, job_posting_id: str) -> JobPosting | None:
         return next((j for j in self.saved if j.id == job_posting_id), None)
 
@@ -121,6 +127,21 @@ class FakeJobPostingRepository(JobPostingRepository):
             ),
             None,
         )
+
+    async def list_due_for_staleness_check(
+        self, *, as_of: datetime, recheck_after_days: int, batch_size: int
+    ) -> list[JobPosting]:
+        cutoff = as_of - timedelta(days=recheck_after_days)
+        due = [
+            j
+            for j in self.saved
+            if j.is_active
+            and (j.last_checked_at is None or j.last_checked_at <= cutoff)
+        ]
+        return due[:batch_size]
+
+    async def list_active(self, *, limit: int = 100) -> list[JobPosting]:
+        return [j for j in self.saved if j.is_active][:limit]
 
 
 @pytest.mark.asyncio
