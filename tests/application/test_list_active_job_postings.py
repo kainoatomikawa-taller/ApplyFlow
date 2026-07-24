@@ -51,6 +51,9 @@ class FakeJobPostingRepository(JobPostingRepository):
     async def list_active(self, *, limit: int = 100) -> list[JobPosting]:
         return [p for p in self.postings if p.is_active][:limit]
 
+    async def list_missing_requirements(self, *, limit: int) -> list[JobPosting]:
+        return [p for p in self.postings if p.requirements is None][:limit]
+
 
 @pytest.mark.asyncio
 async def test_excludes_stale_and_dead_link_postings():

@@ -7,6 +7,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 
+from src.application.dtos.job_requirements_dtos import JobRequirementsOutput
+
 
 @dataclass(frozen=True)
 class JobPostingOutput:
@@ -20,3 +22,4 @@ class JobPostingOutput:
     status: str
     posted_at: date | None
     created_at: datetime
+    requirements: JobRequirementsOutput | None = None

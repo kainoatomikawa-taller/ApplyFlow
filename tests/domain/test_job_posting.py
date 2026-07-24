@@ -4,7 +4,9 @@ import pytest
 
 from src.domain.entities.job_posting import JobPosting
 from src.domain.exceptions import InvalidValueError
+from src.domain.value_objects.degree_level import DegreeLevel
 from src.domain.value_objects.job_posting_status import JobPostingStatus
+from src.domain.value_objects.job_requirements import JobRequirements
 from src.domain.value_objects.link_check_outcome import LinkCheckOutcome
 from src.domain.value_objects.salary_range import SalaryPeriod, SalaryRange
 
@@ -97,6 +99,33 @@ def test_new_job_posting_is_active_with_no_checks_yet():
     assert job_posting.is_active is True
     assert job_posting.last_checked_at is None
     assert job_posting.consecutive_link_failures == 0
+
+
+# ---- requirements -------------------------------------------------------------
+
+
+def test_new_job_posting_has_no_requirements_yet():
+    job_posting = _job_posting()
+    assert job_posting.requirements is None
+
+
+def test_set_requirements_attaches_them_to_the_posting():
+    job_posting = _job_posting()
+    requirements = JobRequirements(degree_level=DegreeLevel.BACHELORS)
+
+    job_posting.set_requirements(requirements)
+
+    assert job_posting.requirements is requirements
+
+
+def test_set_requirements_replaces_a_prior_extraction_outright():
+    job_posting = _job_posting()
+    job_posting.set_requirements(JobRequirements(degree_level=DegreeLevel.BACHELORS))
+
+    newer = JobRequirements(degree_level=DegreeLevel.MASTERS)
+    job_posting.set_requirements(newer)
+
+    assert job_posting.requirements is newer
 
 
 def test_negative_consecutive_link_failures_rejected():

@@ -92,6 +92,12 @@ class JobPostingModel(Base):
     )
     consecutive_link_failures: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # Epic 03's structured requirement extraction result — NULL until that
+    # pass has run for this posting (see `list_missing_requirements`, the
+    # query the extraction sweep uses to find postings still needing it).
+    requirements: Mapped[dict[str, object] | None] = mapped_column(
+        JSON, nullable=True
+    )
 
 
 class ResolvedCompanyBoardModel(Base):

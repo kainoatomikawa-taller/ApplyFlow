@@ -24,6 +24,7 @@ from typing import ClassVar
 from src.domain.exceptions import InvalidValueError
 from src.domain.services.text_normalization import normalize_text
 from src.domain.value_objects.job_posting_status import JobPostingStatus
+from src.domain.value_objects.job_requirements import JobRequirements
 from src.domain.value_objects.link_check_outcome import LinkCheckOutcome
 from src.domain.value_objects.salary_range import SalaryRange
 
@@ -61,6 +62,11 @@ class JobPosting:
     status: JobPostingStatus = JobPostingStatus.ACTIVE
     last_checked_at: datetime | None = None
     consecutive_link_failures: int = 0
+
+    #: Structured requirement attributes extracted from `description` by
+    #: Epic 03's LLM pass (see `JobRequirementsExtractorPort`) — `None`
+    #: until that extraction has run for this posting.
+    requirements: JobRequirements | None = None
 
     normalized_company: str = field(init=False, default="")
     normalized_title: str = field(init=False, default="")
@@ -157,3 +163,9 @@ class JobPosting:
             or self.consecutive_link_failures >= threshold
         ):
             self.status = JobPostingStatus.DEAD_LINK
+
+    def set_requirements(self, requirements: JobRequirements) -> None:
+        """Attach this posting's Epic 03 extraction result, replacing any
+        previously set `requirements` outright — a re-extraction always
+        supersedes a stale prior pass rather than merging with it."""
+        self.requirements = requirements

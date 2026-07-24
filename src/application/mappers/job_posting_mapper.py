@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from src.application.dtos.job_posting_dtos import JobPostingOutput
+from src.application.mappers.job_requirements_mapper import JobRequirementsMapper
 from src.domain.entities.job_posting import JobPosting
 
 
@@ -22,4 +23,9 @@ class JobPostingMapper:
             status=job_posting.status.value,
             posted_at=job_posting.posted_at,
             created_at=job_posting.created_at,
+            requirements=(
+                JobRequirementsMapper.to_output(job_posting.requirements)
+                if job_posting.requirements is not None
+                else None
+            ),
         )

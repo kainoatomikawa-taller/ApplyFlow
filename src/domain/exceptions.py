@@ -55,6 +55,14 @@ class ResumeNotFoundError(DomainError):
         self.resume_id = resume_id
 
 
+class JobPostingNotFoundError(DomainError):
+    """Raised when a job posting cannot be located."""
+
+    def __init__(self, job_posting_id: str) -> None:
+        super().__init__(f"Job posting '{job_posting_id}' was not found.")
+        self.job_posting_id = job_posting_id
+
+
 class AnswerMemoryNotFoundError(DomainError):
     """Raised when a remembered answer cannot be located."""
 

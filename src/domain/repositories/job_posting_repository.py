@@ -62,3 +62,11 @@ class JobPostingRepository(ABC):
         active job set downstream matching/browsing should read from
         instead of the raw table, so STALE/DEAD_LINK postings are never
         surfaced to a candidate."""
+
+    @abstractmethod
+    async def list_missing_requirements(self, *, limit: int) -> list[JobPosting]:
+        """Return up to `limit` postings that have not yet had Epic 03
+        requirement extraction run (`requirements is None`), oldest first —
+        the queue a periodic extraction sweep works through so newly
+        ingested postings eventually get parsed without re-scanning ones
+        already done."""

@@ -153,6 +153,15 @@ class Settings(BaseSettings):
     # scheduled run's work (and outbound HTTP calls) on an unbounded table.
     stale_posting_sweep_batch_size: int = 200
 
+    # Job requirements extraction (Epic 03 —
+    # src/application/use_cases/extract_job_requirements.py,
+    # src/infrastructure/llm/llm_job_requirements_extractor.py). Runs on a
+    # schedule via Celery beat (see celery_app.py) to keep newly ingested
+    # postings' `requirements` populated. Bounds one scheduled run's work
+    # (and LLM calls) on an unbounded table, same rationale as the
+    # stale-posting sweep above.
+    job_requirements_sweep_batch_size: int = 200
+
     @model_validator(mode="after")
     def _require_secrets_outside_development(self) -> Settings:
         if self.environment == "development":

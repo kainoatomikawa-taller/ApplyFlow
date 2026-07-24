@@ -17,6 +17,7 @@ celery_app = Celery(
         "src.infrastructure.tasks.analysis_tasks",
         "src.infrastructure.tasks.ingestion_tasks",
         "src.infrastructure.tasks.staleness_tasks",
+        "src.infrastructure.tasks.requirements_tasks",
     ],
 )
 
@@ -35,6 +36,14 @@ celery_app.conf.update(
         "detect-stale-job-postings": {
             "task": "applyflow.detect_stale_job_postings",
             "schedule": crontab(minute=0, hour="*/6"),
+        },
+        # Keeps newly ingested postings' `requirements` populated (see
+        # src/infrastructure/tasks/requirements_tasks.py) — runs more
+        # frequently than the staleness sweep since fresh postings should
+        # get classifiable/scoreable soon after ingestion, not hours later.
+        "extract-job-requirements": {
+            "task": "applyflow.extract_job_requirements",
+            "schedule": crontab(minute="*/10"),
         },
     },
 )

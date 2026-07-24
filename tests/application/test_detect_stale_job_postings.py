@@ -75,6 +75,9 @@ class FakeJobPostingRepository(JobPostingRepository):
     async def list_active(self, *, limit: int = 100) -> list[JobPosting]:
         return [p for p in self.postings if p.is_active][:limit]
 
+    async def list_missing_requirements(self, *, limit: int) -> list[JobPosting]:
+        return [p for p in self.postings if p.requirements is None][:limit]
+
 
 class FakeUrlChecker(ApplyUrlCheckerPort):
     def __init__(

@@ -16,7 +16,9 @@ from datetime import UTC, date, datetime
 import pytest
 
 from src.domain.entities.job_posting import JobPosting
+from src.domain.value_objects.degree_level import DegreeLevel
 from src.domain.value_objects.job_posting_status import JobPostingStatus
+from src.domain.value_objects.job_requirements import JobRequirements
 from src.domain.value_objects.link_check_outcome import LinkCheckOutcome
 from src.domain.value_objects.salary_range import SalaryPeriod, SalaryRange
 from src.infrastructure.persistence.database import (
@@ -154,3 +156,49 @@ async def test_status_lifecycle_round_trips_against_a_real_database(
 
         active_after = await repository.list_active(limit=1000)
         assert all(p.id != job_posting.id for p in active_after)
+
+
+@pytest.mark.asyncio
+async def test_requirements_round_trip_against_a_real_database(
+    schema_ready: None,
+) -> None:
+    job_posting = JobPosting(
+        id=f"smoke-job-{uuid.uuid4()}",
+        source="adzuna",
+        company="Smoke Test Co",
+        title="Backend Engineer",
+        apply_url="https://smoketestco.example.com/careers/2",
+        description="Build things.",
+    )
+
+    async with async_session_factory() as session:
+        repository = SqlAlchemyJobPostingRepository(session)
+        await repository.add(job_posting)
+
+        missing = await repository.list_missing_requirements(limit=1000)
+        assert any(p.id == job_posting.id for p in missing)
+
+        job_posting.set_requirements(
+            JobRequirements(
+                degree_level=DegreeLevel.BACHELORS,
+                degree_required=True,
+                min_years_experience=3,
+                max_years_experience=6,
+                required_skills=("Python", "SQL"),
+                locations=("United States",),
+            )
+        )
+        await repository.update(job_posting)
+
+        fetched = await repository.get_by_id(job_posting.id)
+        assert fetched is not None
+        assert fetched.requirements is not None
+        assert fetched.requirements.degree_level == DegreeLevel.BACHELORS
+        assert fetched.requirements.degree_required is True
+        assert fetched.requirements.min_years_experience == 3
+        assert fetched.requirements.max_years_experience == 6
+        assert fetched.requirements.required_skills == ("Python", "SQL")
+        assert fetched.requirements.locations == ("United States",)
+
+        missing_after = await repository.list_missing_requirements(limit=1000)
+        assert all(p.id != job_posting.id for p in missing_after)

@@ -143,6 +143,9 @@ class FakeJobPostingRepository(JobPostingRepository):
     async def list_active(self, *, limit: int = 100) -> list[JobPosting]:
         return [j for j in self.saved if j.is_active][:limit]
 
+    async def list_missing_requirements(self, *, limit: int) -> list[JobPosting]:
+        return [j for j in self.saved if j.requirements is None][:limit]
+
 
 @pytest.mark.asyncio
 async def test_ingests_a_single_page_and_persists_normalized_records():
