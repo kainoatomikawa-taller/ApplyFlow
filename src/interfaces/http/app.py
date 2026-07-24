@@ -16,6 +16,7 @@ from src.infrastructure.persistence.database import dispose_engine
 from src.interfaces.http.controllers import (
     application_controller,
     health_controller,
+    job_match_feedback_controller,
     job_posting_controller,
     resume_controller,
 )
@@ -49,6 +50,7 @@ def create_app() -> FastAPI:
     app.include_router(application_controller.router)
     app.include_router(resume_controller.router)
     app.include_router(job_posting_controller.router)
+    app.include_router(job_match_feedback_controller.router)
     return app
 
 

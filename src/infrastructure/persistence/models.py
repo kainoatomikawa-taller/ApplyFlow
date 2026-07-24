@@ -401,3 +401,22 @@ class EeoSelfIdentificationModel(Base):
     profile: Mapped[UserProfileModel] = relationship(
         back_populates="eeo_self_identification"
     )
+
+
+class JobMatchFeedbackModel(Base):
+    """A candidate's thumbs-up/down reaction to one ranked job match,
+    tagged with the score they saw. Append-only — see
+    `JobMatchFeedback`'s docstring for why reactions are never updated,
+    only inserted.
+    """
+
+    __tablename__ = "job_match_feedback"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    job_posting_id: Mapped[str] = mapped_column(
+        ForeignKey("job_postings.id", ondelete="CASCADE"), index=True
+    )
+    rating: Mapped[str] = mapped_column(String(16))
+    score_at_feedback: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)

@@ -20,12 +20,18 @@ from src.application.ports.auth_verifier_port import AuthVerifierPort
 from src.application.use_cases.analyze_job_application import (
     AnalyzeJobApplication,
 )
+from src.application.use_cases.analyze_scoring_feedback import (
+    AnalyzeScoringFeedback,
+)
 from src.application.use_cases.create_job_application import (
     CreateJobApplication,
 )
 from src.application.use_cases.get_resume import GetResume
 from src.application.use_cases.list_candidate_applications import (
     ListCandidateApplications,
+)
+from src.application.use_cases.list_job_match_feedback import (
+    ListJobMatchFeedback,
 )
 from src.application.use_cases.list_resumes import ListResumes
 from src.application.use_cases.parse_resume import ParseResume
@@ -34,6 +40,9 @@ from src.application.use_cases.rank_matched_job_postings import (
 )
 from src.application.use_cases.submit_job_application import (
     SubmitJobApplication,
+)
+from src.application.use_cases.submit_job_match_feedback import (
+    SubmitJobMatchFeedback,
 )
 from src.application.use_cases.upload_resume import UploadResume
 from src.domain.services.application_ranking_service import (
@@ -52,6 +61,9 @@ from src.infrastructure.llm.llm_resume_parser import LlmResumeParser
 from src.infrastructure.persistence.database import get_session
 from src.infrastructure.persistence.job_application_repository_impl import (
     SqlAlchemyJobApplicationRepository,
+)
+from src.infrastructure.persistence.job_match_feedback_repository_impl import (
+    SqlAlchemyJobMatchFeedbackRepository,
 )
 from src.infrastructure.persistence.job_posting_repository_impl import (
     SqlAlchemyJobPostingRepository,
@@ -176,6 +188,43 @@ def get_rank_matched_jobs_use_case(
             AnthropicLlmClient(get_settings())
         ),
     )
+
+
+def _job_match_feedback_repository(
+    session: AsyncSession = Depends(get_session),
+) -> SqlAlchemyJobMatchFeedbackRepository:
+    return SqlAlchemyJobMatchFeedbackRepository(session)
+
+
+def get_submit_job_match_feedback_use_case(
+    feedback_repository: SqlAlchemyJobMatchFeedbackRepository = Depends(
+        _job_match_feedback_repository
+    ),
+    job_posting_repository: SqlAlchemyJobPostingRepository = Depends(
+        _job_posting_repository
+    ),
+) -> SubmitJobMatchFeedback:
+    return SubmitJobMatchFeedback(
+        feedback_repository=feedback_repository,
+        job_posting_repository=job_posting_repository,
+        id_generator=UuidIdGenerator(),
+    )
+
+
+def get_list_job_match_feedback_use_case(
+    repository: SqlAlchemyJobMatchFeedbackRepository = Depends(
+        _job_match_feedback_repository
+    ),
+) -> ListJobMatchFeedback:
+    return ListJobMatchFeedback(repository=repository)
+
+
+def get_analyze_scoring_feedback_use_case(
+    repository: SqlAlchemyJobMatchFeedbackRepository = Depends(
+        _job_match_feedback_repository
+    ),
+) -> AnalyzeScoringFeedback:
+    return AnalyzeScoringFeedback(repository=repository)
 
 
 def _auth_verifier() -> AuthVerifierPort:

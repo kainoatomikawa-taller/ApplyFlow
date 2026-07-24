@@ -7,6 +7,7 @@ happens here; business rules are enforced in the domain layer.
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -127,3 +128,29 @@ class RankedJobResponse(BaseModel):
     score: int
     rationale: str
     gaps: list[str]
+
+
+class SubmitJobMatchFeedbackRequest(BaseModel):
+    rating: Literal["thumbs_up", "thumbs_down"]
+    score_at_feedback: int = Field(ge=0, le=100)
+
+
+class JobMatchFeedbackResponse(BaseModel):
+    id: str
+    user_id: str
+    job_posting_id: str
+    rating: str
+    score_at_feedback: int
+    created_at: datetime
+
+
+class ScoreBucketAgreementResponse(BaseModel):
+    range_start: int
+    range_end: int
+    thumbs_up: int
+    thumbs_down: int
+    agreement_rate: float | None
+
+
+class ScoringFeedbackSummaryResponse(BaseModel):
+    buckets: list[ScoreBucketAgreementResponse]
