@@ -54,6 +54,36 @@ class JobApplicationModel(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class JobPostingModel(Base):
+    """A single job listing, normalized from an aggregator source
+    (LinkedIn, Indeed, Greenhouse, ...) into ApplyFlow's internal shape.
+
+    `normalized_company`/`normalized_title`/`normalized_location` are
+    derived, indexed copies of `company`/`title`/`location` — the dedup
+    key fields matching/dedup logic queries against instead of
+    re-normalizing on every read.
+    """
+
+    __tablename__ = "job_postings"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    source: Mapped[str] = mapped_column(String(64), index=True)
+    company: Mapped[str] = mapped_column(String(255))
+    title: Mapped[str] = mapped_column(String(255))
+    location: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_remote: Mapped[bool] = mapped_column(Boolean, default=False)
+    description: Mapped[str] = mapped_column(Text)
+    apply_url: Mapped[str] = mapped_column(String(2048))
+    salary: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
+    posted_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+    normalized_company: Mapped[str] = mapped_column(String(255), index=True)
+    normalized_title: Mapped[str] = mapped_column(String(255), index=True)
+    normalized_location: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class UserProfileModel(Base):
     __tablename__ = "user_profiles"
 
