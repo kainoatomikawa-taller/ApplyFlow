@@ -202,3 +202,44 @@ async def test_requirements_round_trip_against_a_real_database(
 
         missing_after = await repository.list_missing_requirements(limit=1000)
         assert all(p.id != job_posting.id for p in missing_after)
+
+
+@pytest.mark.asyncio
+async def test_requirements_with_empty_list_fields_round_trip_against_a_real_database(
+    schema_ready: None,
+) -> None:
+    """Regression test: `_requirements_from_dict` used to read a
+    genuinely-empty stored list (`locations`/`preferred_skills`/
+    `preferences` all unset here) back as `()` via `data.get(key) or ()`,
+    then immediately fail its own `isinstance(x, list)` assertion — since
+    an empty list is falsy, `or` silently swapped it for a tuple. Most
+    real postings state only some of these four list fields, so this was
+    a live bug on ordinary reads, not just a theoretical one.
+    """
+    job_posting = JobPosting(
+        id=f"smoke-job-{uuid.uuid4()}",
+        source="adzuna",
+        company="Smoke Test Co",
+        title="Backend Engineer",
+        apply_url="https://smoketestco.example.com/careers/3",
+        description="Build things.",
+    )
+    job_posting.set_requirements(
+        JobRequirements(degree_level=DegreeLevel.BACHELORS, degree_required=False)
+    )
+
+    async with async_session_factory() as session:
+        repository = SqlAlchemyJobPostingRepository(session)
+        await repository.add(job_posting)
+
+        fetched = await repository.get_by_id(job_posting.id)
+        assert fetched is not None
+        assert fetched.requirements is not None
+        assert fetched.requirements.degree_level == DegreeLevel.BACHELORS
+        assert fetched.requirements.locations == ()
+        assert fetched.requirements.required_skills == ()
+        assert fetched.requirements.preferred_skills == ()
+        assert fetched.requirements.preferences == ()
+
+        active = await repository.list_active(limit=1000)
+        assert any(p.id == job_posting.id for p in active)

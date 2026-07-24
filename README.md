@@ -375,6 +375,49 @@ smoke tests.
 
 ---
 
+## Job matching pipeline (Epic 03)
+
+Turns a candidate's profile and the active job set into a ranked,
+scored, explained list — the primary output the rest of the product
+consumes.
+
+1. **Requirement extraction** (`ExtractJobRequirements`) parses a
+   posting's free-text description into structured `JobRequirements`
+   (degree, clearance, remote/location, work authorization, experience,
+   skills) via the cheap LLM tier.
+2. **Hard/soft classification** (`RequirementClassifier`) splits those
+   requirements into genuine hard disqualifiers (a required degree/
+   clearance, an on-site-only location, a citizenship/PR requirement)
+   and soft preferences (everything else — experience, skills, and any
+   wish-list item) — job descriptions are wish-lists, and treating every
+   stated attribute as a hard cutoff over-filters reachable candidates.
+3. **Hard-disqualifier filtering** (`HardDisqualifierFilter`,
+   `ListEligibleJobPostings`) excludes only postings whose hard
+   requirements the candidate's profile affirmatively fails — unstated
+   profile data is never treated as a failure.
+4. **Fit scoring, rationale, and gap list** (`SoftPreferenceEvaluator`,
+   `GenerateJobFitRationale`) computes a 0-100 fit score from the share
+   of soft preferences met, and an LLM (cheap tier) writes a short,
+   honest "why this fits" rationale grounded only in the requirements the
+   candidate actually meets.
+5. **Ranking** (`RankMatchedJobPostings`, `GET /api/job-postings/matches`)
+   assembles the final list: filtered, scored, ordered highest-fit-first,
+   each entry carrying its score, rationale, and gap list.
+6. **Feedback loop** (`SubmitJobMatchFeedback`/`AnalyzeScoringFeedback`,
+   `POST /api/job-postings/{id}/feedback`,
+   `GET /api/job-postings/feedback(/analysis)`) records a candidate's
+   thumbs-up/down reaction alongside the job and score it was reacting
+   to, and buckets that feedback by score band into an agreement-rate
+   summary — the signal a future scoring-tuning pass would read from
+   (see `ScoringFeedbackAnalyzer`'s docstring for the full contract).
+
+See [`docs/epic-03-acceptance-check.md`](docs/epic-03-acceptance-check.md)
+for Epic 03's Definition of Done and the end-to-end acceptance test that
+proves it (`tests/acceptance/test_epic03_matching_pipeline.py`), including
+the "PhD role vs sophomore" over/under-filtering case.
+
+---
+
 ## Getting Started
 
 ### Option A — Docker (recommended)
@@ -466,6 +509,10 @@ All `/api/applications*` and `/api/resumes*` routes require
 | POST   | `/api/resumes`                      | Upload a resume (PDF/DOCX/text); stores it and returns extracted text | Yes |
 | GET    | `/api/resumes/{id}`                 | Fetch one resume's metadata + extracted text | Yes   |
 | GET    | `/api/resumes`                      | List the current user's uploaded resumes | Yes       |
+| GET    | `/api/job-postings/matches?limit=`  | Ranked, filtered, scored job matches for the current user | Yes |
+| POST   | `/api/job-postings/{id}/feedback`   | Submit thumbs-up/down feedback on a match | Yes      |
+| GET    | `/api/job-postings/feedback`        | List the current user's feedback history | Yes       |
+| GET    | `/api/job-postings/feedback/analysis` | Bucketed feedback agreement-rate summary (tuning signal) | Yes |
 
 ---
 

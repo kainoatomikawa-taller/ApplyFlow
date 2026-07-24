@@ -223,10 +223,15 @@ class SqlAlchemyJobPostingRepository(JobPostingRepository):
         clearance_required = data.get("clearance_required")
         min_years_experience = data.get("min_years_experience")
         max_years_experience = data.get("max_years_experience")
-        locations = data.get("locations") or ()
-        required_skills = data.get("required_skills") or ()
-        preferred_skills = data.get("preferred_skills") or ()
-        preferences = data.get("preferences") or ()
+        # `.get(key, [])` — not `data.get(key) or []` — since an empty
+        # list is a legitimate stored value (most postings state no
+        # locations/skills/preferences at all), not a missing one; `or`
+        # would silently swap it for a falsy fallback and fail the
+        # `isinstance` checks below.
+        locations = data.get("locations", [])
+        required_skills = data.get("required_skills", [])
+        preferred_skills = data.get("preferred_skills", [])
+        preferences = data.get("preferences", [])
 
         assert degree_required is None or isinstance(degree_required, bool)
         assert clearance_required is None or isinstance(clearance_required, bool)
