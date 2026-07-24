@@ -130,6 +130,11 @@ class RankedJobResponse(BaseModel):
     gaps: list[str]
 
 
+class JobRequirementGapsResponse(BaseModel):
+    job_posting_id: str
+    gaps: list[str]
+
+
 class SubmitJobMatchFeedbackRequest(BaseModel):
     rating: Literal["thumbs_up", "thumbs_down"]
     score_at_feedback: int = Field(ge=0, le=100)

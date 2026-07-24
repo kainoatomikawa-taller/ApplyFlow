@@ -14,10 +14,13 @@ from fastapi.testclient import TestClient
 from src.application.dtos.auth_dtos import AuthenticatedUserDTO
 from src.application.dtos.job_posting_dtos import JobPostingOutput
 from src.application.dtos.ranked_job_dtos import RankedJobOutput
-from src.domain.exceptions import ProfileNotFoundError
+from src.application.dtos.requirement_gap_dtos import JobRequirementGapsOutput
+from src.application.exceptions import ExternalServiceError
+from src.domain.exceptions import JobPostingNotFoundError, ProfileNotFoundError
 from src.interfaces.http.app import create_app
 from src.interfaces.http.dependencies import (
     get_current_user,
+    get_detect_job_requirement_gaps_use_case,
     get_rank_matched_jobs_use_case,
 )
 
@@ -54,6 +57,17 @@ class _FakeRankUseCase:
         return self._outputs
 
 
+class _FakeGapsUseCase:
+    def __init__(self, output=None, error=None) -> None:
+        self._output = output
+        self._error = error
+
+    async def execute(self, dto):
+        if self._error is not None:
+            raise self._error
+        return self._output
+
+
 def _client(app) -> TestClient:
     return TestClient(app)
 
@@ -67,8 +81,8 @@ def test_list_matches_without_authorization_header_is_rejected():
 def test_list_matches_happy_path_returns_ranked_list():
     app = create_app()
     app.dependency_overrides[get_current_user] = lambda: _USER
-    app.dependency_overrides[get_rank_matched_jobs_use_case] = (
-        lambda: _FakeRankUseCase(outputs=[_RANKED])
+    app.dependency_overrides[get_rank_matched_jobs_use_case] = lambda: _FakeRankUseCase(
+        outputs=[_RANKED]
     )
 
     response = _client(app).get("/api/job-postings/matches")
@@ -86,8 +100,8 @@ def test_list_matches_happy_path_returns_ranked_list():
 def test_list_matches_returns_empty_list_when_nothing_qualifies():
     app = create_app()
     app.dependency_overrides[get_current_user] = lambda: _USER
-    app.dependency_overrides[get_rank_matched_jobs_use_case] = (
-        lambda: _FakeRankUseCase(outputs=[])
+    app.dependency_overrides[get_rank_matched_jobs_use_case] = lambda: _FakeRankUseCase(
+        outputs=[]
     )
 
     response = _client(app).get("/api/job-postings/matches")
@@ -100,8 +114,8 @@ def test_list_matches_returns_empty_list_when_nothing_qualifies():
 def test_list_matches_returns_404_when_profile_does_not_exist():
     app = create_app()
     app.dependency_overrides[get_current_user] = lambda: _USER
-    app.dependency_overrides[get_rank_matched_jobs_use_case] = (
-        lambda: _FakeRankUseCase(error=ProfileNotFoundError("user-123"))
+    app.dependency_overrides[get_rank_matched_jobs_use_case] = lambda: _FakeRankUseCase(
+        error=ProfileNotFoundError("user-123")
     )
 
     response = _client(app).get("/api/job-postings/matches")
@@ -113,11 +127,72 @@ def test_list_matches_returns_404_when_profile_does_not_exist():
 def test_list_matches_respects_limit_query_param_bounds():
     app = create_app()
     app.dependency_overrides[get_current_user] = lambda: _USER
-    app.dependency_overrides[get_rank_matched_jobs_use_case] = (
-        lambda: _FakeRankUseCase(outputs=[])
+    app.dependency_overrides[get_rank_matched_jobs_use_case] = lambda: _FakeRankUseCase(
+        outputs=[]
     )
 
     response = _client(app).get("/api/job-postings/matches?limit=0")
 
     assert response.status_code == 422
+    app.dependency_overrides.clear()
+
+
+def test_get_gaps_without_authorization_header_is_rejected():
+    client = _client(create_app())
+    response = client.get("/api/job-postings/job-1/gaps")
+    assert response.status_code == 401
+
+
+def test_get_gaps_happy_path_returns_gap_list():
+    app = create_app()
+    app.dependency_overrides[get_current_user] = lambda: _USER
+    app.dependency_overrides[get_detect_job_requirement_gaps_use_case] = lambda: (
+        _FakeGapsUseCase(
+            output=JobRequirementGapsOutput(job_posting_id="job-1", gaps=["Kubernetes"])
+        )
+    )
+
+    response = _client(app).get("/api/job-postings/job-1/gaps")
+
+    assert response.status_code == 200
+    assert response.json() == {"job_posting_id": "job-1", "gaps": ["Kubernetes"]}
+    app.dependency_overrides.clear()
+
+
+def test_get_gaps_returns_404_when_job_posting_does_not_exist():
+    app = create_app()
+    app.dependency_overrides[get_current_user] = lambda: _USER
+    app.dependency_overrides[get_detect_job_requirement_gaps_use_case] = lambda: (
+        _FakeGapsUseCase(error=JobPostingNotFoundError("job-1"))
+    )
+
+    response = _client(app).get("/api/job-postings/job-1/gaps")
+
+    assert response.status_code == 404
+    app.dependency_overrides.clear()
+
+
+def test_get_gaps_returns_404_when_profile_does_not_exist():
+    app = create_app()
+    app.dependency_overrides[get_current_user] = lambda: _USER
+    app.dependency_overrides[get_detect_job_requirement_gaps_use_case] = lambda: (
+        _FakeGapsUseCase(error=ProfileNotFoundError("user-123"))
+    )
+
+    response = _client(app).get("/api/job-postings/job-1/gaps")
+
+    assert response.status_code == 404
+    app.dependency_overrides.clear()
+
+
+def test_get_gaps_returns_502_when_the_llm_call_fails():
+    app = create_app()
+    app.dependency_overrides[get_current_user] = lambda: _USER
+    app.dependency_overrides[get_detect_job_requirement_gaps_use_case] = lambda: (
+        _FakeGapsUseCase(error=ExternalServiceError("boom"))
+    )
+
+    response = _client(app).get("/api/job-postings/job-1/gaps")
+
+    assert response.status_code == 502
     app.dependency_overrides.clear()

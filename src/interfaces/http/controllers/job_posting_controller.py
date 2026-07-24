@@ -13,15 +13,21 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from src.application.dtos.auth_dtos import AuthenticatedUserDTO
 from src.application.dtos.ranked_job_dtos import RankMatchedJobsInput
+from src.application.dtos.requirement_gap_dtos import DetectJobRequirementGapsInput
+from src.application.exceptions import ExternalServiceError
+from src.application.use_cases.detect_job_requirement_gaps import (
+    DetectJobRequirementGaps,
+)
 from src.application.use_cases.rank_matched_job_postings import (
     RankMatchedJobPostings,
 )
-from src.domain.exceptions import ProfileNotFoundError
+from src.domain.exceptions import JobPostingNotFoundError, ProfileNotFoundError
 from src.interfaces.http.dependencies import (
     get_current_user,
+    get_detect_job_requirement_gaps_use_case,
     get_rank_matched_jobs_use_case,
 )
-from src.interfaces.http.schemas import RankedJobResponse
+from src.interfaces.http.schemas import JobRequirementGapsResponse, RankedJobResponse
 
 router = APIRouter(
     prefix="/api/job-postings",
@@ -38,10 +44,31 @@ async def list_matched_job_postings(
 ) -> list[RankedJobResponse]:
     try:
         outputs = await use_case.execute(
-            RankMatchedJobsInput(
-                user_id=user.subject, as_of=date.today(), limit=limit
-            )
+            RankMatchedJobsInput(user_id=user.subject, as_of=date.today(), limit=limit)
         )
     except ProfileNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     return [RankedJobResponse(**asdict(output)) for output in outputs]
+
+
+@router.get("/{job_posting_id}/gaps", response_model=JobRequirementGapsResponse)
+async def get_job_requirement_gaps(
+    job_posting_id: str,
+    user: AuthenticatedUserDTO = Depends(get_current_user),
+    use_case: DetectJobRequirementGaps = Depends(
+        get_detect_job_requirement_gaps_use_case
+    ),
+) -> JobRequirementGapsResponse:
+    try:
+        output = await use_case.execute(
+            DetectJobRequirementGapsInput(
+                job_posting_id=job_posting_id,
+                user_id=user.subject,
+                as_of=date.today(),
+            )
+        )
+    except (JobPostingNotFoundError, ProfileNotFoundError) as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except ExternalServiceError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    return JobRequirementGapsResponse(**asdict(output))

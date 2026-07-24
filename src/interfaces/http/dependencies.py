@@ -26,6 +26,9 @@ from src.application.use_cases.analyze_scoring_feedback import (
 from src.application.use_cases.create_job_application import (
     CreateJobApplication,
 )
+from src.application.use_cases.detect_job_requirement_gaps import (
+    DetectJobRequirementGaps,
+)
 from src.application.use_cases.get_resume import GetResume
 from src.application.use_cases.list_candidate_applications import (
     ListCandidateApplications,
@@ -57,7 +60,13 @@ from src.infrastructure.llm.langchain_resume_analyzer import (
 from src.infrastructure.llm.llm_job_fit_rationale_generator import (
     LlmJobFitRationaleGenerator,
 )
+from src.infrastructure.llm.llm_requirement_gap_detector import (
+    LlmRequirementGapDetector,
+)
 from src.infrastructure.llm.llm_resume_parser import LlmResumeParser
+from src.infrastructure.persistence.answer_memory_repository_impl import (
+    SqlAlchemyAnswerMemoryRepository,
+)
 from src.infrastructure.persistence.database import get_session
 from src.infrastructure.persistence.job_application_repository_impl import (
     SqlAlchemyJobApplicationRepository,
@@ -187,6 +196,29 @@ def get_rank_matched_jobs_use_case(
         rationale_generator=LlmJobFitRationaleGenerator(
             AnthropicLlmClient(get_settings())
         ),
+    )
+
+
+def _answer_memory_repository(
+    session: AsyncSession = Depends(get_session),
+) -> SqlAlchemyAnswerMemoryRepository:
+    return SqlAlchemyAnswerMemoryRepository(session)
+
+
+def get_detect_job_requirement_gaps_use_case(
+    job_posting_repository: SqlAlchemyJobPostingRepository = Depends(
+        _job_posting_repository
+    ),
+    profile_repository: SqlAlchemyProfileRepository = Depends(_profile_repository),
+    answer_memory_repository: SqlAlchemyAnswerMemoryRepository = Depends(
+        _answer_memory_repository
+    ),
+) -> DetectJobRequirementGaps:
+    return DetectJobRequirementGaps(
+        job_posting_repository=job_posting_repository,
+        profile_repository=profile_repository,
+        answer_memory_repository=answer_memory_repository,
+        detector=LlmRequirementGapDetector(AnthropicLlmClient(get_settings())),
     )
 
 
