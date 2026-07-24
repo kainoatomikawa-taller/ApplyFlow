@@ -22,3 +22,18 @@ class JobPostingRepository(ABC):
     @abstractmethod
     async def get_by_id(self, job_posting_id: str) -> JobPosting | None:
         """Return a job posting by id, or None if it does not exist."""
+
+    @abstractmethod
+    async def find_duplicate(
+        self,
+        *,
+        source: str,
+        normalized_company: str,
+        normalized_title: str,
+        normalized_location: str | None,
+    ) -> JobPosting | None:
+        """Return an already-persisted posting matching this dedup key, or
+        None. Ingestion use cases call this before `add` so re-running an
+        aggregator fetch (pagination retries, a scheduled re-poll) never
+        creates duplicate rows for a posting already ingested from the same
+        source."""

@@ -12,7 +12,10 @@ celery_app = Celery(
     "applyflow",
     broker=_settings.celery_broker_url,
     backend=_settings.celery_result_backend,
-    include=["src.infrastructure.tasks.analysis_tasks"],
+    include=[
+        "src.infrastructure.tasks.analysis_tasks",
+        "src.infrastructure.tasks.ingestion_tasks",
+    ],
 )
 
 celery_app.conf.update(

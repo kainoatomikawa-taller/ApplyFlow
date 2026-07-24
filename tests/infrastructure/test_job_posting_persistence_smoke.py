@@ -82,3 +82,26 @@ async def test_create_and_read_round_trip_against_a_real_database(
         assert fetched.normalized_company == "acme corp"
         assert fetched.normalized_title == "senior backend engineer"
         assert fetched.normalized_location == "remote - us"
+
+        # Matched by normalized dedup key, not by id — a repeat run of this
+        # very test (same hardcoded company/title/location) is itself a
+        # legitimate duplicate under that key, so this only asserts that
+        # *some* matching record comes back, not this run's specific row.
+        duplicate = await repository.find_duplicate(
+            source=job_posting.source,
+            normalized_company=job_posting.normalized_company,
+            normalized_title=job_posting.normalized_title,
+            normalized_location=job_posting.normalized_location,
+        )
+        assert duplicate is not None
+        assert duplicate.normalized_company == job_posting.normalized_company
+        assert duplicate.normalized_title == job_posting.normalized_title
+        assert duplicate.normalized_location == job_posting.normalized_location
+
+        no_match = await repository.find_duplicate(
+            source=job_posting.source,
+            normalized_company=job_posting.normalized_company,
+            normalized_title="a totally different title that has never been used",
+            normalized_location=job_posting.normalized_location,
+        )
+        assert no_match is None

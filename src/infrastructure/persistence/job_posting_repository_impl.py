@@ -5,6 +5,7 @@ Maps DB rows <-> domain entities. Never leaks ORM types outward.
 
 from __future__ import annotations
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.domain.entities.job_posting import JobPosting
@@ -23,6 +24,27 @@ class SqlAlchemyJobPostingRepository(JobPostingRepository):
 
     async def get_by_id(self, job_posting_id: str) -> JobPosting | None:
         model = await self._session.get(JobPostingModel, job_posting_id)
+        return self._to_entity(model) if model else None
+
+    async def find_duplicate(
+        self,
+        *,
+        source: str,
+        normalized_company: str,
+        normalized_title: str,
+        normalized_location: str | None,
+    ) -> JobPosting | None:
+        result = await self._session.execute(
+            select(JobPostingModel)
+            .where(
+                JobPostingModel.source == source,
+                JobPostingModel.normalized_company == normalized_company,
+                JobPostingModel.normalized_title == normalized_title,
+                JobPostingModel.normalized_location == normalized_location,
+            )
+            .limit(1)
+        )
+        model = result.scalars().first()
         return self._to_entity(model) if model else None
 
     # ---- mapping helpers -----------------------------------------------------

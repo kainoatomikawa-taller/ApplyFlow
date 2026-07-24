@@ -84,9 +84,24 @@ class Settings(BaseSettings):
     # this directory's contents and any path logged from it carry no PII.
     resume_storage_dir: str = "./var/resumes"
 
-    # Job aggregator integration (reserved for an upcoming adapter)
+    # Job aggregator integration — Adzuna (see
+    # src/infrastructure/job_aggregators/adzuna_client.py). Adzuna
+    # authenticates with a pair of credentials: `app_id` identifies the
+    # calling application (not secret — Adzuna's own docs show it in
+    # sample URLs) and `app_key` is the actual secret, reusing the generic
+    # `job_aggregator_api_key` name so other aggregators can slot into the
+    # same settings later.
+    job_aggregator_app_id: str = ""
     job_aggregator_api_key: SecretStr = SecretStr("")
-    job_aggregator_base_url: str = ""
+    job_aggregator_base_url: str = "https://api.adzuna.com/v1/api/jobs"
+    job_aggregator_country: str = "us"
+    job_aggregator_results_per_page: int = 50
+    # Retry/backoff for transient errors (rate limits, timeouts, 5xxs) —
+    # same shape as the Anthropic settings above. Total attempts =
+    # job_aggregator_max_retries + 1.
+    job_aggregator_max_retries: int = 3
+    job_aggregator_retry_base_delay_seconds: float = 1.0
+    job_aggregator_retry_max_delay_seconds: float = 20.0
 
     # Search API integration (reserved for an upcoming adapter)
     search_api_key: SecretStr = SecretStr("")
