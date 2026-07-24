@@ -84,19 +84,22 @@ class JobPostingModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
-class ResolvedListingModel(Base):
-    """A permanent cache entry: the canonical apply URL + description a
-    search API resolved for a company whose aggregator listing arrived
-    without one or both. `normalized_company` is unique — once a company
-    has a row here, `SearchApiListingResolver` never searches it again.
+class ResolvedCompanyBoardModel(Base):
+    """A permanent cache entry: which ATS platform + board token a
+    company's public job listings are hosted on, discovered once via the
+    search API. `normalized_company` is unique — once a company has a row
+    here, `AtsListingResolver` never searches for its board again. Does
+    NOT cache any job-specific apply URL/description — those are always
+    looked up fresh per listing against the (free, unauthenticated) board
+    referenced here.
     """
 
-    __tablename__ = "resolved_listings"
+    __tablename__ = "resolved_company_boards"
 
     normalized_company: Mapped[str] = mapped_column(String(255), primary_key=True)
     company: Mapped[str] = mapped_column(String(255))
-    apply_url: Mapped[str] = mapped_column(String(2048))
-    description: Mapped[str] = mapped_column(Text)
+    provider: Mapped[str] = mapped_column(String(32))
+    board_token: Mapped[str] = mapped_column(String(255))
     resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 

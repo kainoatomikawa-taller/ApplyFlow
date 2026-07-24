@@ -1,7 +1,7 @@
 """DailySearchQuota — tracks how many search-API queries have been made
-today against `Settings.search_api_daily_quota`, so `SearchApiListingResolver`
-can degrade gracefully (skip resolution rather than erroring) once the free
-tier's daily allowance is exhausted.
+today against `Settings.search_api_daily_quota`, so `AtsListingResolver`
+can degrade gracefully (skip board discovery rather than erroring) once
+the free tier's daily allowance is exhausted.
 
 Backed by Redis (`Settings.redis_url`) rather than an in-process counter so
 the limit holds across every worker process, and by a UTC-midnight-keyed

@@ -16,22 +16,27 @@ import redis.asyncio as redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.dtos.job_ingestion_dtos import IngestAggregatorJobsInput
+from src.application.ports.ats_board_client_port import AtsBoardClientPort
 from src.application.ports.listing_resolver_port import ListingResolverPort
 from src.application.use_cases.ingest_aggregator_jobs import IngestAggregatorJobs
+from src.domain.value_objects.ats_provider import AtsProvider
+from src.infrastructure.ats_boards.ashby_board_client import AshbyBoardClient
+from src.infrastructure.ats_boards.greenhouse_board_client import (
+    GreenhouseBoardClient,
+)
+from src.infrastructure.ats_boards.lever_board_client import LeverBoardClient
 from src.infrastructure.config import Settings, get_settings
 from src.infrastructure.job_aggregators.adzuna_client import AdzunaJobAggregatorClient
 from src.infrastructure.persistence.database import async_session_factory
 from src.infrastructure.persistence.job_posting_repository_impl import (
     SqlAlchemyJobPostingRepository,
 )
-from src.infrastructure.persistence.resolved_listing_repository_impl import (
-    SqlAlchemyResolvedListingRepository,
+from src.infrastructure.persistence.resolved_company_board_repository_impl import (
+    SqlAlchemyResolvedCompanyBoardRepository,
 )
+from src.infrastructure.search.ats_listing_resolver import AtsListingResolver
 from src.infrastructure.search.brave_search_client import BraveSearchClient
 from src.infrastructure.search.daily_search_quota import DailySearchQuota
-from src.infrastructure.search.search_api_listing_resolver import (
-    SearchApiListingResolver,
-)
 from src.infrastructure.services.uuid_id_generator import UuidIdGenerator
 from src.infrastructure.tasks.celery_app import celery_app
 
@@ -62,10 +67,17 @@ def _build_listing_resolver(
     if not settings.search_api_key.get_secret_value():
         return None
     redis_client = redis.from_url(settings.redis_url)
-    return SearchApiListingResolver(
-        cache=SqlAlchemyResolvedListingRepository(session),
+    board_clients: dict[AtsProvider, AtsBoardClientPort] = {
+        AtsProvider.GREENHOUSE: GreenhouseBoardClient(settings),
+        AtsProvider.LEVER: LeverBoardClient(settings),
+        AtsProvider.ASHBY: AshbyBoardClient(settings),
+    }
+    return AtsListingResolver(
+        board_cache=SqlAlchemyResolvedCompanyBoardRepository(session),
         quota=DailySearchQuota(redis_client, settings.search_api_daily_quota),
         search_client=BraveSearchClient(settings),
+        board_clients=board_clients,
+        result_count=settings.search_api_board_locate_result_count,
     )
 
 

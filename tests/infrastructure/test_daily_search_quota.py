@@ -1,5 +1,5 @@
 """Tests for DailySearchQuota — the Redis-backed daily counter behind
-SearchApiListingResolver's graceful degradation.
+AtsListingResolver's graceful degradation.
 
 No real Redis connection: a small in-memory fake stands in for
 `redis.asyncio.Redis`, since this class only calls `incr`/`expire`.

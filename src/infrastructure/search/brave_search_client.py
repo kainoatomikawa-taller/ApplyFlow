@@ -1,12 +1,15 @@
 """Brave Search implementation of the raw search-API call backing
-`SearchApiListingResolver`.
+`AtsListingResolver`.
 
 Authenticates with Brave's single `X-Subscription-Token` header, sourced
 from the Epic 00 config layer (`Settings.search_api_key`). This class only
 performs the one HTTP call and maps Brave's structured JSON response onto
-`BraveSearchResult` — it never scrapes the raw HTML of a result page, only
-reads the `url`/`description` fields Brave's Web Search API already
-returns as structured JSON.
+a list of `BraveSearchResult` — it never scrapes the raw HTML of a result
+page, only reads the `url`/`description` fields Brave's Web Search API
+already returns as structured JSON. Returning several ranked results
+(rather than just the top one) lets `AtsListingResolver` scan past a
+company's marketing homepage for the first result that is actually a
+recognized ATS board.
 
 Rate limits/retries: mirrors `AdzunaJobAggregatorClient`'s retry loop —
 this class owns retry/backoff policy (`search_api_max_retries` /
@@ -62,24 +65,27 @@ class BraveSearchClient:
         # source of truth for retry/backoff (see module docstring).
         self._client = http_client or httpx.AsyncClient(timeout=30.0)
 
-    async def search(self, query: str) -> BraveSearchResult | None:
-        """Return the top organic web result for `query`, or None if Brave
-        returned no results."""
+    async def search_many(self, query: str, count: int = 5) -> list[BraveSearchResult]:
+        """Return up to `count` organic web results for `query`, in ranking
+        order. An empty list means Brave returned no results — never an
+        error."""
         data = await self._get_with_retry(
-            self._base_url, {"q": query, "count": 1}
+            self._base_url, {"q": query, "count": count}
         )
 
         results = ((data.get("web") or {}).get("results")) or []
-        if not isinstance(results, list) or not results:
-            return None
+        if not isinstance(results, list):
+            return []
 
-        top = results[0]
-        url = _as_str(top.get("url")) if isinstance(top, dict) else None
-        description = _as_str(top.get("description")) if isinstance(top, dict) else None
-        if not url or not description:
-            return None
-
-        return BraveSearchResult(url=url, description=description)
+        mapped: list[BraveSearchResult] = []
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            url = _as_str(item.get("url"))
+            description = _as_str(item.get("description"))
+            if url and description:
+                mapped.append(BraveSearchResult(url=url, description=description))
+        return mapped
 
     async def _get_with_retry(
         self, url: str, params: dict[str, str | int]

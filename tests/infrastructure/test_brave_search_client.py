@@ -1,5 +1,5 @@
 """Tests for BraveSearchClient — the Brave implementation of the raw
-search-API call backing SearchApiListingResolver.
+search-API call backing AtsListingResolver.
 
 No network calls: `httpx.AsyncClient` is given a `MockTransport` that
 simulates Brave's response shape (including rate-limit/error responses),
@@ -57,7 +57,7 @@ def test_missing_api_key_fails_closed():
 
 
 @pytest.mark.asyncio
-async def test_search_sends_the_subscription_token_header_and_query():
+async def test_search_many_sends_the_subscription_token_header_and_query():
     captured: dict[str, Any] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -66,17 +66,31 @@ async def test_search_sends_the_subscription_token_header_and_query():
         return httpx.Response(200, json={"web": {"results": []}})
 
     client = _client_with_handler(handler)
-    await client.search("Acme Corp careers apply")
+    await client.search_many("Acme Corp careers apply")
 
     assert captured["headers"]["x-subscription-token"] == "test-search-key"
     assert captured["params"]["q"] == "Acme Corp careers apply"
+
+
+@pytest.mark.asyncio
+async def test_search_many_sends_the_requested_count():
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["params"] = dict(request.url.params)
+        return httpx.Response(200, json={"web": {"results": []}})
+
+    client = _client_with_handler(handler)
+    await client.search_many("acme careers", count=7)
+
+    assert captured["params"]["count"] == "7"
 
 
 # ---- schema mapping ------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_search_maps_the_top_result_url_and_description():
+async def test_search_many_maps_every_result_in_ranking_order():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -84,56 +98,74 @@ async def test_search_maps_the_top_result_url_and_description():
                 "web": {
                     "results": [
                         {
-                            "url": "https://acme.example.com/careers",
-                            "description": "Acme's official careers page.",
-                        }
+                            "url": "https://acme.example.com",
+                            "description": "Acme's homepage.",
+                        },
+                        {
+                            "url": "https://boards.greenhouse.io/acme",
+                            "description": "Acme's careers board.",
+                        },
                     ]
                 }
             },
         )
 
     client = _client_with_handler(handler)
-    result = await client.search("acme careers")
+    results = await client.search_many("acme careers")
 
-    assert result is not None
-    assert result.url == "https://acme.example.com/careers"
-    assert result.description == "Acme's official careers page."
+    assert [r.url for r in results] == [
+        "https://acme.example.com",
+        "https://boards.greenhouse.io/acme",
+    ]
+    assert results[1].description == "Acme's careers board."
 
 
 @pytest.mark.asyncio
-async def test_search_returns_none_when_brave_has_no_results():
+async def test_search_many_skips_results_missing_url_or_description():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "web": {
+                    "results": [
+                        {"url": "https://acme.example.com"},
+                        {"description": "no url here"},
+                        {
+                            "url": "https://boards.greenhouse.io/acme",
+                            "description": "Acme's careers board.",
+                        },
+                    ]
+                }
+            },
+        )
+
+    client = _client_with_handler(handler)
+    results = await client.search_many("acme careers")
+
+    assert len(results) == 1
+    assert results[0].url == "https://boards.greenhouse.io/acme"
+
+
+@pytest.mark.asyncio
+async def test_search_many_returns_empty_list_when_brave_has_no_results():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"web": {"results": []}})
 
     client = _client_with_handler(handler)
-    result = await client.search("a company that does not exist")
+    results = await client.search_many("a company that does not exist")
 
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_search_returns_none_when_top_result_is_missing_a_description():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={"web": {"results": [{"url": "https://acme.example.com"}]}},
-        )
-
-    client = _client_with_handler(handler)
-    result = await client.search("acme")
-
-    assert result is None
+    assert results == []
 
 
 @pytest.mark.asyncio
-async def test_search_handles_a_missing_web_key_without_crashing():
+async def test_search_many_handles_a_missing_web_key_without_crashing():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={})
 
     client = _client_with_handler(handler)
-    result = await client.search("acme")
+    results = await client.search_many("acme")
 
-    assert result is None
+    assert results == []
 
 
 # ---- rate limits / retries -------------------------------------------------
@@ -150,9 +182,9 @@ async def test_retries_on_429_and_then_succeeds(no_sleep):
         return httpx.Response(200, json={"web": {"results": []}})
 
     client = _client_with_handler(handler)
-    result = await client.search("acme")
+    results = await client.search_many("acme")
 
-    assert result is None
+    assert results == []
     assert calls["count"] == 2
     no_sleep.assert_awaited_once()
 
@@ -168,7 +200,7 @@ async def test_retry_after_header_overrides_computed_backoff(no_sleep):
         search_api_retry_base_delay_seconds=1.0,
     )
     with pytest.raises(ExternalServiceError):
-        await client.search("acme")
+        await client.search_many("acme")
 
     no_sleep.assert_awaited_once_with(7.0)
 
@@ -184,7 +216,7 @@ async def test_non_retryable_status_surfaces_immediately(no_sleep):
     client = _client_with_handler(handler)
 
     with pytest.raises(ExternalServiceError, match="non-retryable status 401"):
-        await client.search("acme")
+        await client.search_many("acme")
 
     assert calls["count"] == 1
 
@@ -197,7 +229,7 @@ async def test_exhausting_retries_raises_external_service_error(no_sleep):
     client = _client_with_handler(handler, search_api_max_retries=2)
 
     with pytest.raises(ExternalServiceError, match="after 3 attempt"):
-        await client.search("acme")
+        await client.search_many("acme")
 
 
 @pytest.mark.asyncio
@@ -211,6 +243,6 @@ async def test_connection_errors_are_retried(no_sleep):
         return httpx.Response(200, json={"web": {"results": []}})
 
     client = _client_with_handler(handler)
-    await client.search("acme")
+    await client.search_many("acme")
 
     assert calls["count"] == 2

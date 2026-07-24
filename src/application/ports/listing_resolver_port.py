@@ -3,14 +3,16 @@ URL and description for a job listing whose aggregator source didn't
 supply one or both (an empty `apply_url` or `description` on the raw
 `AggregatorJobListing`).
 
-Concrete implementations back this with a search API (Google Programmable
-Search, Brave Search, ...) plus their own caching/quota policy — this
-port's caller (`IngestAggregatorJobs`) never knows which provider answered
-the call, only that a resolution was attempted and either produced fields
-or came back empty. A cache hit, a quota-exhausted skip, a low-confidence
-search, and "no resolver configured at all" all look identical from here:
-`None`. Callers must treat `None` as "leave the listing as-is" (and skip
-it if it's still missing required fields), never as an error to raise.
+Concrete implementations resolve against the company's own ATS board
+(Greenhouse/Lever/Ashby — see `AtsListingResolver`), using a search API
+only to locate that board when it isn't already cached, plus their own
+caching/quota policy — this port's caller (`IngestAggregatorJobs`) never
+knows which provider answered the call, only that a resolution was
+attempted and either produced fields or came back empty. A cache hit, a
+quota-exhausted skip, a board with no matching title, and "no resolver
+configured at all" all look identical from here: `None`. Callers must
+treat `None` as "leave the listing as-is" (and skip it if it's still
+missing required fields), never as an error to raise.
 """
 
 from __future__ import annotations
@@ -36,9 +38,10 @@ class ListingResolverPort(ABC):
     ) -> ResolvedListingFields | None:
         """Resolve a canonical apply URL/description for `company`.
 
-        `title` scopes the search query for relevance only — caching is
-        keyed on company alone (see `ResolvedListingRepository`), so a
-        resolution found while handling one title is reused for every
-        other listing from the same company, and the company is never
-        searched again.
+        `title` scopes the lookup to a specific job. WHICH board a
+        company posts through is what's cached and keyed on company alone
+        (see `ResolvedCompanyBoardRepository`) — that company is never
+        searched for again — but the fields returned here are still
+        looked up fresh per title, so two different open roles at the
+        same company each get their own correct apply URL/description.
         """

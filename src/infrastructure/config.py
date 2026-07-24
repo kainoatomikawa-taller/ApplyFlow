@@ -104,20 +104,33 @@ class Settings(BaseSettings):
     job_aggregator_retry_max_delay_seconds: float = 20.0
 
     # Search API integration — Brave Search
-    # (src/infrastructure/search/brave_search_client.py). Resolves a
-    # canonical apply URL + description for aggregator listings missing
-    # one or both (see IngestAggregatorJobs). The free tier is a tight
-    # daily quota (`search_api_daily_quota`), so resolutions are cached
-    # permanently by company (ResolvedListingRepository — the same
-    # company is never searched twice) and the quota is tracked in Redis
-    # (DailySearchQuota) so exhausting it degrades ingestion gracefully
-    # instead of failing it.
+    # (src/infrastructure/search/brave_search_client.py). Used only to
+    # LOCATE which ATS board (Greenhouse/Lever/Ashby) a company posts
+    # through (see AtsListingResolver) — never to answer a listing's
+    # apply URL/description directly. The free tier is a tight daily quota
+    # (`search_api_daily_quota`), so a discovered board is cached
+    # permanently by company (ResolvedCompanyBoardRepository — the same
+    # company's board is never searched for twice) and the quota is
+    # tracked in Redis (DailySearchQuota) so exhausting it degrades
+    # ingestion gracefully instead of failing it.
     search_api_key: SecretStr = SecretStr("")
     search_api_base_url: str = "https://api.search.brave.com/res/v1/web/search"
     search_api_daily_quota: int = 100
     search_api_max_retries: int = 3
     search_api_retry_base_delay_seconds: float = 1.0
     search_api_retry_max_delay_seconds: float = 20.0
+    # How many ranked search results AtsListingResolver scans past a
+    # company's marketing homepage looking for the first one that is
+    # actually a recognized ATS board, before giving up on that company.
+    search_api_board_locate_result_count: int = 5
+
+    # ATS board integration — Greenhouse/Lever/Ashby public job-board APIs
+    # (src/infrastructure/ats_boards/). These are unauthenticated public
+    # feeds, so there are no credentials to configure here — only
+    # retry/backoff, same shape as the other HTTP integrations above.
+    ats_board_max_retries: int = 3
+    ats_board_retry_base_delay_seconds: float = 1.0
+    ats_board_retry_max_delay_seconds: float = 20.0
 
     @model_validator(mode="after")
     def _require_secrets_outside_development(self) -> Settings:
