@@ -20,6 +20,10 @@ from src.application.ports.job_aggregator_port import (
     AggregatorPage,
     JobAggregatorPort,
 )
+from src.application.ports.listing_resolver_port import (
+    ListingResolverPort,
+    ResolvedListingFields,
+)
 from src.application.use_cases.ingest_aggregator_jobs import IngestAggregatorJobs
 from src.domain.entities.job_posting import JobPosting
 from src.domain.repositories.job_posting_repository import JobPostingRepository
@@ -71,6 +75,21 @@ class FakeJobAggregator(JobAggregatorPort):
         if index >= len(self._pages):
             return AggregatorPage(listings=[], has_more=False)
         return self._pages[index]
+
+
+class FakeListingResolver(ListingResolverPort):
+    """Returns a canned resolution for every call, or None if configured to
+    simulate "no confident match / quota exhausted"."""
+
+    def __init__(self, result: ResolvedListingFields | None) -> None:
+        self._result = result
+        self.calls: list[tuple[str, str]] = []
+
+    async def resolve(
+        self, *, company: str, title: str
+    ) -> ResolvedListingFields | None:
+        self.calls.append((company, title))
+        return self._result
 
 
 class FakeJobPostingRepository(JobPostingRepository):
@@ -247,3 +266,131 @@ async def test_distinct_listings_on_the_same_page_are_both_ingested():
         "Backend Engineer",
         "Frontend Engineer",
     }
+
+
+# ---- listing resolution (search API integration) ---------------------------
+
+
+@pytest.mark.asyncio
+async def test_missing_apply_url_is_filled_in_by_the_resolver():
+    aggregator = FakeJobAggregator(
+        [AggregatorPage(listings=[_listing(apply_url="")], has_more=False)]
+    )
+    repository = FakeJobPostingRepository()
+    resolver = FakeListingResolver(
+        ResolvedListingFields(
+            apply_url="https://acme.example.com/careers", description="Resolved."
+        )
+    )
+    use_case = IngestAggregatorJobs(
+        repository=repository,
+        aggregator=aggregator,
+        id_generator=FakeIdGenerator(),
+        listing_resolver=resolver,
+    )
+
+    result = await use_case.execute(
+        IngestAggregatorJobsInput(keywords="engineer", max_pages=1)
+    )
+
+    assert result.ingested_count == 1
+    assert result.skipped_unresolved_count == 0
+    assert repository.saved[0].apply_url == "https://acme.example.com/careers"
+    # Original description is kept — only the missing field is filled in.
+    assert repository.saved[0].description == "Build things."
+    assert resolver.calls == [("Acme Corp", "Backend Engineer")]
+
+
+@pytest.mark.asyncio
+async def test_missing_description_is_filled_in_by_the_resolver():
+    aggregator = FakeJobAggregator(
+        [AggregatorPage(listings=[_listing(description="")], has_more=False)]
+    )
+    repository = FakeJobPostingRepository()
+    resolver = FakeListingResolver(
+        ResolvedListingFields(
+            apply_url="https://acme.example.com/careers",
+            description="Acme's official careers page.",
+        )
+    )
+    use_case = IngestAggregatorJobs(
+        repository=repository,
+        aggregator=aggregator,
+        id_generator=FakeIdGenerator(),
+        listing_resolver=resolver,
+    )
+
+    result = await use_case.execute(
+        IngestAggregatorJobsInput(keywords="engineer", max_pages=1)
+    )
+
+    assert result.ingested_count == 1
+    assert repository.saved[0].description == "Acme's official careers page."
+    assert repository.saved[0].apply_url == "https://jobs.example.com/1"
+
+
+@pytest.mark.asyncio
+async def test_listing_fully_populated_never_calls_the_resolver():
+    aggregator = FakeJobAggregator(
+        [AggregatorPage(listings=[_listing()], has_more=False)]
+    )
+    repository = FakeJobPostingRepository()
+    resolver = FakeListingResolver(None)
+    use_case = IngestAggregatorJobs(
+        repository=repository,
+        aggregator=aggregator,
+        id_generator=FakeIdGenerator(),
+        listing_resolver=resolver,
+    )
+
+    await use_case.execute(IngestAggregatorJobsInput(keywords="engineer", max_pages=1))
+
+    assert resolver.calls == []
+
+
+@pytest.mark.asyncio
+async def test_resolver_returning_none_skips_the_listing_rather_than_crashing():
+    aggregator = FakeJobAggregator(
+        [AggregatorPage(listings=[_listing(apply_url="")], has_more=False)]
+    )
+    repository = FakeJobPostingRepository()
+    resolver = FakeListingResolver(None)
+    use_case = IngestAggregatorJobs(
+        repository=repository,
+        aggregator=aggregator,
+        id_generator=FakeIdGenerator(),
+        listing_resolver=resolver,
+    )
+
+    result = await use_case.execute(
+        IngestAggregatorJobsInput(keywords="engineer", max_pages=1)
+    )
+
+    assert result.ingested_count == 0
+    assert result.skipped_unresolved_count == 1
+    assert repository.saved == []
+
+
+@pytest.mark.asyncio
+async def test_missing_fields_with_no_resolver_configured_are_skipped():
+    aggregator = FakeJobAggregator(
+        [
+            AggregatorPage(
+                listings=[_listing(apply_url="", description="")], has_more=False
+            )
+        ]
+    )
+    repository = FakeJobPostingRepository()
+    use_case = IngestAggregatorJobs(
+        repository=repository,
+        aggregator=aggregator,
+        id_generator=FakeIdGenerator(),
+    )
+
+    result = await use_case.execute(
+        IngestAggregatorJobsInput(keywords="engineer", max_pages=1)
+    )
+
+    assert result.ingested_count == 0
+    assert result.skipped_unresolved_count == 1
+    assert repository.saved == []

@@ -22,3 +22,4 @@ class IngestAggregatorJobsOutput:
     listings_seen: int
     ingested_count: int
     skipped_duplicate_count: int
+    skipped_unresolved_count: int = 0

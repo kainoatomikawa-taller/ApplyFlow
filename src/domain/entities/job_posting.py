@@ -11,25 +11,16 @@ keys without re-implementing the normalization rule.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 
 from src.domain.exceptions import InvalidValueError
+from src.domain.services.text_normalization import normalize_text
 from src.domain.value_objects.salary_range import SalaryRange
-
-_WHITESPACE_RE = re.compile(r"\s+")
 
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
-
-
-def _normalize(value: str) -> str:
-    """Collapse a display string to a stable dedup key: trimmed, lowercased,
-    whitespace-collapsed. Not fuzzy matching — just enough to catch the
-    same posting rendered with different casing/spacing across sources."""
-    return _WHITESPACE_RE.sub(" ", value.strip().lower())
 
 
 @dataclass
@@ -66,8 +57,8 @@ class JobPosting:
         if not self.description.strip():
             raise InvalidValueError("JobPosting requires a non-empty description.")
 
-        self.normalized_company = _normalize(self.company)
-        self.normalized_title = _normalize(self.title)
+        self.normalized_company = normalize_text(self.company)
+        self.normalized_title = normalize_text(self.title)
         self.normalized_location = (
-            _normalize(self.location) if self.location else None
+            normalize_text(self.location) if self.location else None
         )

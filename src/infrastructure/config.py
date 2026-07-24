@@ -103,9 +103,21 @@ class Settings(BaseSettings):
     job_aggregator_retry_base_delay_seconds: float = 1.0
     job_aggregator_retry_max_delay_seconds: float = 20.0
 
-    # Search API integration (reserved for an upcoming adapter)
+    # Search API integration — Brave Search
+    # (src/infrastructure/search/brave_search_client.py). Resolves a
+    # canonical apply URL + description for aggregator listings missing
+    # one or both (see IngestAggregatorJobs). The free tier is a tight
+    # daily quota (`search_api_daily_quota`), so resolutions are cached
+    # permanently by company (ResolvedListingRepository — the same
+    # company is never searched twice) and the quota is tracked in Redis
+    # (DailySearchQuota) so exhausting it degrades ingestion gracefully
+    # instead of failing it.
     search_api_key: SecretStr = SecretStr("")
-    search_api_base_url: str = ""
+    search_api_base_url: str = "https://api.search.brave.com/res/v1/web/search"
+    search_api_daily_quota: int = 100
+    search_api_max_retries: int = 3
+    search_api_retry_base_delay_seconds: float = 1.0
+    search_api_retry_max_delay_seconds: float = 20.0
 
     @model_validator(mode="after")
     def _require_secrets_outside_development(self) -> Settings:

@@ -8,6 +8,15 @@ already represented on this source (same normalized company/title/location
 — see `JobPosting`) is skipped rather than re-inserted, so re-running an
 ingestion (retried pages, a scheduled re-poll) never creates duplicate
 rows.
+
+`JobPosting` requires a non-empty `apply_url` and `description`, but not
+every aggregator listing has both. When one is missing and a
+`ListingResolverPort` was supplied, this use case asks it to fill in the
+gap (a search-API lookup, cached and quota-limited entirely inside that
+port — see its docstring); if the listing is still missing a required
+field afterward (no resolver configured, no confident match, quota
+exhausted), it is skipped rather than raising, so one company's
+unresolvable listing never aborts the rest of the run.
 """
 
 from __future__ import annotations
@@ -18,6 +27,7 @@ from src.application.dtos.job_ingestion_dtos import (
 )
 from src.application.ports.id_generator_port import IdGeneratorPort
 from src.application.ports.job_aggregator_port import JobAggregatorPort
+from src.application.ports.listing_resolver_port import ListingResolverPort
 from src.domain.entities.job_posting import JobPosting
 from src.domain.repositories.job_posting_repository import JobPostingRepository
 
@@ -28,10 +38,12 @@ class IngestAggregatorJobs:
         repository: JobPostingRepository,
         aggregator: JobAggregatorPort,
         id_generator: IdGeneratorPort,
+        listing_resolver: ListingResolverPort | None = None,
     ) -> None:
         self._repository = repository
         self._aggregator = aggregator
         self._id_generator = id_generator
+        self._listing_resolver = listing_resolver
 
     async def execute(
         self, dto: IngestAggregatorJobsInput
@@ -40,6 +52,7 @@ class IngestAggregatorJobs:
         listings_seen = 0
         ingested_count = 0
         skipped_duplicate_count = 0
+        skipped_unresolved_count = 0
 
         page_number = 1
         while page_number <= dto.max_pages:
@@ -50,13 +63,29 @@ class IngestAggregatorJobs:
 
             for listing in page.listings:
                 listings_seen += 1
+
+                apply_url = listing.apply_url
+                description = listing.description
+                is_missing_fields = not apply_url.strip() or not description.strip()
+                if is_missing_fields and self._listing_resolver is not None:
+                    resolved = await self._listing_resolver.resolve(
+                        company=listing.company, title=listing.title
+                    )
+                    if resolved is not None:
+                        apply_url = apply_url.strip() or resolved.apply_url
+                        description = description.strip() or resolved.description
+
+                if not apply_url.strip() or not description.strip():
+                    skipped_unresolved_count += 1
+                    continue
+
                 job_posting = JobPosting(
                     id=self._id_generator.new_id(),
                     source=self._aggregator.source_name,
                     company=listing.company,
                     title=listing.title,
-                    apply_url=listing.apply_url,
-                    description=listing.description,
+                    apply_url=apply_url,
+                    description=description,
                     is_remote=listing.is_remote,
                     location=listing.location,
                     salary=listing.salary,
@@ -85,4 +114,5 @@ class IngestAggregatorJobs:
             listings_seen=listings_seen,
             ingested_count=ingested_count,
             skipped_duplicate_count=skipped_duplicate_count,
+            skipped_unresolved_count=skipped_unresolved_count,
         )

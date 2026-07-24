@@ -84,6 +84,22 @@ class JobPostingModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class ResolvedListingModel(Base):
+    """A permanent cache entry: the canonical apply URL + description a
+    search API resolved for a company whose aggregator listing arrived
+    without one or both. `normalized_company` is unique — once a company
+    has a row here, `SearchApiListingResolver` never searches it again.
+    """
+
+    __tablename__ = "resolved_listings"
+
+    normalized_company: Mapped[str] = mapped_column(String(255), primary_key=True)
+    company: Mapped[str] = mapped_column(String(255))
+    apply_url: Mapped[str] = mapped_column(String(2048))
+    description: Mapped[str] = mapped_column(Text)
+    resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class UserProfileModel(Base):
     __tablename__ = "user_profiles"
 
