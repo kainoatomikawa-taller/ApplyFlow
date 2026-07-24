@@ -86,6 +86,21 @@ class SoftPreferenceEvaluation:
     met: tuple[ClassifiedRequirement, ...] = ()
     gaps: tuple[ClassifiedRequirement, ...] = ()
 
+    @property
+    def fit_score(self) -> int:
+        """A 0-100 fit score: the share of judged soft preferences the
+        candidate meets. A posting with no judged preferences at all
+        (nothing stated, or nothing the profile has data to confirm
+        either way) scores 100 — silence is never held against a
+        candidate, mirroring this service's own "unknown is not a gap"
+        rule. Ranking gets a deterministic, profile-grounded number this
+        way without asking the LLM (which only ever writes the narrative
+        rationale) to judge fit."""
+        total = len(self.met) + len(self.gaps)
+        if total == 0:
+            return 100
+        return round(100 * len(self.met) / total)
+
 
 class SoftPreferenceEvaluator:
     """Checks a `UserProfile` against a job's soft `JobRequirements`,

@@ -29,6 +29,9 @@ from src.application.use_cases.list_candidate_applications import (
 )
 from src.application.use_cases.list_resumes import ListResumes
 from src.application.use_cases.parse_resume import ParseResume
+from src.application.use_cases.rank_matched_job_postings import (
+    RankMatchedJobPostings,
+)
 from src.application.use_cases.submit_job_application import (
     SubmitJobApplication,
 )
@@ -42,10 +45,16 @@ from src.infrastructure.llm.anthropic_client import AnthropicLlmClient
 from src.infrastructure.llm.langchain_resume_analyzer import (
     LangChainResumeAnalyzer,
 )
+from src.infrastructure.llm.llm_job_fit_rationale_generator import (
+    LlmJobFitRationaleGenerator,
+)
 from src.infrastructure.llm.llm_resume_parser import LlmResumeParser
 from src.infrastructure.persistence.database import get_session
 from src.infrastructure.persistence.job_application_repository_impl import (
     SqlAlchemyJobApplicationRepository,
+)
+from src.infrastructure.persistence.job_posting_repository_impl import (
+    SqlAlchemyJobPostingRepository,
 )
 from src.infrastructure.persistence.profile_repository_impl import (
     SqlAlchemyProfileRepository,
@@ -145,6 +154,27 @@ def get_parse_resume_use_case(
         profile_repository=profile_repository,
         resume_parser=LlmResumeParser(AnthropicLlmClient(get_settings())),
         id_generator=UuidIdGenerator(),
+    )
+
+
+def _job_posting_repository(
+    session: AsyncSession = Depends(get_session),
+) -> SqlAlchemyJobPostingRepository:
+    return SqlAlchemyJobPostingRepository(session)
+
+
+def get_rank_matched_jobs_use_case(
+    job_posting_repository: SqlAlchemyJobPostingRepository = Depends(
+        _job_posting_repository
+    ),
+    profile_repository: SqlAlchemyProfileRepository = Depends(_profile_repository),
+) -> RankMatchedJobPostings:
+    return RankMatchedJobPostings(
+        job_posting_repository=job_posting_repository,
+        profile_repository=profile_repository,
+        rationale_generator=LlmJobFitRationaleGenerator(
+            AnthropicLlmClient(get_settings())
+        ),
     )
 
 

@@ -237,3 +237,31 @@ def test_wish_list_posting_split_into_met_and_gaps():
         "Kubernetes",
         "Rust (preferred)",
     }
+
+
+# ---- fit_score --------------------------------------------------------------------
+
+
+def test_fit_score_is_100_when_nothing_was_judged():
+    result = _evaluate(_profile(), JobRequirements())
+    assert result.fit_score == 100
+
+
+def test_fit_score_is_100_when_every_soft_preference_is_met():
+    requirements = JobRequirements(required_skills=("Python", "Go"))
+    profile = _profile(skills=[_skill("Python"), _skill("Go")])
+    result = _evaluate(profile, requirements)
+    assert result.fit_score == 100
+
+
+def test_fit_score_is_0_when_nothing_is_met():
+    requirements = JobRequirements(required_skills=("Python", "Go"))
+    result = _evaluate(_profile(), requirements)
+    assert result.fit_score == 0
+
+
+def test_fit_score_reflects_the_proportion_met():
+    requirements = JobRequirements(required_skills=("Python", "Go", "Rust", "C"))
+    profile = _profile(skills=[_skill("Python")])
+    result = _evaluate(profile, requirements)
+    assert result.fit_score == 25

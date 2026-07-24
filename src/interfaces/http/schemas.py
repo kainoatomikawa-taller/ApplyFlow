@@ -91,3 +91,39 @@ class ProfileResponse(BaseModel):
     work_history: list[WorkHistoryResponse]
     education: list[EducationResponse]
     skills: list[SkillResponse]
+
+
+class JobRequirementsResponse(BaseModel):
+    degree_level: str | None
+    degree_required: bool | None
+    clearance_level: str | None
+    clearance_required: bool | None
+    remote_type: str | None
+    work_authorization: str | None
+    min_years_experience: int | None
+    max_years_experience: int | None
+    locations: list[str]
+    required_skills: list[str]
+    preferred_skills: list[str]
+    preferences: list[str]
+
+
+class JobPostingResponse(BaseModel):
+    id: str
+    source: str
+    company: str
+    title: str
+    apply_url: str
+    location: str | None
+    is_remote: bool
+    status: str
+    posted_at: date | None
+    created_at: datetime
+    requirements: JobRequirementsResponse | None = None
+
+
+class RankedJobResponse(BaseModel):
+    job_posting: JobPostingResponse
+    score: int
+    rationale: str
+    gaps: list[str]
