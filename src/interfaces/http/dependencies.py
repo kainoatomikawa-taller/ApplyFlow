@@ -28,6 +28,7 @@ from src.application.use_cases.list_candidate_applications import (
     ListCandidateApplications,
 )
 from src.application.use_cases.list_resumes import ListResumes
+from src.application.use_cases.parse_resume import ParseResume
 from src.application.use_cases.submit_job_application import (
     SubmitJobApplication,
 )
@@ -37,12 +38,17 @@ from src.domain.services.application_ranking_service import (
 )
 from src.infrastructure.auth.supabase_jwt_verifier import SupabaseJwtVerifier
 from src.infrastructure.config import get_settings
+from src.infrastructure.llm.anthropic_client import AnthropicLlmClient
 from src.infrastructure.llm.langchain_resume_analyzer import (
     LangChainResumeAnalyzer,
 )
+from src.infrastructure.llm.llm_resume_parser import LlmResumeParser
 from src.infrastructure.persistence.database import get_session
 from src.infrastructure.persistence.job_application_repository_impl import (
     SqlAlchemyJobApplicationRepository,
+)
+from src.infrastructure.persistence.profile_repository_impl import (
+    SqlAlchemyProfileRepository,
 )
 from src.infrastructure.persistence.resume_repository_impl import (
     SqlAlchemyResumeRepository,
@@ -122,6 +128,24 @@ def get_list_resumes_use_case(
     repository: SqlAlchemyResumeRepository = Depends(_resume_repository),
 ) -> ListResumes:
     return ListResumes(repository=repository)
+
+
+def _profile_repository(
+    session: AsyncSession = Depends(get_session),
+) -> SqlAlchemyProfileRepository:
+    return SqlAlchemyProfileRepository(session)
+
+
+def get_parse_resume_use_case(
+    resume_repository: SqlAlchemyResumeRepository = Depends(_resume_repository),
+    profile_repository: SqlAlchemyProfileRepository = Depends(_profile_repository),
+) -> ParseResume:
+    return ParseResume(
+        resume_repository=resume_repository,
+        profile_repository=profile_repository,
+        resume_parser=LlmResumeParser(AnthropicLlmClient(get_settings())),
+        id_generator=UuidIdGenerator(),
+    )
 
 
 def _auth_verifier() -> AuthVerifierPort:

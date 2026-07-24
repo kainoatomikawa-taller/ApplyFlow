@@ -12,26 +12,31 @@ raised from this module.
 
 from __future__ import annotations
 
+from dataclasses import asdict
+
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 
 from src.application.dtos.auth_dtos import AuthenticatedUserDTO
 from src.application.dtos.resume_dtos import UploadResumeInput
-from src.application.exceptions import TextExtractionError
+from src.application.exceptions import ExternalServiceError, TextExtractionError
 from src.application.use_cases.get_resume import GetResume
 from src.application.use_cases.list_resumes import ListResumes
+from src.application.use_cases.parse_resume import ParseResume
 from src.application.use_cases.upload_resume import UploadResume
 from src.domain.exceptions import (
     FileTooLargeError,
+    ProfileMissingContactInfoError,
     ResumeNotFoundError,
     UnsupportedFileFormatError,
 )
 from src.interfaces.http.dependencies import (
     get_current_user,
     get_list_resumes_use_case,
+    get_parse_resume_use_case,
     get_resume_use_case,
     get_upload_resume_use_case,
 )
-from src.interfaces.http.schemas import ResumeResponse
+from src.interfaces.http.schemas import ProfileResponse, ResumeResponse
 
 router = APIRouter(
     prefix="/api/resumes",
@@ -89,3 +94,20 @@ async def list_resumes(
 ) -> list[ResumeResponse]:
     outputs = await use_case.execute(user.subject)
     return [ResumeResponse(**o.__dict__) for o in outputs]
+
+
+@router.post("/{resume_id}/parse", response_model=ProfileResponse)
+async def parse_resume(
+    resume_id: str,
+    user: AuthenticatedUserDTO = Depends(get_current_user),
+    use_case: ParseResume = Depends(get_parse_resume_use_case),
+) -> ProfileResponse:
+    try:
+        output = await use_case.execute(resume_id, user.subject)
+    except ResumeNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except ProfileMissingContactInfoError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    except ExternalServiceError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    return ProfileResponse(**asdict(output))

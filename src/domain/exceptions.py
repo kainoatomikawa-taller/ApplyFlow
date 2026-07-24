@@ -53,3 +53,17 @@ class ResumeNotFoundError(DomainError):
     def __init__(self, resume_id: str) -> None:
         super().__init__(f"Resume '{resume_id}' was not found.")
         self.resume_id = resume_id
+
+
+class ProfileMissingContactInfoError(DomainError):
+    """Raised when a new profile would be created without a full name or
+    email — both required to identify the profile's owner. Parsing must
+    never fabricate these, so if a resume doesn't state them and no
+    profile already exists to attach parsed facts to, the operation is
+    rejected rather than invented."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Cannot create a profile: no full name and email could be "
+            "extracted from this resume, and none exists yet."
+        )
