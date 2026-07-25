@@ -137,11 +137,29 @@ class JobRequirementGapsResponse(BaseModel):
 
 class GenerateGapQuestionsRequest(BaseModel):
     gaps: list[str] = Field(default_factory=list)
+    # Optional override of the "already answered" match strictness; unset
+    # falls back to AnswerSimilarityMatcher.DEFAULT_THRESHOLD.
+    similarity_threshold: float | None = Field(default=None, ge=-1.0, le=1.0)
 
 
 class GapResolutionQuestionResponse(BaseModel):
     gap: str
     question: str
+
+
+class AlreadyAnsweredGapResponse(BaseModel):
+    """A gap suppressed because a remembered answer already covers it.
+    Exposes the matched record's id and score only — never the remembered
+    question or answer text, which is sensitive (see `AnswerMemory`)."""
+
+    gap: str
+    answer_memory_id: str
+    similarity_score: float
+
+
+class GapResolutionQuestionsResponse(BaseModel):
+    questions: list[GapResolutionQuestionResponse] = Field(default_factory=list)
+    already_answered: list[AlreadyAnsweredGapResponse] = Field(default_factory=list)
 
 
 class ResolveGapAnswerRequest(BaseModel):

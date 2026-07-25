@@ -230,9 +230,15 @@ def get_detect_job_requirement_gaps_use_case(
     )
 
 
-def get_generate_gap_resolution_questions_use_case() -> GenerateGapResolutionQuestions:
+def get_generate_gap_resolution_questions_use_case(
+    answer_memory_repository: SqlAlchemyAnswerMemoryRepository = Depends(
+        _answer_memory_repository
+    ),
+) -> GenerateGapResolutionQuestions:
     return GenerateGapResolutionQuestions(
-        generator=LlmGapResolutionQuestionGenerator(AnthropicLlmClient(get_settings()))
+        generator=LlmGapResolutionQuestionGenerator(AnthropicLlmClient(get_settings())),
+        answer_memory_repository=answer_memory_repository,
+        embedding_client=OpenAiEmbeddingClient(get_settings()),
     )
 
 

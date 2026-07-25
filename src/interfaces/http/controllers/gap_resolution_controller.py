@@ -26,7 +26,7 @@ from src.interfaces.http.dependencies import (
     get_resolve_gap_answer_use_case,
 )
 from src.interfaces.http.schemas import (
-    GapResolutionQuestionResponse,
+    GapResolutionQuestionsResponse,
     GenerateGapQuestionsRequest,
     ResolveGapAnswerRequest,
     ResolveGapAnswerResponse,
@@ -39,20 +39,25 @@ router = APIRouter(
 )
 
 
-@router.post("/questions", response_model=list[GapResolutionQuestionResponse])
+@router.post("/questions", response_model=GapResolutionQuestionsResponse)
 async def generate_gap_resolution_questions(
     body: GenerateGapQuestionsRequest,
+    user: AuthenticatedUserDTO = Depends(get_current_user),
     use_case: GenerateGapResolutionQuestions = Depends(
         get_generate_gap_resolution_questions_use_case
     ),
-) -> list[GapResolutionQuestionResponse]:
+) -> GapResolutionQuestionsResponse:
     try:
-        outputs = await use_case.execute(
-            GenerateGapResolutionQuestionsInput(gaps=body.gaps)
+        output = await use_case.execute(
+            GenerateGapResolutionQuestionsInput(
+                user_id=user.subject,
+                gaps=body.gaps,
+                similarity_threshold=body.similarity_threshold,
+            )
         )
     except ExternalServiceError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
-    return [GapResolutionQuestionResponse(**asdict(output)) for output in outputs]
+    return GapResolutionQuestionsResponse(**asdict(output))
 
 
 @router.post("/answers", response_model=ResolveGapAnswerResponse)

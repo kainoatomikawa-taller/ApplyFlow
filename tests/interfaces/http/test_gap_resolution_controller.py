@@ -1,5 +1,6 @@
-"""Tests for the gap-resolution router: auth gating, question generation,
-and answer resolution (captured vs. cleanly-omitted decline).
+"""Tests for the gap-resolution router: auth gating, question generation
+(including gaps suppressed as already answered), and answer resolution
+(captured vs. cleanly-omitted decline).
 
 Uses FastAPI's dependency_overrides with in-memory fake use cases, so no
 real database or LLM call is required.
@@ -11,7 +12,9 @@ from fastapi.testclient import TestClient
 
 from src.application.dtos.auth_dtos import AuthenticatedUserDTO
 from src.application.dtos.gap_resolution_dtos import (
+    AlreadyAnsweredGapOutput,
     GapResolutionQuestionOutput,
+    GapResolutionQuestionsOutput,
     ResolveGapAnswerOutput,
 )
 from src.application.exceptions import ExternalServiceError
@@ -26,14 +29,16 @@ _USER = AuthenticatedUserDTO(subject="user-123", email="dev@example.com")
 
 
 class _FakeQuestionsUseCase:
-    def __init__(self, outputs=None, error=None) -> None:
-        self._outputs = outputs
+    def __init__(self, output=None, error=None) -> None:
+        self._output = output
         self._error = error
+        self.received = None
 
     async def execute(self, dto):
+        self.received = dto
         if self._error is not None:
             raise self._error
-        return self._outputs
+        return self._output
 
 
 class _FakeResolveUseCase:
@@ -64,16 +69,18 @@ def test_generate_questions_happy_path_returns_one_question_per_gap():
     app.dependency_overrides[get_current_user] = lambda: _USER
     app.dependency_overrides[get_generate_gap_resolution_questions_use_case] = lambda: (
         _FakeQuestionsUseCase(
-            outputs=[
-                GapResolutionQuestionOutput(
-                    gap="Kubernetes",
-                    question="Have you worked with Kubernetes or similar tools?",
-                ),
-                GapResolutionQuestionOutput(
-                    gap="Leadership experience",
-                    question="Have you ever led a team or mentored someone?",
-                ),
-            ]
+            output=GapResolutionQuestionsOutput(
+                questions=[
+                    GapResolutionQuestionOutput(
+                        gap="Kubernetes",
+                        question="Have you worked with Kubernetes or similar tools?",
+                    ),
+                    GapResolutionQuestionOutput(
+                        gap="Leadership experience",
+                        question="Have you ever led a team or mentored someone?",
+                    ),
+                ]
+            )
         )
     )
 
@@ -84,9 +91,68 @@ def test_generate_questions_happy_path_returns_one_question_per_gap():
 
     assert response.status_code == 200
     body = response.json()
-    assert len(body) == 2
-    assert body[0]["gap"] == "Kubernetes"
-    assert "Kubernetes" in body[0]["question"]
+    assert len(body["questions"]) == 2
+    assert body["questions"][0]["gap"] == "Kubernetes"
+    assert "Kubernetes" in body["questions"][0]["question"]
+    assert body["already_answered"] == []
+    app.dependency_overrides.clear()
+
+
+def test_generate_questions_reports_gaps_already_covered_by_a_past_answer():
+    app = create_app()
+    use_case = _FakeQuestionsUseCase(
+        output=GapResolutionQuestionsOutput(
+            questions=[
+                GapResolutionQuestionOutput(
+                    gap="Leadership experience",
+                    question="Have you ever led a team or mentored someone?",
+                )
+            ],
+            already_answered=[
+                AlreadyAnsweredGapOutput(
+                    gap="Kubernetes",
+                    answer_memory_id="mem-1",
+                    similarity_score=0.93,
+                )
+            ],
+        )
+    )
+    app.dependency_overrides[get_current_user] = lambda: _USER
+    app.dependency_overrides[get_generate_gap_resolution_questions_use_case] = (
+        lambda: use_case
+    )
+
+    response = _client(app).post(
+        "/api/gap-resolution/questions",
+        json={"gaps": ["Kubernetes", "Leadership experience"]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["gap"] for item in body["questions"]] == ["Leadership experience"]
+    assert body["already_answered"] == [
+        {"gap": "Kubernetes", "answer_memory_id": "mem-1", "similarity_score": 0.93}
+    ]
+    # The lookup is scoped to the authenticated caller, never a body field.
+    assert use_case.received.user_id == "user-123"
+    app.dependency_overrides.clear()
+
+
+def test_generate_questions_passes_a_threshold_override_through():
+    app = create_app()
+    use_case = _FakeQuestionsUseCase(output=GapResolutionQuestionsOutput())
+    app.dependency_overrides[get_current_user] = lambda: _USER
+    app.dependency_overrides[get_generate_gap_resolution_questions_use_case] = (
+        lambda: use_case
+    )
+
+    response = _client(app).post(
+        "/api/gap-resolution/questions",
+        json={"gaps": ["Kubernetes"], "similarity_threshold": 0.7},
+    )
+
+    assert response.status_code == 200
+    assert use_case.received.similarity_threshold == 0.7
     app.dependency_overrides.clear()
 
 
