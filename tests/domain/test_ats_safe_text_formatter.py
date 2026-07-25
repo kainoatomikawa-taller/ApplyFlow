@@ -211,3 +211,25 @@ def test_a_document_of_only_empty_headings_becomes_empty(formatter):
 def test_empty_input_stays_empty(formatter):
     assert formatter.normalize_plain_text("") == ""
     assert formatter.drop_empty_sections("") == ""
+
+
+def test_a_pipe_separated_contact_line_becomes_hyphen_separated(formatter):
+    """Models produce these constantly and parsers read a pipe as a cell
+    boundary, so the separator is replaced rather than reported forever."""
+    result = formatter.normalize_plain_text("Austin, TX | dana@example.com | +1-555")
+
+    assert result == "Austin, TX - dana@example.com - +1-555"
+
+
+def test_no_pipe_survives_normalization(formatter):
+    content = "| Role | Company |\nAustin, TX | dana@example.com\nPlain line"
+
+    assert "|" not in formatter.normalize_plain_text(content)
+
+
+def test_a_line_of_only_pipes_is_dropped_as_decoration(formatter):
+    """It carries no content, so it goes entirely rather than leaving a
+    stray separator or a blank line behind."""
+    assert formatter.normalize_plain_text("Dana Reyes\n|\nAustin, TX") == (
+        "Dana Reyes\nAustin, TX"
+    )

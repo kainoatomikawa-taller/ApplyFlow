@@ -158,6 +158,51 @@ class GuardedDocumentResponse(BaseModel):
     violations: list[ProvenanceViolationResponse] = Field(default_factory=list)
 
 
+class ResumeSectionResponse(BaseModel):
+    """One section of the resume as an ATS parser will read it."""
+
+    heading: str
+    lines: list[str] = Field(default_factory=list)
+
+
+class AtsSafetyViolationResponse(BaseModel):
+    """One ATS-safety rule the finished resume breaks. Expected to be absent:
+    the formatter enforces these rules, and a finding here means it let
+    something through."""
+
+    rule: str
+    detail: str
+    line: str
+    line_number: int
+
+
+class ResumeExportsResponse(BaseModel):
+    """The tailored resume's three renderings, all derived from the same
+    guarded text.
+
+    `text` is the plain-text export, `contact_lines`/`sections` the structured
+    one, and `pdf_base64` the PDF file. The PDF travels base64-encoded inside
+    this JSON rather than from a separate download route: the bytes only exist
+    as the product of one guarded generation, so a route that re-rendered them
+    would either spend another model call or have to accept caller-supplied
+    text — and caller-supplied text is a way around the provenance guard.
+    """
+
+    text: str
+    pdf_base64: str
+    pdf_byte_size: int
+    contact_lines: list[str] = Field(default_factory=list)
+    sections: list[ResumeSectionResponse] = Field(default_factory=list)
+
+
+class TailoredResumeResponse(BaseModel):
+    document: GuardedDocumentResponse
+    exports: ResumeExportsResponse
+    ats_safety_violations: list[AtsSafetyViolationResponse] = Field(
+        default_factory=list
+    )
+
+
 class GenerateGapQuestionsRequest(BaseModel):
     gaps: list[str] = Field(default_factory=list)
     # Optional override of the "already answered" match strictness; unset

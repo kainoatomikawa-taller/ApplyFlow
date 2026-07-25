@@ -27,6 +27,11 @@ class TextExtractionError(ApplicationError):
     "plain text" file)."""
 
 
+class DocumentRenderError(ApplicationError):
+    """Raised when a generated document cannot be rendered into its file
+    format (see `ResumePdfRendererPort`)."""
+
+
 class UnattestedGenerationError(ApplicationError):
     """Raised when nothing a generator produced survived the provenance
     guard as an attested claim (see `GuardedContent.has_attested_content`).

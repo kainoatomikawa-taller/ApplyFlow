@@ -12,6 +12,7 @@ from datetime import date, datetime
 
 import pytest
 
+from src.application.ports.resume_pdf_renderer_port import ResumePdfRendererPort
 from src.application.services.provenance_fact_assembler import ProvenanceFactAssembler
 from src.domain.entities.answer_memory import AnswerMemory
 from src.domain.entities.job_posting import JobPosting
@@ -133,6 +134,30 @@ class RecordingGenerator:
         self.facts = facts
         self.relevant_answers = relevant_answers
         return self._draft
+
+
+class RecordingPdfRenderer(ResumePdfRendererPort):
+    """Stands in for the real PDF writer: returns marker bytes and records
+    what it was asked to render, so tests can assert the PDF is built from
+    the guarded text without parsing a PDF here (the renderer's own tests do
+    that against `pypdf`)."""
+
+    def __init__(self, pdf: bytes = b"%PDF-1.4 fake") -> None:
+        self._pdf = pdf
+        self.content: str | None = None
+        self.title: str | None = None
+        self.calls = 0
+
+    def render(self, content: str, *, title: str) -> bytes:
+        self.content = content
+        self.title = title
+        self.calls += 1
+        return self._pdf
+
+
+@pytest.fixture
+def pdf_renderer() -> RecordingPdfRenderer:
+    return RecordingPdfRenderer()
 
 
 @pytest.fixture

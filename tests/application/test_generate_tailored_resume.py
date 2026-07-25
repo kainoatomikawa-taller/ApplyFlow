@@ -17,6 +17,7 @@ from src.application.use_cases.generate_tailored_resume import GenerateTailoredR
 from src.domain.exceptions import JobPostingNotFoundError, ProfileNotFoundError
 from tests.application.conftest import (
     RecordingGenerator,
+    RecordingPdfRenderer,
     StubAnswerMemoryRepository,
     StubJobPostingRepository,
     StubProfileRepository,
@@ -25,11 +26,14 @@ from tests.application.conftest import (
 _INPUT = GenerateTailoredResumeInput(user_id="user-1", job_posting_id="job-posting-1")
 
 
-def _use_case(posting, fact_assembler, generator) -> GenerateTailoredResume:
+def _use_case(
+    posting, fact_assembler, generator, renderer=None
+) -> GenerateTailoredResume:
     return GenerateTailoredResume(
         job_posting_repository=StubJobPostingRepository(posting),
         fact_assembler=fact_assembler,
         generator=generator,
+        pdf_renderer=renderer or RecordingPdfRenderer(),
     )
 
 
@@ -44,14 +48,14 @@ async def test_supported_lines_are_returned_and_traced_to_their_provenance(
 
     result = await _use_case(posting, fact_assembler, generator).execute(_INPUT)
 
-    assert result.content == (
+    assert result.document.content == (
         "EXPERIENCE\nBackend Engineer at Acme Corp (2019-2022)\n"
         "Built payment services in Python."
     )
-    assert result.violations == []
-    assert result.backing_sources == ["parsed_resume"]
-    assert result.document_kind == "tailored_resume"
-    assert result.job_posting_id == "job-posting-1"
+    assert result.document.violations == []
+    assert result.document.backing_sources == ["parsed_resume"]
+    assert result.document.document_kind == "tailored_resume"
+    assert result.document.job_posting_id == "job-posting-1"
 
 
 @pytest.mark.asyncio
@@ -62,12 +66,12 @@ async def test_a_fabricated_employer_never_reaches_the_caller(posting, fact_asse
 
     result = await _use_case(posting, fact_assembler, generator).execute(_INPUT)
 
-    assert result.content == "Built payment services in Python."
-    assert "Initech" not in result.content
-    assert [v.line for v in result.violations] == [
+    assert result.document.content == "Built payment services in Python."
+    assert "Initech" not in result.document.content
+    assert [v.line for v in result.document.violations] == [
         "Staff Engineer at Initech (2016-2019)"
     ]
-    assert "initech" in result.violations[0].unsupported_terms
+    assert "initech" in result.document.violations[0].unsupported_terms
 
 
 @pytest.mark.asyncio
@@ -82,8 +86,8 @@ async def test_a_requirement_the_candidate_cannot_back_is_not_claimed(
     result = await _use_case(posting, fact_assembler, generator).execute(_INPUT)
 
     assert "Terraform" in generator.requirements
-    assert result.content == "Skills: Python"
-    assert "terraform" in result.violations[0].unsupported_terms
+    assert result.document.content == "Skills: Python"
+    assert "terraform" in result.document.violations[0].unsupported_terms
 
 
 @pytest.mark.asyncio
@@ -113,8 +117,8 @@ async def test_an_answer_backed_claim_survives_and_is_credited_to_the_answer(
 
     result = await _use_case(posting, fact_assembler, generator).execute(_INPUT)
 
-    assert result.content == "Led a team of 5 engineers."
-    assert "answer" in result.backing_sources
+    assert result.document.content == "Led a team of 5 engineers."
+    assert "answer" in result.document.backing_sources
 
 
 @pytest.mark.asyncio
@@ -131,8 +135,8 @@ async def test_an_inflated_number_is_stripped_even_though_the_claim_is_real(
 
     result = await _use_case(posting, fact_assembler, generator).execute(_INPUT)
 
-    assert result.content == "Built payment services in Python."
-    assert result.violations[0].unsupported_terms == ["25"]
+    assert result.document.content == "Built payment services in Python."
+    assert result.document.violations[0].unsupported_terms == ["25"]
 
 
 @pytest.mark.asyncio
@@ -210,12 +214,12 @@ async def test_markdown_and_glyphs_are_flattened_before_the_resume_is_returned(
 
     result = await _use_case(posting, fact_assembler, generator).execute(_INPUT)
 
-    assert result.content == (
+    assert result.document.content == (
         "EXPERIENCE\n"
         "Backend Engineer at Acme Corp\n"
         "- Built payment services in Python"
     )
-    assert result.violations == []
+    assert result.document.violations == []
 
 
 @pytest.mark.asyncio
@@ -228,8 +232,8 @@ async def test_a_table_is_flattened_rather_than_shipped_to_a_parser(
 
     result = await _use_case(posting, fact_assembler, generator).execute(_INPUT)
 
-    assert "|" not in result.content
-    assert "Backend Engineer Acme Corp" in result.content
+    assert "|" not in result.document.content
+    assert "Backend Engineer Acme Corp" in result.document.content
 
 
 @pytest.mark.asyncio
@@ -248,9 +252,9 @@ async def test_a_section_the_guard_emptied_is_not_left_as_a_hollow_heading(
 
     result = await _use_case(posting, fact_assembler, generator).execute(_INPUT)
 
-    assert result.content == "EXPERIENCE\nBuilt payment services in Python."
-    assert "EDUCATION" not in result.content
-    assert result.violations[0].line.startswith("PhD in Distributed Systems")
+    assert result.document.content == "EXPERIENCE\nBuilt payment services in Python."
+    assert "EDUCATION" not in result.document.content
+    assert result.document.violations[0].line.startswith("PhD in Distributed Systems")
 
 
 @pytest.mark.asyncio
@@ -259,7 +263,7 @@ async def test_a_section_that_kept_its_body_keeps_its_heading(posting, fact_asse
 
     result = await _use_case(posting, fact_assembler, generator).execute(_INPUT)
 
-    assert result.content == "SKILLS\nPython\n\nEXPERIENCE\nAcme Corp"
+    assert result.document.content == "SKILLS\nPython\n\nEXPERIENCE\nAcme Corp"
 
 
 @pytest.mark.asyncio
@@ -307,3 +311,182 @@ async def test_headings_alone_do_not_count_as_attested_content(posting, fact_ass
 
     with pytest.raises(UnattestedGenerationError):
         await _use_case(posting, fact_assembler, generator).execute(_INPUT)
+
+
+# ---- exports: text, structure, and PDF from one guarded text ----------------
+
+
+@pytest.mark.asyncio
+async def test_the_text_export_is_the_guarded_text_itself(posting, fact_assembler):
+    generator = RecordingGenerator("EXPERIENCE\nBuilt payment services in Python.")
+
+    result = await _use_case(posting, fact_assembler, generator).execute(_INPUT)
+
+    assert result.exports.text == result.document.content
+
+
+@pytest.mark.asyncio
+async def test_the_pdf_is_rendered_from_the_guarded_text_not_the_draft(
+    posting, fact_assembler
+):
+    """The renderer must never see the raw draft: the fabricated line is
+    absent from what it is handed."""
+    renderer = RecordingPdfRenderer(pdf=b"%PDF-1.4 rendered")
+    generator = RecordingGenerator(
+        "Built payment services in Python.\nStaff Engineer at Initech (2016-2019)"
+    )
+
+    result = await _use_case(posting, fact_assembler, generator, renderer).execute(
+        _INPUT
+    )
+
+    assert renderer.content == "Built payment services in Python."
+    assert "Initech" not in (renderer.content or "")
+    assert result.exports.pdf == b"%PDF-1.4 rendered"
+
+
+@pytest.mark.asyncio
+async def test_the_pdf_title_names_the_role_and_company_it_was_tailored_for(
+    posting, fact_assembler
+):
+    renderer = RecordingPdfRenderer()
+    generator = RecordingGenerator("Skills: Python")
+
+    await _use_case(posting, fact_assembler, generator, renderer).execute(_INPUT)
+
+    assert renderer.title == "Resume - Senior Platform Engineer - Globex"
+
+
+@pytest.mark.asyncio
+async def test_the_structured_export_splits_the_resume_into_sections(
+    posting, fact_assembler
+):
+    generator = RecordingGenerator(
+        "Dana Reyes\n"
+        "dana@example.com\n"
+        "\n"
+        "EXPERIENCE\n"
+        "Backend Engineer at Acme Corp\n"
+        "Built payment services in Python.\n"
+        "\n"
+        "SKILLS\n"
+        "Python"
+    )
+
+    result = await _use_case(posting, fact_assembler, generator).execute(_INPUT)
+
+    exports = result.exports
+    assert exports.contact_lines == ["Dana Reyes", "dana@example.com"]
+    assert [section.heading for section in exports.sections] == [
+        "EXPERIENCE",
+        "SKILLS",
+    ]
+    assert exports.sections[0].lines == [
+        "Backend Engineer at Acme Corp",
+        "Built payment services in Python.",
+    ]
+    assert exports.sections[1].lines == ["Python"]
+
+
+@pytest.mark.asyncio
+async def test_a_stripped_line_is_absent_from_every_export(posting, fact_assembler):
+    """One guarded text feeds all three artifacts, so a fabrication cannot
+    survive in one of them."""
+    renderer = RecordingPdfRenderer()
+    generator = RecordingGenerator(
+        "EXPERIENCE\n"
+        "Built payment services in Python.\n"
+        "Staff Engineer at Initech (2016-2019)"
+    )
+
+    result = await _use_case(posting, fact_assembler, generator, renderer).execute(
+        _INPUT
+    )
+
+    section_lines = [
+        line for section in result.exports.sections for line in section.lines
+    ]
+    assert "Initech" not in result.exports.text
+    assert not any("Initech" in line for line in section_lines)
+    assert "Initech" not in (renderer.content or "")
+
+
+@pytest.mark.asyncio
+async def test_a_clean_resume_reports_no_ats_safety_violations(posting, fact_assembler):
+    generator = RecordingGenerator(
+        "Dana Reyes\n\nEXPERIENCE\nBuilt payment services in Python."
+    )
+
+    result = await _use_case(posting, fact_assembler, generator).execute(_INPUT)
+
+    assert result.ats_safety_violations == []
+
+
+@pytest.mark.asyncio
+async def test_the_finished_resume_is_validated_and_findings_are_reported(
+    posting, fact_assembler, caplog
+):
+    """The formatter strips markdown before guarding, so a finding here would
+    be a formatter gap. This proves the check runs on the finished text and
+    that a finding would surface rather than pass silently."""
+    generator = RecordingGenerator("EXPERIENCE\nBuilt payment services in Python.")
+
+    with caplog.at_level(logging.DEBUG):
+        result = await _use_case(posting, fact_assembler, generator).execute(_INPUT)
+
+    assert result.ats_safety_violations == []
+    assert "ats safety check passed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_an_ats_violation_is_reported_and_logged_as_a_pipeline_defect(
+    posting, fact_assembler, caplog
+):
+    """Driven through a stub validator, since the formatter makes a real one
+    impossible to trigger — which is the point of having both."""
+    from src.domain.services.ats_safety_validator import (
+        AtsSafetyReport,
+        AtsSafetyViolation,
+    )
+
+    class _StubValidator:
+        def validate(self, content):
+            return AtsSafetyReport(
+                violations=(
+                    AtsSafetyViolation(
+                        rule="table_markup",
+                        detail="Pipes read as table cells.",
+                        line="| a | b |",
+                        line_number=2,
+                    ),
+                )
+            )
+
+    use_case = GenerateTailoredResume(
+        job_posting_repository=StubJobPostingRepository(posting),
+        fact_assembler=fact_assembler,
+        generator=RecordingGenerator("Built payment services in Python."),
+        pdf_renderer=RecordingPdfRenderer(),
+        ats_validator=_StubValidator(),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = await use_case.execute(_INPUT)
+
+    assert [v.rule for v in result.ats_safety_violations] == ["table_markup"]
+    assert result.ats_safety_violations[0].line_number == 2
+    assert "ats safety check found 1 issue(s)" in caplog.text
+    assert "table_markup" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_nothing_is_rendered_when_the_resume_is_rejected(posting, fact_assembler):
+    """An unattested resume raises before any file is produced — no PDF of a
+    document we refuse to stand behind."""
+    renderer = RecordingPdfRenderer()
+    generator = RecordingGenerator("Staff Engineer at Initech (2016-2019)")
+
+    with pytest.raises(UnattestedGenerationError):
+        await _use_case(posting, fact_assembler, generator, renderer).execute(_INPUT)
+
+    assert renderer.calls == 0

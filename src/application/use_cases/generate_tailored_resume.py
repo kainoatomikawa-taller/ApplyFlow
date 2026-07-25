@@ -16,7 +16,7 @@ what the employer asked for; treating it as evidence would let the model
 claim every requirement as the candidate's own experience (see
 `ProvenanceGuard`).
 
-The full pipeline is normalize -> guard -> tidy -> attest:
+The full pipeline is normalize -> guard -> tidy -> attest -> export:
 
 1. `AtsSafeTextFormatter.normalize_plain_text` flattens the draft to
    ATS-parseable plain text first, so the text the guard validates is the
@@ -28,20 +28,44 @@ The full pipeline is normalize -> guard -> tidy -> attest:
 4. If no surviving line traces to a candidate fact, this raises
    `UnattestedGenerationError` rather than returning a husk of headings as
    a finished resume.
+5. `AtsSafetyValidator` checks the finished text and `ResumeStructureParser`
+   reads it back as sections, then `ResumePdfRendererPort` renders the file.
 
 Steps 1 and 3 only delete or transliterate characters, so neither can
 introduce a claim the guard rejected or never saw.
+
+Every export is derived from that one guarded text
+--------------------------------------------------
+The plain-text export *is* the guarded text; the structured export is that
+text parsed; the PDF is that text rendered. None of the three is assembled
+independently, so they cannot disagree about what the candidate claims — and
+since the text is the artifact the provenance guard cleared, a disagreement
+would mean a file asserting something unvalidated. It also means there is no
+route that renders a PDF from caller-supplied text: a "just export this
+string" endpoint would hand anyone a way around the guard entirely.
+
+The ATS check is reported, not re-fixed. `AtsSafeTextFormatter` has already
+enforced the same rules, so a violation here means enforcement has a gap.
+Quietly correcting it a second time would hide that gap forever, so it is
+logged as the engineering signal it is and returned to the caller.
 """
 
 from __future__ import annotations
 
+import logging
+
 from src.application.dtos.generation_dtos import (
+    AtsSafetyViolationOutput,
     GeneratedDocumentKind,
     GenerateTailoredResumeInput,
     GuardedDocumentOutput,
     ProvenanceViolationOutput,
+    ResumeExportsOutput,
+    ResumeSectionOutput,
+    TailoredResumeOutput,
 )
 from src.application.exceptions import UnattestedGenerationError
+from src.application.ports.resume_pdf_renderer_port import ResumePdfRendererPort
 from src.application.ports.tailored_resume_generator_port import (
     TailoredResumeGeneratorPort,
 )
@@ -50,9 +74,13 @@ from src.application.services.provenance_fact_assembler import ProvenanceFactAss
 from src.domain.exceptions import JobPostingNotFoundError
 from src.domain.repositories.job_posting_repository import JobPostingRepository
 from src.domain.services.ats_safe_text_formatter import AtsSafeTextFormatter
+from src.domain.services.ats_safety_validator import AtsSafetyReport, AtsSafetyValidator
 from src.domain.services.provenance_guard import ProvenanceGuard
 from src.domain.services.requirement_classifier import RequirementClassifier
+from src.domain.services.resume_structure_parser import ResumeStructureParser
 from src.domain.value_objects.job_requirements import JobRequirements
+
+logger = logging.getLogger(__name__)
 
 
 class GenerateTailoredResume:
@@ -61,20 +89,26 @@ class GenerateTailoredResume:
         job_posting_repository: JobPostingRepository,
         fact_assembler: ProvenanceFactAssembler,
         generator: TailoredResumeGeneratorPort,
+        pdf_renderer: ResumePdfRendererPort,
         guard: ProvenanceGuard | None = None,
         classifier: RequirementClassifier | None = None,
         audit: GenerationGuardAudit | None = None,
         formatter: AtsSafeTextFormatter | None = None,
+        ats_validator: AtsSafetyValidator | None = None,
+        structure_parser: ResumeStructureParser | None = None,
     ) -> None:
         self._job_posting_repository = job_posting_repository
         self._fact_assembler = fact_assembler
         self._generator = generator
+        self._pdf_renderer = pdf_renderer
         self._guard = guard or ProvenanceGuard()
         self._classifier = classifier or RequirementClassifier()
         self._audit = audit or GenerationGuardAudit()
         self._formatter = formatter or AtsSafeTextFormatter()
+        self._ats_validator = ats_validator or AtsSafetyValidator()
+        self._structure_parser = structure_parser or ResumeStructureParser()
 
-    async def execute(self, dto: GenerateTailoredResumeInput) -> GuardedDocumentOutput:
+    async def execute(self, dto: GenerateTailoredResumeInput) -> TailoredResumeOutput:
         posting = await self._job_posting_repository.get_by_id(dto.job_posting_id)
         if posting is None:
             raise JobPostingNotFoundError(dto.job_posting_id)
@@ -116,10 +150,11 @@ class GenerateTailoredResume:
                 unsupported_terms=guarded.unsupported_terms,
             )
 
-        return GuardedDocumentOutput(
+        content = self._formatter.drop_empty_sections(guarded.content)
+        document = GuardedDocumentOutput(
             job_posting_id=posting.id,
             document_kind=GeneratedDocumentKind.TAILORED_RESUME.value,
-            content=self._formatter.drop_empty_sections(guarded.content),
+            content=content,
             backing_sources=[source.value for source in guarded.backing_sources],
             violations=[
                 ProvenanceViolationOutput(
@@ -129,3 +164,68 @@ class GenerateTailoredResume:
                 for violation in guarded.violations
             ],
         )
+
+        ats_report = self._ats_validator.validate(content)
+        self._log_ats_findings(
+            report=ats_report, user_id=dto.user_id, job_posting_id=posting.id
+        )
+
+        return TailoredResumeOutput(
+            document=document,
+            exports=self._build_exports(
+                content, title=f"Resume - {posting.title} - {posting.company}"
+            ),
+            ats_safety_violations=[
+                AtsSafetyViolationOutput(
+                    rule=violation.rule,
+                    detail=violation.detail,
+                    line=violation.line,
+                    line_number=violation.line_number,
+                )
+                for violation in ats_report.violations
+            ],
+        )
+
+    def _build_exports(self, content: str, *, title: str) -> ResumeExportsOutput:
+        """Derive all three artifacts from the one guarded text."""
+        structure = self._structure_parser.parse(content)
+        return ResumeExportsOutput(
+            text=content,
+            pdf=self._pdf_renderer.render(content, title=title),
+            contact_lines=list(structure.contact_lines),
+            sections=[
+                ResumeSectionOutput(heading=section.heading, lines=list(section.lines))
+                for section in structure.sections
+            ],
+        )
+
+    @staticmethod
+    def _log_ats_findings(
+        *, report: AtsSafetyReport, user_id: str, job_posting_id: str
+    ) -> None:
+        """A finding means the formatter let something through, so it is
+        logged as a defect rather than passed over. The offending line is
+        included because the rule name alone doesn't say what to fix."""
+        if report.is_safe:
+            logger.debug(
+                "ats safety check passed for tailored_resume user=%s job=%s",
+                user_id,
+                job_posting_id,
+            )
+            return
+
+        logger.warning(
+            "ats safety check found %d issue(s) in tailored_resume for user=%s "
+            "job=%s; broken rules: %s",
+            len(report.violations),
+            user_id,
+            job_posting_id,
+            ",".join(report.broken_rules),
+        )
+        for violation in report.violations:
+            logger.warning(
+                "ats safety violation [%s] at line %d: %r",
+                violation.rule,
+                violation.line_number,
+                violation.line,
+            )

@@ -30,12 +30,19 @@ Both steps only ever delete or transliterate characters. Neither can
 introduce a word, so neither can smuggle in a claim the guard rejected or
 never saw — the provenance decision stands whatever formatting does. Every
 transformation here is also idempotent, so running it twice is harmless.
+
+Which headings count as sections is shared vocabulary rather than this
+module's opinion — see `ats_section_headings`, which `AtsSafetyValidator`
+and `ResumeStructureParser` read from too. This service enforces the rules;
+the validator independently checks that the enforcement worked.
 """
 
 from __future__ import annotations
 
 import re
 import unicodedata
+
+from src.domain.services.ats_section_headings import is_standard_section_heading
 
 #: Markdown emphasis/heading/code syntax, table pipes, and horizontal rules.
 _MARKDOWN_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s*")
@@ -80,37 +87,6 @@ _PUNCTUATION_TRANSLITERATIONS = {
 }
 _TRANSLITERATION_TABLE = str.maketrans(_PUNCTUATION_TRANSLITERATIONS)
 
-#: The section headings ATS parsers are built to recognize. Used only to
-#: decide whether a heading left with no body should be dropped: matching a
-#: fixed, standard vocabulary means a candidate's all-caps name is never
-#: mistaken for an empty section and deleted.
-_STANDARD_SECTION_HEADINGS = frozenset(
-    {
-        "summary",
-        "professional summary",
-        "career summary",
-        "objective",
-        "profile",
-        "experience",
-        "work experience",
-        "professional experience",
-        "employment history",
-        "education",
-        "skills",
-        "technical skills",
-        "core skills",
-        "certifications",
-        "licenses and certifications",
-        "projects",
-        "publications",
-        "awards",
-        "achievements",
-        "languages",
-        "additional information",
-        "references",
-    }
-)
-
 
 class AtsSafeTextFormatter:
     """Flattens a generated resume to ATS-parseable plain text, and clears
@@ -144,9 +120,7 @@ class AtsSafeTextFormatter:
         lines = content.split("\n")
         keep: list[str] = []
         for index, line in enumerate(lines):
-            if self._is_standard_section_heading(line) and not self._has_body(
-                lines, index
-            ):
+            if is_standard_section_heading(line) and not self._has_body(lines, index):
                 continue
             keep.append(line)
         return self._collapse_blank_runs(keep)
@@ -170,6 +144,14 @@ class AtsSafeTextFormatter:
         if _TABLE_ROW_RE.match(line):
             cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
             line = " ".join(cell for cell in cells if cell)
+        elif "|" in line:
+            # A pipe that isn't a full table row is a separator, most often
+            # in a contact line ("Austin, TX | dana@example.com"). Models
+            # produce it constantly and parsers still read it as a cell
+            # boundary, so it becomes a hyphen — which reads the same to a
+            # human and means nothing structural to a parser.
+            fields = [field.strip() for field in line.split("|")]
+            line = " - ".join(field for field in fields if field)
 
         line = _MARKDOWN_HEADING_RE.sub("", line)
         line = _MARKDOWN_LINK_RE.sub(r"\1 \2", line)
@@ -202,14 +184,9 @@ class AtsSafeTextFormatter:
         return "\n".join(collapsed)
 
     @staticmethod
-    def _is_standard_section_heading(line: str) -> bool:
-        candidate = line.strip().rstrip(":").strip().lower()
-        return candidate in _STANDARD_SECTION_HEADINGS
-
-    @classmethod
-    def _has_body(cls, lines: list[str], heading_index: int) -> bool:
+    def _has_body(lines: list[str], heading_index: int) -> bool:
         for line in lines[heading_index + 1 :]:
             if not line.strip():
                 continue
-            return not cls._is_standard_section_heading(line)
+            return not is_standard_section_heading(line)
         return False

@@ -61,6 +61,7 @@ from src.domain.services.application_ranking_service import (
 )
 from src.infrastructure.auth.supabase_jwt_verifier import SupabaseJwtVerifier
 from src.infrastructure.config import get_settings
+from src.infrastructure.documents.ats_safe_pdf_renderer import AtsSafePdfRenderer
 from src.infrastructure.llm.anthropic_client import AnthropicLlmClient
 from src.infrastructure.llm.langchain_resume_analyzer import (
     LangChainResumeAnalyzer,
@@ -280,14 +281,16 @@ def get_generate_tailored_resume_use_case(
     ),
     fact_assembler: ProvenanceFactAssembler = Depends(_provenance_fact_assembler),
 ) -> GenerateTailoredResume:
-    """The generator is the only injected collaborator that talks to a
-    model; the guard, the ATS formatter, and the audit recorder are pure
-    defaults the use case builds itself, so no wiring mistake here can
-    produce an unguarded resume."""
+    """The generator and the PDF renderer are the only injected
+    collaborators; the guard, the ATS formatter, the ATS validator, the
+    structure parser, and the audit recorder are pure defaults the use case
+    builds itself, so no wiring mistake here can produce an unguarded or
+    unvalidated resume."""
     return GenerateTailoredResume(
         job_posting_repository=job_posting_repository,
         fact_assembler=fact_assembler,
         generator=LlmTailoredResumeGenerator(AnthropicLlmClient(get_settings())),
+        pdf_renderer=AtsSafePdfRenderer(),
     )
 
 
