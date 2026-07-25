@@ -65,8 +65,13 @@ def field(
     reason: str | None = None,
     detail: str | None = None,
     kind: str = "text",
+    field_id: str | None = None,
 ) -> AutofilledFieldOutput:
     return AutofilledFieldOutput(
+        # The autofill report identifies each field by the browser handle it
+        # was read from. Derived from the label here so a test can stay
+        # readable; pass `field_id` explicitly when a test cares about it.
+        field_id=field_id or f"handle-{label.lower().replace(' ', '-')}",
         label=label,
         kind=kind,
         required=required,
@@ -505,7 +510,7 @@ async def test_a_hand_off_raised_after_the_review_blocks_submission(
 
 @pytest.mark.asyncio
 async def test_submitting_through_a_walled_portal_is_refused(
-    review_repository, handoff_repository
+    review_repository, handoff_repository, submitted_application_log
 ):
     opened = await _open(review_repository, handoff_repository)
     assert opened.review is not None
@@ -515,6 +520,7 @@ async def test_submitting_through_a_walled_portal_is_refused(
         await SubmitApplicationReview(
             review_repository=review_repository,
             handoff_repository=handoff_repository,
+            submitted_application_log=submitted_application_log,
         ).execute(
             SubmitApplicationReviewInput(user_id=_USER, review_id=opened.review.id)
         )
@@ -576,13 +582,15 @@ async def test_a_posting_with_nothing_filled_yet_has_no_review(
 
 @pytest.mark.asyncio
 async def test_submitting_records_the_candidate_and_hands_back_the_portal(
-    review_repository, handoff_repository
+    review_repository, handoff_repository, submitted_application_log
 ):
     opened = await _open(review_repository, handoff_repository)
     assert opened.review is not None
 
     output = await SubmitApplicationReview(
-        review_repository=review_repository, handoff_repository=handoff_repository
+        review_repository=review_repository,
+        handoff_repository=handoff_repository,
+        submitted_application_log=submitted_application_log,
     ).execute(
         SubmitApplicationReviewInput(
             user_id=_USER, review_id=opened.review.id, note="sent from my laptop"
@@ -600,7 +608,7 @@ async def test_submitting_records_the_candidate_and_hands_back_the_portal(
 
 @pytest.mark.asyncio
 async def test_submitting_is_refused_while_a_sensitive_field_is_undecided(
-    review_repository, handoff_repository
+    review_repository, handoff_repository, submitted_application_log
 ):
     """The server-side gate, not the button's `disabled` attribute: a client
     that posts anyway gets the same refusal."""
@@ -620,6 +628,7 @@ async def test_submitting_is_refused_while_a_sensitive_field_is_undecided(
         await SubmitApplicationReview(
             review_repository=review_repository,
             handoff_repository=handoff_repository,
+            submitted_application_log=submitted_application_log,
         ).execute(
             SubmitApplicationReviewInput(user_id=_USER, review_id=opened.review.id)
         )
@@ -628,11 +637,15 @@ async def test_submitting_is_refused_while_a_sensitive_field_is_undecided(
 
 
 @pytest.mark.asyncio
-async def test_submitting_twice_is_refused(review_repository, handoff_repository):
+async def test_submitting_twice_is_refused(
+    review_repository, handoff_repository, submitted_application_log
+):
     opened = await _open(review_repository, handoff_repository)
     assert opened.review is not None
     use_case = SubmitApplicationReview(
-        review_repository=review_repository, handoff_repository=handoff_repository
+        review_repository=review_repository,
+        handoff_repository=handoff_repository,
+        submitted_application_log=submitted_application_log,
     )
     await use_case.execute(
         SubmitApplicationReviewInput(user_id=_USER, review_id=opened.review.id)
@@ -646,12 +659,14 @@ async def test_submitting_twice_is_refused(review_repository, handoff_repository
 
 @pytest.mark.asyncio
 async def test_a_submitted_review_cannot_be_edited(
-    review_repository, handoff_repository
+    review_repository, handoff_repository, submitted_application_log
 ):
     opened = await _open(review_repository, handoff_repository)
     assert opened.review is not None
     await SubmitApplicationReview(
-        review_repository=review_repository, handoff_repository=handoff_repository
+        review_repository=review_repository,
+        handoff_repository=handoff_repository,
+        submitted_application_log=submitted_application_log,
     ).execute(SubmitApplicationReviewInput(user_id=_USER, review_id=opened.review.id))
 
     with pytest.raises(BusinessRuleViolationError, match="already submitted"):
@@ -671,7 +686,7 @@ async def test_a_submitted_review_cannot_be_edited(
 
 @pytest.mark.asyncio
 async def test_submitting_someone_elses_review_reads_as_absent(
-    review_repository, handoff_repository
+    review_repository, handoff_repository, submitted_application_log
 ):
     opened = await _open(review_repository, handoff_repository)
     assert opened.review is not None
@@ -680,6 +695,7 @@ async def test_submitting_someone_elses_review_reads_as_absent(
         await SubmitApplicationReview(
             review_repository=review_repository,
             handoff_repository=handoff_repository,
+            submitted_application_log=submitted_application_log,
         ).execute(
             SubmitApplicationReviewInput(
                 user_id="someone-else", review_id=opened.review.id

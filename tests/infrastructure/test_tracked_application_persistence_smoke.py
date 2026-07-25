@@ -26,7 +26,11 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
-from src.application.exceptions import TrackedApplicationReferenceError
+from src.application.exceptions import (
+    ApplicationAlreadyLoggedError,
+    TrackedApplicationReferenceError,
+)
+from src.application.services.submitted_application_log import SubmittedApplicationLog
 from src.domain.entities.application_document import ApplicationDocument
 from src.domain.entities.job_posting import JobPosting
 from src.domain.entities.tracked_application import TrackedApplication
@@ -135,6 +139,7 @@ async def test_a_tracked_application_round_trips_against_a_real_database(
         application_id=f"smoke-tracked-{uuid.uuid4()}",
         user_id=user_id,
         job_posting=posting,
+        submission_key=f"smoke-review-{uuid.uuid4()}",
         resume_document=resume,
         cover_letter_document=letter,
         applied_at=applied_at,
@@ -175,6 +180,7 @@ async def test_the_stored_row_resolves_to_the_documents_that_were_sent(
         application_id=f"smoke-tracked-{uuid.uuid4()}",
         user_id=user_id,
         job_posting=posting,
+        submission_key=f"smoke-review-{uuid.uuid4()}",
         resume_document=resume,
         cover_letter_document=letter,
     )
@@ -213,6 +219,7 @@ async def test_a_status_transition_is_persisted(schema_ready: None) -> None:
         application_id=f"smoke-tracked-{uuid.uuid4()}",
         user_id=user_id,
         job_posting=posting,
+        submission_key=f"smoke-review-{uuid.uuid4()}",
         resume_document=resume,
     )
 
@@ -254,6 +261,7 @@ async def test_the_tracker_feed_lists_a_candidates_applications_newest_first(
         application_id=f"smoke-tracked-{uuid.uuid4()}",
         user_id=user_id,
         job_posting=older_posting,
+        submission_key=f"smoke-review-{uuid.uuid4()}",
         resume_document=older_resume,
         applied_at=now - timedelta(days=30),
     )
@@ -261,6 +269,7 @@ async def test_the_tracker_feed_lists_a_candidates_applications_newest_first(
         application_id=f"smoke-tracked-{uuid.uuid4()}",
         user_id=user_id,
         job_posting=newer_posting,
+        submission_key=f"smoke-review-{uuid.uuid4()}",
         resume_document=newer_resume,
         applied_at=now - timedelta(days=1),
     )
@@ -314,6 +323,7 @@ async def test_applying_to_the_same_posting_twice_is_two_records(
         application_id=f"smoke-tracked-{uuid.uuid4()}",
         user_id=user_id,
         job_posting=posting,
+        submission_key=f"smoke-review-{uuid.uuid4()}",
         resume_document=first_resume,
         applied_at=now - timedelta(days=180),
     )
@@ -321,6 +331,7 @@ async def test_applying_to_the_same_posting_twice_is_two_records(
         application_id=f"smoke-tracked-{uuid.uuid4()}",
         user_id=user_id,
         job_posting=posting,
+        submission_key=f"smoke-review-{uuid.uuid4()}",
         resume_document=second_resume,
         applied_at=now,
     )
@@ -355,6 +366,7 @@ async def test_an_unresolvable_document_reference_is_refused_at_write_time(
         job_posting_id=posting.id,
         company_name=posting.company,
         role_title=posting.title,
+        submission_key=f"smoke-review-{uuid.uuid4()}",
         applied_at=datetime.now(UTC),
         resume_document_id=f"never-stored-{uuid.uuid4()}",
     )
@@ -380,6 +392,7 @@ async def test_an_unresolvable_job_reference_is_refused_at_write_time(
         job_posting_id=f"never-ingested-{uuid.uuid4()}",
         company_name="Smoke Test Co",
         role_title="Backend Engineer",
+        submission_key=f"smoke-review-{uuid.uuid4()}",
         applied_at=datetime.now(UTC),
         resume_document_id=resume.id,
     )
@@ -404,6 +417,7 @@ async def test_a_posting_applied_to_cannot_be_deleted_out_from_under_the_record(
         application_id=f"smoke-tracked-{uuid.uuid4()}",
         user_id=user_id,
         job_posting=posting,
+        submission_key=f"smoke-review-{uuid.uuid4()}",
         resume_document=resume,
     )
 
@@ -416,3 +430,116 @@ async def test_a_posting_applied_to_cannot_be_deleted_out_from_under_the_record(
                 text("DELETE FROM job_postings WHERE id = :id"), {"id": posting.id}
             )
             await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_the_same_submission_key_is_refused_by_the_database(
+    schema_ready: None,
+) -> None:
+    """The idempotency guarantee, at the level that actually enforces it. Two
+    concurrent logs of one submission can both pass a "already logged?" read,
+    so the constraint is what makes exactly-once real."""
+    user_id = f"smoke-user-{uuid.uuid4()}"
+    posting = await _job_posting()
+    resume, _ = await _archived_documents(
+        user_id=user_id, job_posting_id=posting.id, with_letter=False
+    )
+    submission_key = f"smoke-review-{uuid.uuid4()}"
+
+    def _tracked() -> TrackedApplication:
+        return TrackedApplication.record_sent(
+            application_id=f"smoke-tracked-{uuid.uuid4()}",
+            user_id=user_id,
+            job_posting=posting,
+            submission_key=submission_key,
+            resume_document=resume,
+        )
+
+    async with async_session_factory() as session:
+        repository = SqlAlchemyTrackedApplicationRepository(session)
+        await repository.add(_tracked())
+
+        # A different row id, but the same submission — refused, and reported
+        # as "already logged" rather than as a dangling reference.
+        with pytest.raises(ApplicationAlreadyLoggedError):
+            await repository.add(_tracked())
+
+
+@pytest.mark.asyncio
+async def test_the_same_key_for_a_different_candidate_is_allowed(
+    schema_ready: None,
+) -> None:
+    """The constraint is scoped per candidate: two people's submissions must
+    never collide with each other."""
+    posting = await _job_posting()
+    submission_key = "shared-key"
+
+    for _ in range(2):
+        user_id = f"smoke-user-{uuid.uuid4()}"
+        resume, _ = await _archived_documents(
+            user_id=user_id, job_posting_id=posting.id, with_letter=False
+        )
+        async with async_session_factory() as session:
+            await SqlAlchemyTrackedApplicationRepository(session).add(
+                TrackedApplication.record_sent(
+                    application_id=f"smoke-tracked-{uuid.uuid4()}",
+                    user_id=user_id,
+                    job_posting=posting,
+                    submission_key=submission_key,
+                    resume_document=resume,
+                )
+            )
+
+
+@pytest.mark.asyncio
+async def test_the_log_service_is_idempotent_against_a_real_database(
+    schema_ready: None,
+) -> None:
+    """End to end through `SubmittedApplicationLog`: the same submission logged
+    twice leaves one record, linked to the exact stored snapshots."""
+    user_id = f"smoke-user-{uuid.uuid4()}"
+    posting = await _job_posting(title="Staff Backend Engineer")
+    resume, letter = await _archived_documents(
+        user_id=user_id, job_posting_id=posting.id
+    )
+    assert letter is not None
+    submission_key = f"smoke-review-{uuid.uuid4()}"
+    applied_at = datetime(2026, 7, 22, 14, 5, tzinfo=UTC)
+
+    class _Ids:
+        def new_id(self) -> str:
+            return f"smoke-tracked-{uuid.uuid4()}"
+
+    async def _log_once() -> TrackedApplication:
+        async with async_session_factory() as session:
+            service = SubmittedApplicationLog(
+                tracked_application_repository=(
+                    SqlAlchemyTrackedApplicationRepository(session)
+                ),
+                document_repository=SqlAlchemyApplicationDocumentRepository(session),
+                job_posting_repository=SqlAlchemyJobPostingRepository(session),
+                id_generator=_Ids(),  # type: ignore[arg-type]
+            )
+            return await service.record(
+                user_id=user_id,
+                job_posting_id=posting.id,
+                submission_key=submission_key,
+                applied_at=applied_at,
+            )
+
+    first = await _log_once()
+    second = await _log_once()
+
+    assert second.id == first.id
+    assert first.role_title == "Staff Backend Engineer"
+    assert first.company_name == "Smoke Test Co"
+    assert first.applied_at == applied_at
+    # Reused the archived snapshots rather than anything regenerated.
+    assert first.resume_document_id == resume.id
+    assert first.cover_letter_document_id == letter.id
+
+    async with async_session_factory() as session:
+        rows = await SqlAlchemyTrackedApplicationRepository(session).list_by_user_id(
+            user_id
+        )
+    assert len(rows) == 1

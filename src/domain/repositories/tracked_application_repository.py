@@ -48,6 +48,20 @@ class TrackedApplicationRepository(ABC):
         """Return one tracked application by id, or None if it does not exist."""
 
     @abstractmethod
+    async def get_by_submission_key(
+        self, *, user_id: str, submission_key: str
+    ) -> TrackedApplication | None:
+        """Return the application already logged for this submission event, or
+        None if it has not been logged yet.
+
+        The read half of idempotent logging: a retry, a double-clicked submit
+        button, or a repair pass finds the existing row here instead of writing
+        a second one. The write half is the unique constraint behind
+        `add` — this read alone cannot make logging idempotent, because two
+        concurrent callers can both find nothing.
+        """
+
+    @abstractmethod
     async def update(self, application: TrackedApplication) -> None:
         """Persist a change to an existing tracked application — in practice a
         status transition (see `TrackedApplication.change_status`)."""

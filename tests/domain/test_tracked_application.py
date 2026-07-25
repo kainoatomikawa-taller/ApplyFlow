@@ -22,6 +22,7 @@ from src.domain.value_objects.generated_document_kind import GeneratedDocumentKi
 from src.domain.value_objects.provenance_source import ProvenanceSource
 
 _USER_ID = "user-1"
+_SUBMISSION_KEY = "review-1"
 
 
 def _posting(posting_id: str = "job-1") -> JobPosting:
@@ -74,6 +75,7 @@ def _tracked(**overrides: object) -> TrackedApplication:
         "id": "tracked-1",
         "user_id": _USER_ID,
         "job_posting_id": "job-1",
+        "submission_key": _SUBMISSION_KEY,
         "company_name": "Globex",
         "role_title": "Senior Backend Engineer",
         "applied_at": datetime(2026, 7, 25, 12, 0, tzinfo=UTC),
@@ -95,6 +97,7 @@ def test_record_sent_captures_role_company_date_status_and_job_reference() -> No
         application_id="tracked-1",
         user_id=_USER_ID,
         job_posting=posting,
+        submission_key=_SUBMISSION_KEY,
         resume_document=_resume(),
         cover_letter_document=_letter(),
         applied_at=applied_at,
@@ -113,6 +116,7 @@ def test_record_sent_references_the_exact_stored_documents() -> None:
         application_id="tracked-1",
         user_id=_USER_ID,
         job_posting=_posting(),
+        submission_key=_SUBMISSION_KEY,
         resume_document=_resume(),
         cover_letter_document=_letter(),
     )
@@ -129,6 +133,7 @@ def test_role_and_company_are_copied_not_read_through_the_posting() -> None:
         application_id="tracked-1",
         user_id=_USER_ID,
         job_posting=posting,
+        submission_key=_SUBMISSION_KEY,
         resume_document=_resume(),
     )
 
@@ -144,6 +149,7 @@ def test_a_cover_letter_is_optional() -> None:
         application_id="tracked-1",
         user_id=_USER_ID,
         job_posting=_posting(),
+        submission_key=_SUBMISSION_KEY,
         resume_document=_resume(),
     )
 
@@ -156,6 +162,7 @@ def test_applied_at_defaults_to_now_when_the_caller_does_not_say() -> None:
         application_id="tracked-1",
         user_id=_USER_ID,
         job_posting=_posting(),
+        submission_key=_SUBMISSION_KEY,
         resume_document=_resume(),
     )
 
@@ -172,6 +179,7 @@ def test_a_cover_letter_cannot_be_recorded_as_the_resume() -> None:
             application_id="tracked-1",
             user_id=_USER_ID,
             job_posting=_posting(),
+            submission_key=_SUBMISSION_KEY,
             resume_document=_letter(),
         )
 
@@ -182,6 +190,7 @@ def test_a_resume_cannot_be_recorded_as_the_cover_letter() -> None:
             application_id="tracked-1",
             user_id=_USER_ID,
             job_posting=_posting(),
+            submission_key=_SUBMISSION_KEY,
             resume_document=_resume(),
             cover_letter_document=_resume(),
         )
@@ -195,6 +204,7 @@ def test_another_jobs_resume_is_refused() -> None:
             application_id="tracked-1",
             user_id=_USER_ID,
             job_posting=_posting("job-1"),
+            submission_key=_SUBMISSION_KEY,
             resume_document=_resume(job_posting_id="job-2"),
         )
 
@@ -205,6 +215,7 @@ def test_another_candidates_resume_is_refused() -> None:
             application_id="tracked-1",
             user_id=_USER_ID,
             job_posting=_posting(),
+            submission_key=_SUBMISSION_KEY,
             resume_document=_resume(user_id="someone-else"),
         )
 
@@ -215,6 +226,7 @@ def test_another_jobs_cover_letter_is_refused() -> None:
             application_id="tracked-1",
             user_id=_USER_ID,
             job_posting=_posting("job-1"),
+            submission_key=_SUBMISSION_KEY,
             resume_document=_resume(),
             cover_letter_document=_letter(job_posting_id="job-2"),
         )
@@ -232,11 +244,26 @@ def test_another_jobs_cover_letter_is_refused() -> None:
         ("company_name", "   "),
         ("role_title", "   "),
         ("resume_document_id", ""),
+        ("submission_key", "   "),
     ],
 )
 def test_required_fields_are_rejected_when_empty(field: str, value: str) -> None:
     with pytest.raises(InvalidValueError):
         _tracked(**{field: value})
+
+
+def test_the_submission_key_is_carried_through_record_sent() -> None:
+    """It is the idempotency key, so it has to survive construction rather than
+    being regenerated per attempt."""
+    tracked = TrackedApplication.record_sent(
+        application_id="tracked-1",
+        user_id=_USER_ID,
+        job_posting=_posting(),
+        submission_key="review-abc",
+        resume_document=_resume(),
+    )
+
+    assert tracked.submission_key == "review-abc"
 
 
 def test_a_blank_cover_letter_reference_is_refused() -> None:

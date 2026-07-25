@@ -20,18 +20,15 @@ from types import TracebackType
 
 import pytest
 
-<<<<<<< HEAD
-from src.application.exceptions import StaleFormFieldError
-=======
->>>>>>> origin/main
+from src.application.exceptions import (
+    ApplicationAlreadyLoggedError,
+    StaleFormFieldError,
+)
 from src.application.ports.browser_automation_port import (
     BrowserAutomationPort,
     BrowserSessionPort,
     FormField,
-<<<<<<< HEAD
     SubmitControl,
-=======
->>>>>>> origin/main
 )
 from src.application.ports.id_generator_port import IdGeneratorPort
 from src.application.ports.resume_pdf_renderer_port import ResumePdfRendererPort
@@ -39,12 +36,14 @@ from src.application.services.application_document_archive import (
     ApplicationDocumentArchive,
 )
 from src.application.services.provenance_fact_assembler import ProvenanceFactAssembler
+from src.application.services.submitted_application_log import SubmittedApplicationLog
 from src.domain.entities.answer_memory import AnswerMemory
 from src.domain.entities.application_document import ApplicationDocument
 from src.domain.entities.application_review import ApplicationReview
 from src.domain.entities.job_posting import JobPosting
 from src.domain.entities.portal_handoff import PortalHandoff
 from src.domain.entities.skill import Skill
+from src.domain.entities.tracked_application import TrackedApplication
 from src.domain.entities.user_profile import UserProfile
 from src.domain.entities.work_history_entry import WorkHistoryEntry
 from src.domain.exceptions import (
@@ -61,14 +60,14 @@ from src.domain.repositories.application_review_repository import (
 from src.domain.repositories.job_posting_repository import JobPostingRepository
 from src.domain.repositories.portal_handoff_repository import PortalHandoffRepository
 from src.domain.repositories.profile_repository import ProfileRepository
+from src.domain.repositories.tracked_application_repository import (
+    TrackedApplicationRepository,
+)
 from src.domain.value_objects.email_address import EmailAddress
 from src.domain.value_objects.generated_document_kind import GeneratedDocumentKind
 from src.domain.value_objects.job_requirements import JobRequirements
-<<<<<<< HEAD
 from src.domain.value_objects.page_signals import PageSignals
-=======
 from src.domain.value_objects.portal_page_signals import PortalPageSignals
->>>>>>> origin/main
 from src.domain.value_objects.provenance_source import ProvenanceSource
 
 
@@ -707,3 +706,92 @@ class InMemoryApplicationReviewRepository(ApplicationReviewRepository):
 @pytest.fixture
 def review_repository() -> InMemoryApplicationReviewRepository:
     return InMemoryApplicationReviewRepository()
+
+
+class InMemoryTrackedApplicationRepository(TrackedApplicationRepository):
+    """Stores tracked applications by id, and enforces the same unique
+    (`user_id`, `submission_key`) constraint the database does.
+
+    That constraint is the idempotency guarantee for submission logging, so a
+    fake that let a duplicate through would let a test pass that production
+    rejects — and the property under test is precisely "logged exactly once".
+    """
+
+    def __init__(self, applications: list[TrackedApplication] | None = None) -> None:
+        self.rows: dict[str, TrackedApplication] = {
+            application.id: application for application in applications or []
+        }
+        self.add_calls = 0
+
+    async def add(self, application: TrackedApplication) -> None:
+        self.add_calls += 1
+        if any(
+            other.user_id == application.user_id
+            and other.submission_key == application.submission_key
+            for other in self.rows.values()
+        ):
+            raise ApplicationAlreadyLoggedError(
+                user_id=application.user_id,
+                submission_key=application.submission_key,
+            )
+        self.rows[application.id] = application
+
+    async def get_by_id(self, application_id: str) -> TrackedApplication | None:
+        return self.rows.get(application_id)
+
+    async def get_by_submission_key(
+        self, *, user_id: str, submission_key: str
+    ) -> TrackedApplication | None:
+        for application in self.rows.values():
+            if (
+                application.user_id == user_id
+                and application.submission_key == submission_key
+            ):
+                return application
+        return None
+
+    async def update(self, application: TrackedApplication) -> None:
+        self.rows[application.id] = application
+
+    async def list_by_user_id(
+        self, user_id: str, *, limit: int = 100
+    ) -> list[TrackedApplication]:
+        owned = [r for r in self.rows.values() if r.user_id == user_id]
+        owned.sort(key=lambda application: application.applied_at, reverse=True)
+        return owned[:limit]
+
+    async def list_for_job(
+        self, *, user_id: str, job_posting_id: str
+    ) -> list[TrackedApplication]:
+        owned = [
+            r
+            for r in self.rows.values()
+            if r.user_id == user_id and r.job_posting_id == job_posting_id
+        ]
+        owned.sort(key=lambda application: application.applied_at, reverse=True)
+        return owned
+
+
+@pytest.fixture
+def tracked_application_repository() -> InMemoryTrackedApplicationRepository:
+    return InMemoryTrackedApplicationRepository()
+
+
+@pytest.fixture
+def submitted_application_log(
+    tracked_application_repository: InMemoryTrackedApplicationRepository,
+    document_repository: InMemoryApplicationDocumentRepository,
+    posting: JobPosting,
+) -> SubmittedApplicationLog:
+    """The tracker log the submit flow writes through.
+
+    Wired to the same `document_repository` the generation fixtures archive
+    into, so a test that stores a snapshot and then submits sees the log pick up
+    that exact snapshot rather than a stand-in.
+    """
+    return SubmittedApplicationLog(
+        tracked_application_repository=tracked_application_repository,
+        document_repository=document_repository,
+        job_posting_repository=StubJobPostingRepository(posting),
+        id_generator=SequentialIdGenerator(prefix="tracked"),
+    )

@@ -78,6 +78,14 @@ class TrackedApplication:
     user_id: str
     #: The source job record this application was made against.
     job_posting_id: str
+    #: Identifies the submission event that produced this row, so logging the
+    #: same submission twice cannot produce two records. Supplied by the
+    #: caller (the submission flow) rather than generated here — a value this
+    #: entity invented would be unique on every attempt, which is the opposite
+    #: of an idempotency key. Unique per candidate at the schema level, so a
+    #: double-clicked submit button collides in the database rather than
+    #: relying on a read that two concurrent requests can both pass.
+    submission_key: str
     #: Copied from the posting at record time — see the module docstring.
     company_name: str
     role_title: str
@@ -105,6 +113,12 @@ class TrackedApplication:
             raise InvalidValueError(
                 "TrackedApplication requires a non-empty job_posting_id — a "
                 "tracked application always links back to the job it was for."
+            )
+        if not self.submission_key.strip():
+            raise InvalidValueError(
+                "TrackedApplication requires a non-empty submission_key — it is "
+                "what makes logging the same submission twice a no-op instead "
+                "of a duplicate application."
             )
         if not self.company_name.strip():
             raise InvalidValueError("TrackedApplication.company_name cannot be empty.")
@@ -153,6 +167,7 @@ class TrackedApplication:
         application_id: str,
         user_id: str,
         job_posting: JobPosting,
+        submission_key: str,
         resume_document: ApplicationDocument,
         cover_letter_document: ApplicationDocument | None = None,
         applied_at: datetime | None = None,
@@ -188,6 +203,7 @@ class TrackedApplication:
             id=application_id,
             user_id=user_id,
             job_posting_id=job_posting.id,
+            submission_key=submission_key,
             company_name=job_posting.company,
             role_title=job_posting.title,
             applied_at=applied_at if applied_at is not None else _utcnow(),

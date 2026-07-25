@@ -371,6 +371,16 @@ class TrackedApplicationModel(Base):
 
     __tablename__ = "tracked_applications"
     __table_args__ = (
+        # What makes logging a submission idempotent, and the reason it is a
+        # constraint rather than a check in the service: two concurrent
+        # requests from a double-clicked submit button can both pass a
+        # "does it already exist?" read, and only the database can refuse the
+        # second write. The logger catches this and returns the row that won.
+        UniqueConstraint(
+            "user_id",
+            "submission_key",
+            name="uq_tracked_applications_submission_key",
+        ),
         # The tracker's feed: a candidate's applications, most recent first.
         Index(
             "ix_tracked_applications_user_id_applied_at",
@@ -386,6 +396,19 @@ class TrackedApplicationModel(Base):
     user_id: Mapped[str] = mapped_column(String(64))
     job_posting_id: Mapped[str] = mapped_column(
         ForeignKey("job_postings.id", ondelete="RESTRICT"), index=True
+    )
+    #: Identifies the submission event this row was logged from — in practice
+    #: the id of the submitted review. Unique per candidate (see
+    #: `__table_args__`): that constraint is the idempotency guarantee, not an
+    #: incidental index. Also answers "which submission produced this row?"
+    #: without a second table.
+    submission_key: Mapped[str] = mapped_column(
+        String(128),
+        comment=(
+            "The submission event this row was logged from (in practice the "
+            "submitted review's id). Unique per candidate — this is the "
+            "idempotency guarantee for submission logging."
+        ),
     )
     #: Snapshotted from the posting — see the class docstring.
     company_name: Mapped[str] = mapped_column(String(255))

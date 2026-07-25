@@ -638,6 +638,39 @@ went out with it.
   in the documents this row references, behind their own flags. Which is why
   these columns are ids: the row stays loggable.
 
+### Logging a submission into the tracker
+
+A record is created by the act of submitting, not by a separate "add to
+tracker" step. `SubmitApplicationReview` — the one path that marks an
+application as sent — calls `SubmittedApplicationLog` after it persists the
+submitted review.
+
+- **Reuse, never regeneration.** The log reads the resume and cover letter
+  through `ApplicationDocumentRepository.get_latest`, the documented answer to
+  "the document this application went out with". The service holds no
+  generator and no LLM port, so there is no path from submitting to producing a
+  document — a missing resume snapshot is an error
+  (`NoStoredApplicationDocumentError`), never a prompt to make one. Deliberate:
+  generating at log time reads today's profile through today's model and could
+  record something the employer never received.
+- **Role, company, and date are derived, not passed.** The caller supplies the
+  posting id and the submission time; `record_sent` copies the role and company
+  off the posting itself, and the date is the `submitted_at` recorded on the
+  review. None of the three can be supplied wrongly at the call site.
+- **Idempotent per submission.** `submission_key` is the submitted review's id,
+  and it is unique per candidate at the schema level. The log reads before it
+  writes, and if two concurrent requests (a double-clicked submit) both pass
+  that read, the constraint refuses the loser, which then returns the row that
+  won. A replay produces the one record; it never moves the recorded date or
+  resets a status that has since advanced.
+- **A logging failure never fails a submission.** The review is marked
+  submitted and persisted *first*; only then is the tracker written. If that
+  write fails, the use case still succeeds — the candidate's application is
+  with the employer, and reporting a failure would tell them something false
+  about it while inviting a retry the domain refuses anyway. The failure is
+  logged at ERROR with the review, user, and posting ids, and the idempotency
+  above is what makes replaying it safe rather than double-counting.
+
 `tests/infrastructure/test_tracked_application_persistence_smoke.py` proves the
 path against a **real** database, the same way `test_persistence_smoke.py`
 does: it archives an Epic 04 resume and cover letter, records an application

@@ -27,6 +27,7 @@ from src.application.services.application_review_sessions import (
 )
 from src.application.services.provenance_fact_assembler import ProvenanceFactAssembler
 from src.application.services.relevant_answer_selector import RelevantAnswerSelector
+from src.application.services.submitted_application_log import SubmittedApplicationLog
 from src.application.use_cases.abandon_portal_handoff import AbandonPortalHandoff
 from src.application.use_cases.analyze_job_application import (
     AnalyzeJobApplication,
@@ -153,6 +154,9 @@ from src.infrastructure.persistence.profile_repository_impl import (
 )
 from src.infrastructure.persistence.resume_repository_impl import (
     SqlAlchemyResumeRepository,
+)
+from src.infrastructure.persistence.tracked_application_repository_impl import (
+    SqlAlchemyTrackedApplicationRepository,
 )
 from src.infrastructure.services.uuid_id_generator import UuidIdGenerator
 from src.infrastructure.storage.local_file_storage import LocalFileStorage
@@ -333,6 +337,12 @@ def _application_document_repository(
     session: AsyncSession = Depends(get_session),
 ) -> SqlAlchemyApplicationDocumentRepository:
     return SqlAlchemyApplicationDocumentRepository(session)
+
+
+def _tracked_application_repository(
+    session: AsyncSession = Depends(get_session),
+) -> SqlAlchemyTrackedApplicationRepository:
+    return SqlAlchemyTrackedApplicationRepository(session)
 
 
 def _application_document_archive(
@@ -693,13 +703,33 @@ def get_submit_application_review_use_case(
     handoff_repository: SqlAlchemyPortalHandoffRepository = Depends(
         _portal_handoff_repository
     ),
+    document_repository: SqlAlchemyApplicationDocumentRepository = Depends(
+        _application_document_repository
+    ),
+    job_posting_repository: SqlAlchemyJobPostingRepository = Depends(
+        _job_posting_repository
+    ),
+    tracked_application_repository: SqlAlchemyTrackedApplicationRepository = Depends(
+        _tracked_application_repository
+    ),
 ) -> SubmitApplicationReview:
-    """The submit path takes a review store and the hand-off store, and nothing
-    else. Notably no browser: submitting records the candidate's own act, and
+    """The submit path takes a review store, the hand-off store, and the tracker
+    log. Notably no browser: submitting records the candidate's own act, and
     ApplyFlow does not press the portal's button (see
-    `SubmitApplicationReview`)."""
+    `SubmitApplicationReview`).
+
+    The log reads the stored Epic 04 snapshots rather than generating anything,
+    which is why no generator or LLM client is wired in here — there is no path
+    from submitting to producing a document."""
     return SubmitApplicationReview(
-        review_repository=review_repository, handoff_repository=handoff_repository
+        review_repository=review_repository,
+        handoff_repository=handoff_repository,
+        submitted_application_log=SubmittedApplicationLog(
+            tracked_application_repository=tracked_application_repository,
+            document_repository=document_repository,
+            job_posting_repository=job_posting_repository,
+            id_generator=UuidIdGenerator(),
+        ),
     )
 >>>>>>> origin/main
 

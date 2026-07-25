@@ -67,6 +67,29 @@ class DocumentVersionConflictError(ApplicationError):
         )
 
 
+class ApplicationAlreadyLoggedError(ApplicationError):
+    """Raised when a submission has already been logged as a tracked
+    application — the unique constraint on (`user_id`, `submission_key`)
+    refused a second row for the same submission event.
+
+    Not a failure the caller has to handle as one. It is the race half of
+    idempotent logging: `SubmittedApplicationLog` reads before it writes, and
+    two concurrent requests (a double-clicked submit button) can both pass that
+    read. Whichever loses gets this, re-reads, and returns the row that won —
+    so the candidate's application is logged exactly once either way.
+
+    Carries only ids, so it is safe to log.
+    """
+
+    def __init__(self, *, user_id: str, submission_key: str) -> None:
+        self.user_id = user_id
+        self.submission_key = submission_key
+        super().__init__(
+            f"Submission '{submission_key}' is already logged as a tracked "
+            "application; it will not be logged twice."
+        )
+
+
 class TrackedApplicationReferenceError(ApplicationError):
     """Raised when a tracked application could not be stored because one of
     the rows it points at does not exist — the job posting, the resume
