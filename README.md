@@ -64,6 +64,15 @@ before any feature UI loads.
    the exact URL automation stopped on. Two exits, both real — "I've done it —
    continue" and "I'll finish this one myself".
 
+4. **Review & submit** (`ReviewAndSubmit`) — the filled application, every field
+   editable, and a submit button only the candidate can press. Each answer shows
+   who put it there ("filled by ApplyFlow" / "your answer" / "you declined") and,
+   where ApplyFlow left a field alone, why. Sensitive fields and EEO
+   self-identification are flagged and cannot be skipped: each needs a confirm,
+   an edit, or a decline before submission is possible. An open hard-stop
+   hand-off is presented here too, with its resume instructions, and blocks
+   submitting. See "Review & submit (the user is the submitter)" below.
+
 Every route the flow touches is authenticated, so the shell carries an access
 token field (`AccessTokenField`) that stores a Supabase token in
 `localStorage` — the placeholder until a real password sign-in screen lands.
@@ -990,6 +999,103 @@ returned only to its owner, never logged.
 
 ---
 
+## Review & submit (the user is the submitter)
+
+**Nothing is ever submitted unattended.** ApplyFlow prepares an application and
+then stops: the candidate reads it, changes whatever they like, decides every
+sensitive field, and presses submit themselves. That is the whole point of the
+flow, so the gates are in the domain rather than in the UI — a client that
+ignores them gets the same refusal the button would have shown.
+
+```
+POST /api/job-postings/{id}/review          fill the form, open a review
+GET  /api/job-postings/{id}/review          the review in progress
+POST /api/application-reviews/{id}/answers/{field_key}   set | confirm | decline
+POST /api/application-reviews/{id}/submit   the candidate submits
+```
+
+### Opening a review is three steps, in this order
+
+1. **Check the portal** (`InspectApplicationPortal`) — read it before touching
+   it. A hard boundary means the response is the hand-off, `review` is null, and
+   **nothing was filled**.
+2. **Fill it** (`AutofillApplicationForm`) — every standard field from the
+   profile and the stored documents, plus a screenshot of the result.
+3. **Open the review** (`OpenApplicationReview`) — turn that report into
+   `ApplicationReview`: every question in page order, editable, with the
+   sensitive ones awaiting a decision.
+
+The interface layer sequences those three; every rule lives inward. Step 3
+re-checks the hand-off gate itself, so skipping step 1 could not produce a
+review on a walled portal — step 1 exists to avoid filling a form nobody could
+have submitted, not to be the gate.
+
+### What the candidate sees, and can change
+
+`answers` is every field the form presented, in the portal's order, whether it
+was filled or not — a review that showed only the problems would have people
+approving an application they never read. Each answer carries:
+
+- **`origin`** — `autofilled`, `candidate`, `declined`, or `unanswered`. Who is
+  responsible for this answer is a different claim from what the answer is, and
+  the review says both.
+- **`explanation`** — why ApplyFlow left it, in words that can be acted on
+  ("your profile does not answer this yet", "ApplyFlow never answers this one").
+  A value the portal *refused* is not shown as the answer: the field stays
+  unanswered and the explanation says what was tried and what the form accepts.
+- **`sensitivity`** / **`needs_decision`** — see below.
+
+Any field can be edited, including the ones ApplyFlow filled, and an edit
+records the candidate as its author. Emptying a field is stored as a *decline*
+rather than as a blank of unknown intent.
+
+### Sensitive fields cannot be passed over
+
+Every sensitive field — the four legal attestations and EEO self-identification
+— starts `needs_decision: true`, and only the candidate's own action clears it:
+**confirm** the answer as it stands, **change** it, or **decline** it. There is
+no bulk approve, and nothing else in the system settles one. Declining is always
+offered, because a gate with one way through is not consent.
+
+That gate is enforced in `ApplicationReview.record_submission`, which refuses
+while any `SubmissionBlocker` stands:
+
+- `PENDING_SENSITIVE_DECISION` — a sensitive field the candidate has not settled.
+- `OPEN_HARD_STOP` — an unresolved hand-off on this portal; handing someone an
+  application to send through a portal that is still walled is a dead end.
+
+A required field with no answer is deliberately **not** a blocker. The
+`required` flag is only as trustworthy as the portal's markup (the browser port
+treats `False` as "not asserted"), so it is surfaced as a prominent warning and
+the candidate decides — being locked out of recording your own submission by a
+signal ApplyFlow may have misread is worse than sending an incomplete form.
+
+### Submitting
+
+`can_submit` is the single flag the button binds to, and the submit route
+re-computes the same blockers against the hand-off state *as of now* — so a wall
+raised while the candidate was reading is caught, and a client that posts anyway
+is refused (409, naming what is missing). Submitting twice is a 409 too.
+
+Once submitted, the answers are frozen: they are the record of what the
+candidate sent, for the same reason `ApplicationDocument` snapshots are
+write-once. Re-filling a posting opens a *new* review and supersedes any draft;
+a submitted one is never touched.
+
+**ApplyFlow does not press the portal's submit button.** It cannot — the harness
+discovers no buttons, so there is nothing there to press — and the API never
+implies it did: the status is `submitted_by_user`, and the submit response
+carries `apply_url`, which is where the candidate goes to complete the send with
+their approved answers in front of them. Handing a live filled browser session
+to a human to finish in place is a separate capability and is not built.
+
+SENSITIVE: a review's answers are what goes onto a real application (name,
+email, address, work-authorization declarations) and the submission note is the
+candidate's free text. Both are flagged on `application_reviews`, returned only
+to their owner, and never logged — log the review id, the posting id, and counts.
+
+---
+
 ## Getting Started
 
 ### Option A — Docker (recommended)
@@ -1100,6 +1206,10 @@ All `/api/applications*` and `/api/resumes*` routes require
 | GET    | `/api/portal/handoffs?open_only=`   | Hand-offs waiting on the candidate, plus recent resolved ones | Yes |
 | POST   | `/api/portal/handoffs/{id}/resume`  | "I did the human-only step" — ApplyFlow may work this portal again | Yes |
 | POST   | `/api/portal/handoffs/{id}/abandon` | "I'm finishing this application myself" — ApplyFlow stops waiting | Yes |
+| POST   | `/api/job-postings/{id}/review`     | Fill the application form and open a review over it (200 with `review: null` when a hard stop blocked it) | Yes |
+| GET    | `/api/job-postings/{id}/review`     | The review in progress for this posting, with the submit gate | Yes |
+| POST   | `/api/application-reviews/{id}/answers/{field_key}` | One decision about one field: `set` a value, `confirm` it, or `decline` it | Yes |
+| POST   | `/api/application-reviews/{id}/submit` | **The candidate submits.** Refused while any blocker stands; returns the portal URL to finish on | Yes |
 
 ---
 

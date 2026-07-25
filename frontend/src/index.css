@@ -536,3 +536,115 @@ button.secondary {
 .portal-fields .pill {
   margin-left: 0.4rem;
 }
+
+/* ---- Review & submit ---------------------------------------------------- */
+
+.review-answers {
+  list-style: none;
+  margin: 1rem 0 0;
+  padding: 0;
+  counter-reset: review-answer;
+}
+
+.review-answer {
+  border-top: 1px solid #e5e7eb;
+  padding: 0.9rem 0;
+}
+
+.review-answer label {
+  display: block;
+  font-weight: 600;
+  font-size: 0.95rem;
+  margin-bottom: 0.3rem;
+}
+
+.review-answer label .pill,
+.review-answer-label .pill {
+  margin-left: 0.4rem;
+  font-weight: 500;
+}
+
+/* A field still waiting on the candidate reads as unfinished business: warm
+   left rule, same visual language as a hard-stop boundary. */
+.review-answer.needs-decision {
+  border-left: 3px solid #f59e0b;
+  padding-left: 0.85rem;
+  background: #fffbeb;
+}
+
+.review-answer input,
+.review-answer textarea {
+  width: 100%;
+  font: inherit;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+}
+
+.review-answer-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-top: 0.45rem;
+}
+
+/* Who put the answer there, at a glance — the distinction a reviewer is
+   actually scanning for. */
+.pill.origin-autofilled {
+  background: #e0e7ff;
+  color: #3730a3;
+}
+
+.pill.origin-candidate {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.pill.origin-declined,
+.pill.origin-unanswered {
+  background: #f3f4f6;
+  color: #4b5563;
+}
+
+.review-submit-box {
+  border-top: 1px solid #e5e7eb;
+  margin-top: 1rem;
+  padding-top: 1rem;
+}
+
+.review-submit-box .quiet {
+  margin: 0.45rem 0 0;
+  max-width: 60ch;
+}
+
+.review-proof {
+  margin-top: 1rem;
+  font-size: 0.9rem;
+}
+
+.review-proof img {
+  max-width: 100%;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  margin-top: 0.5rem;
+}
+
+.review-answers.submitted .review-answer {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.45rem 0;
+}
+
+.review-answers.submitted .review-answer-label {
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+
+.review-answers.submitted .review-answer-value {
+  text-align: right;
+  font-size: 0.92rem;
+  max-width: 55%;
+  overflow-wrap: anywhere;
+}

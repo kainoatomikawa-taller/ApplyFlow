@@ -1,5 +1,7 @@
 import { getAccessToken } from './accessToken';
 import type {
+  AnswerAction,
+  ApplicationReview,
   CreateApplicationInput,
   DocumentKind,
   FeedbackRating,
@@ -8,11 +10,13 @@ import type {
   HealthStatus,
   JobApplication,
   JobMatchFeedback,
+  OpenApplicationReview,
   PortalHandoff,
   PortalHandoffList,
   PortalInspection,
   RankedJob,
   ResolvedGapAnswer,
+  SubmittedApplicationReview,
   TailoredResume,
 } from '../types';
 
@@ -173,6 +177,54 @@ export const applyFlowApi = {
       method: 'POST',
       body: JSON.stringify({ note }),
     });
+  },
+
+  /**
+   * Fill this posting's application form and open a review over it. Supersedes
+   * any review still in progress for the job. A portal with a hard boundary
+   * comes back with `review: null` and the hand-off attached — a normal 200,
+   * because stopping there is correct.
+   */
+  openApplicationReview(jobPostingId: string): Promise<OpenApplicationReview> {
+    return request<OpenApplicationReview>(
+      `/api/job-postings/${jobPostingId}/review`,
+      { method: 'POST' },
+    );
+  },
+
+  /** The review in progress for this posting, if there is one (404 if not). */
+  getApplicationReview(jobPostingId: string): Promise<ApplicationReview> {
+    return request<ApplicationReview>(`/api/job-postings/${jobPostingId}/review`);
+  },
+
+  /**
+   * Write an answer, approve the one that is there, or decline the field.
+   * Returns the whole review: one decision can change what is blocking submit.
+   */
+  reviseReviewedAnswer(
+    reviewId: string,
+    fieldKey: string,
+    action: AnswerAction,
+    value = '',
+  ): Promise<ApplicationReview> {
+    return request<ApplicationReview>(
+      `/api/application-reviews/${reviewId}/answers/${encodeURIComponent(fieldKey)}`,
+      { method: 'POST', body: JSON.stringify({ action, value }) },
+    );
+  },
+
+  /**
+   * The candidate submits. Refused (409) while a blocker stands or if the
+   * review was already submitted — ApplyFlow never reaches this on its own.
+   */
+  submitApplicationReview(
+    reviewId: string,
+    note = '',
+  ): Promise<SubmittedApplicationReview> {
+    return request<SubmittedApplicationReview>(
+      `/api/application-reviews/${reviewId}/submit`,
+      { method: 'POST', body: JSON.stringify({ note }) },
+    );
   },
 
   /**

@@ -1,16 +1,11 @@
 import { useState } from 'react';
 import { applyFlowApi } from '../api/client';
-import type { HardStop, HardStopKind, PortalHandoff, PortalInspection } from '../types';
+import { HandoffNotice } from './HandoffNotice';
+import type { PortalHandoff, PortalInspection } from '../types';
 
 interface Props {
   jobPostingId: string;
 }
-
-const BOUNDARY_TITLES: Record<HardStopKind, string> = {
-  captcha: 'A CAPTCHA',
-  electronic_signature: 'An electronic signature',
-  account_wall: 'A sign-in or account wall',
-};
 
 /**
  * The hand-off surface: check what the application portal is presenting, and
@@ -91,7 +86,7 @@ export function PortalHandoffPanel({ jobPostingId }: Props) {
       {error && <p className="error">{error}</p>}
 
       {handoff !== null ? (
-        <HandoffCard
+        <HandoffNotice
           handoff={handoff}
           note={note}
           busy={busy}
@@ -147,108 +142,5 @@ function CleanPortal({ inspection }: { inspection: PortalInspection }) {
         </p>
       )}
     </>
-  );
-}
-
-interface HandoffCardProps {
-  handoff: PortalHandoff;
-  note: string;
-  busy: boolean;
-  onNoteChange: (note: string) => void;
-  onResolve: (action: 'resume' | 'abandon') => void;
-}
-
-function HandoffCard({
-  handoff,
-  note,
-  busy,
-  onNoteChange,
-  onResolve,
-}: HandoffCardProps) {
-  if (!handoff.is_open) {
-    return (
-      <div className="notice notice-ok">
-        {handoff.status === 'resumed' ? (
-          <>
-            Thanks — noted that you handled this. ApplyFlow will read the portal
-            again next time it works on this application, and will stop again if the
-            boundary is still there.
-          </>
-        ) : (
-          <>
-            Left with you. ApplyFlow is not going to work this portal, so nothing
-            here is waiting on you.
-          </>
-        )}
-        {handoff.resolution_note && (
-          <p className="quiet">Your note: {handoff.resolution_note}</p>
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <div className="handoff-open">
-      <div className="notice notice-warn">
-        <strong>Over to you.</strong> ApplyFlow stopped on this portal and has
-        filled in nothing.
-      </div>
-
-      {handoff.hard_stops.map((stop) => (
-        <BoundaryDetail key={stop.kind} stop={stop} />
-      ))}
-
-      <p>
-        <a href={handoff.paused_url} target="_blank" rel="noreferrer">
-          Open the portal where ApplyFlow stopped
-        </a>
-      </p>
-
-      <div className="field">
-        <label htmlFor={`handoff-note-${handoff.id}`}>
-          Anything worth remembering? (optional)
-        </label>
-        <input
-          id={`handoff-note-${handoff.id}`}
-          value={note}
-          placeholder="e.g. created the account with my personal email"
-          onChange={(event) => onNoteChange(event.target.value)}
-        />
-      </div>
-
-      <div className="handoff-actions">
-        <button type="button" disabled={busy} onClick={() => onResolve('resume')}>
-          I&apos;ve done it — continue
-        </button>
-        <button
-          type="button"
-          className="secondary"
-          disabled={busy}
-          onClick={() => onResolve('abandon')}
-        >
-          I&apos;ll finish this one myself
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function BoundaryDetail({ stop }: { stop: HardStop }) {
-  return (
-    <div className="handoff-boundary">
-      <h4>{BOUNDARY_TITLES[stop.kind]}</h4>
-      <p>{stop.refusal_reason}</p>
-      <p>
-        <strong>What to do:</strong> {stop.human_action}
-      </p>
-      <details>
-        <summary className="quiet">Why ApplyFlow thinks so</summary>
-        <ul>
-          {stop.evidence.map((line) => (
-            <li key={line}>{line}</li>
-          ))}
-        </ul>
-      </details>
-    </div>
   );
 }

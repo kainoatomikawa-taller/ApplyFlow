@@ -6,9 +6,11 @@ identical to each other:
 - the provenance-guarded generation collaborators. `GenerateTailoredResume`
   and `GenerateCoverLetter` take the same ones, and the two flows must agree
   about what counts as evidence.
-- the portal-automation doubles (a scriptable browser harness and an
-  in-memory hand-off store), shared by the inspection flow and the two
-  hand-off resolutions, which have to agree about what an open hand-off is.
+- the portal-automation doubles (a scriptable browser harness, an in-memory
+  hand-off store, and an in-memory review store), shared by the inspection
+  flow, the two hand-off resolutions, and the review-and-submit flow — all of
+  which have to agree about what an open hand-off is and what an open review
+  is.
 """
 
 from __future__ import annotations
@@ -30,15 +32,22 @@ from src.application.services.application_document_archive import (
 from src.application.services.provenance_fact_assembler import ProvenanceFactAssembler
 from src.domain.entities.answer_memory import AnswerMemory
 from src.domain.entities.application_document import ApplicationDocument
+from src.domain.entities.application_review import ApplicationReview
 from src.domain.entities.job_posting import JobPosting
 from src.domain.entities.portal_handoff import PortalHandoff
 from src.domain.entities.skill import Skill
 from src.domain.entities.user_profile import UserProfile
 from src.domain.entities.work_history_entry import WorkHistoryEntry
-from src.domain.exceptions import PortalHandoffNotFoundError
+from src.domain.exceptions import (
+    ApplicationReviewNotFoundError,
+    PortalHandoffNotFoundError,
+)
 from src.domain.repositories.answer_memory_repository import AnswerMemoryRepository
 from src.domain.repositories.application_document_repository import (
     ApplicationDocumentRepository,
+)
+from src.domain.repositories.application_review_repository import (
+    ApplicationReviewRepository,
 )
 from src.domain.repositories.job_posting_repository import JobPostingRepository
 from src.domain.repositories.portal_handoff_repository import PortalHandoffRepository
@@ -484,3 +493,69 @@ class InMemoryPortalHandoffRepository(PortalHandoffRepository):
 @pytest.fixture
 def handoff_repository() -> InMemoryPortalHandoffRepository:
     return InMemoryPortalHandoffRepository()
+
+
+class InMemoryApplicationReviewRepository(ApplicationReviewRepository):
+    """Stores reviews by id, and enforces the same one-open-per-posting rule the
+    database does — a fake that allowed two would let a test pass that
+    production rejects."""
+
+    def __init__(self, reviews: list[ApplicationReview] | None = None) -> None:
+        self.reviews: dict[str, ApplicationReview] = {
+            review.id: review for review in reviews or []
+        }
+        self.superseded: list[tuple[str, str]] = []
+
+    async def add(self, review: ApplicationReview) -> None:
+        if review.is_open and any(
+            other.is_open
+            and other.user_id == review.user_id
+            and other.job_posting_id == review.job_posting_id
+            for other in self.reviews.values()
+        ):
+            raise AssertionError(
+                "a second open review was added for the same posting"
+            )
+        self.reviews[review.id] = review
+
+    async def update(self, review: ApplicationReview) -> None:
+        if review.id not in self.reviews:
+            raise ApplicationReviewNotFoundError(review.id)
+        self.reviews[review.id] = review
+
+    async def get_by_id(self, review_id: str) -> ApplicationReview | None:
+        return self.reviews.get(review_id)
+
+    async def get_active_for_job(
+        self, *, user_id: str, job_posting_id: str
+    ) -> ApplicationReview | None:
+        for review in self.reviews.values():
+            if (
+                review.is_open
+                and review.user_id == user_id
+                and review.job_posting_id == job_posting_id
+            ):
+                return review
+        return None
+
+    async def supersede_active(self, *, user_id: str, job_posting_id: str) -> None:
+        self.superseded.append((user_id, job_posting_id))
+        for review_id, review in list(self.reviews.items()):
+            if (
+                review.is_open
+                and review.user_id == user_id
+                and review.job_posting_id == job_posting_id
+            ):
+                del self.reviews[review_id]
+
+    async def list_for_user(
+        self, user_id: str, *, limit: int = 100
+    ) -> list[ApplicationReview]:
+        owned = [r for r in self.reviews.values() if r.user_id == user_id]
+        owned.sort(key=lambda review: review.created_at, reverse=True)
+        return owned[:limit]
+
+
+@pytest.fixture
+def review_repository() -> InMemoryApplicationReviewRepository:
+    return InMemoryApplicationReviewRepository()

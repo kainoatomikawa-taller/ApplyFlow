@@ -332,6 +332,97 @@ class ApplicationDocumentModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class ApplicationReviewModel(Base):
+    """One filled application under review by the candidate, and the record of
+    them submitting it — see `ApplicationReview`.
+
+    Stored because reviewing an application is not a single-sitting job: the
+    candidate reads the answers, goes to check what their visa is actually
+    called, comes back, and finishes later. A review that lived only in a
+    response would lose every decision they had already made, starting with the
+    sensitive ones they had confirmed.
+
+    The partial unique index allows at most one review *in progress* per
+    candidate and posting. Two would mean two sets of answers for one
+    application and nothing to say which the candidate meant. Submitted rows are
+    exempt: a posting applied to twice is two real events, each keeping its own
+    answers and timestamps. (Partial indexes are a Postgres feature; on a
+    backend that ignores the `WHERE` clause this would become "one review per
+    posting, ever", which would reject the second application — this store is
+    Postgres.)
+
+    `ON DELETE CASCADE` on the posting, matching `portal_handoffs` rather than
+    `application_documents`: a review is the working surface for an application
+    in flight, not the archived record of what was sent. The documents that went
+    with it are what survive a posting being pruned, and they have their own
+    table with RESTRICT.
+
+    SENSITIVE: `answers` is what goes onto a real application — name, email,
+    address, and the work-authorization declarations — and `submission_note` is
+    the candidate's own free text. Never log either; log `id`, `status`, and
+    counts.
+    """
+
+    __tablename__ = "application_reviews"
+    __table_args__ = (
+        Index(
+            "uq_application_reviews_open_per_job",
+            "user_id",
+            "job_posting_id",
+            unique=True,
+            postgresql_where=text("status = 'in_review'"),
+        ),
+        # "What have I reviewed and sent?", newest first.
+        Index("ix_application_reviews_user_id_created_at", "user_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64))
+    job_posting_id: Mapped[str] = mapped_column(
+        ForeignKey("job_postings.id", ondelete="CASCADE"), index=True
+    )
+    #: The apply URL the fill pass ended on — where the candidate goes to send
+    #: the application.
+    apply_url: Mapped[str] = mapped_column(Text)
+    ats_provider: Mapped[str] = mapped_column(
+        String(32),
+        comment=(
+            "Which supported ATS platform the form was read as: greenhouse | "
+            "lever | ashby. See src/domain/value_objects/ats_provider.py."
+        ),
+    )
+    status: Mapped[str] = mapped_column(
+        String(32),
+        comment=(
+            "Review lifecycle: in_review | submitted_by_user. Only a "
+            "candidate's own action reaches the second. See "
+            "src/domain/value_objects/review_status.py."
+        ),
+    )
+    #: Every question the form presented, in page order, as
+    #: `[{"key", "label", "widget_kind", "value", "slot", "sensitivity",
+    #: "required", "origin", "decided_by_candidate", "explanation"}]`.
+    answers: Mapped[list[dict[str, object]]] = mapped_column(
+        JSON,
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=(
+            "SENSITIVE: the answers on a real application, plus their "
+            "provenance and the candidate's decisions. "
+            "See src/domain/value_objects/reviewed_answer.py."
+        ),
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    #: Whether the fill pass captured a screenshot. The image is not stored —
+    #: it is proof for the session that produced it.
+    screenshot_captured: Mapped[bool] = mapped_column(Boolean, default=False)
+    submitted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    submission_note: Mapped[str] = mapped_column(
+        Text, default="", info=_SENSITIVE_COLUMN_INFO, comment=_SENSITIVE_COMMENT
+    )
+
+
 class PortalHandoffModel(Base):
     """One application portal where automation stopped at a hard boundary and
     handed control to the candidate — see `PortalHandoff`.

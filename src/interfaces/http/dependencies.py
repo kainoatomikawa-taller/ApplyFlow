@@ -29,6 +29,7 @@ from src.application.use_cases.analyze_job_application import (
 from src.application.use_cases.analyze_scoring_feedback import (
     AnalyzeScoringFeedback,
 )
+from src.application.use_cases.autofill_application_form import AutofillApplicationForm
 from src.application.use_cases.create_job_application import (
     CreateJobApplication,
 )
@@ -41,6 +42,7 @@ from src.application.use_cases.generate_gap_resolution_questions import (
 )
 from src.application.use_cases.generate_tailored_resume import GenerateTailoredResume
 from src.application.use_cases.get_application_document import GetApplicationDocument
+from src.application.use_cases.get_application_review import GetApplicationReview
 from src.application.use_cases.get_latest_application_document import (
     GetLatestApplicationDocument,
 )
@@ -59,6 +61,7 @@ from src.application.use_cases.list_job_match_feedback import (
 )
 from src.application.use_cases.list_portal_handoffs import ListPortalHandoffs
 from src.application.use_cases.list_resumes import ListResumes
+from src.application.use_cases.open_application_review import OpenApplicationReview
 from src.application.use_cases.parse_resume import ParseResume
 from src.application.use_cases.rank_matched_job_postings import (
     RankMatchedJobPostings,
@@ -67,6 +70,10 @@ from src.application.use_cases.resolve_gap_answer import ResolveGapAnswer
 from src.application.use_cases.resume_portal_handoff import ResumePortalHandoff
 from src.application.use_cases.revise_generated_document import (
     ReviseGeneratedDocument,
+)
+from src.application.use_cases.revise_reviewed_answer import ReviseReviewedAnswer
+from src.application.use_cases.submit_application_review import (
+    SubmitApplicationReview,
 )
 from src.application.use_cases.submit_job_application import (
     SubmitJobApplication,
@@ -108,6 +115,9 @@ from src.infrastructure.persistence.answer_memory_repository_impl import (
 )
 from src.infrastructure.persistence.application_document_repository_impl import (
     SqlAlchemyApplicationDocumentRepository,
+)
+from src.infrastructure.persistence.application_review_repository_impl import (
+    SqlAlchemyApplicationReviewRepository,
 )
 from src.infrastructure.persistence.database import get_session
 from src.infrastructure.persistence.job_application_repository_impl import (
@@ -522,6 +532,92 @@ def get_abandon_portal_handoff_use_case(
     repository: SqlAlchemyPortalHandoffRepository = Depends(_portal_handoff_repository),
 ) -> AbandonPortalHandoff:
     return AbandonPortalHandoff(repository=repository)
+
+
+def _application_review_repository(
+    session: AsyncSession = Depends(get_session),
+) -> SqlAlchemyApplicationReviewRepository:
+    return SqlAlchemyApplicationReviewRepository(session)
+
+
+def get_autofill_application_form_use_case(
+    job_posting_repository: SqlAlchemyJobPostingRepository = Depends(
+        _job_posting_repository
+    ),
+    profile_repository: SqlAlchemyProfileRepository = Depends(_profile_repository),
+    document_repository: SqlAlchemyApplicationDocumentRepository = Depends(
+        _application_document_repository
+    ),
+    browser_automation: PlaywrightBrowserAutomation = Depends(_browser_automation),
+) -> AutofillApplicationForm:
+    """The field planner is a pure default the use case builds itself, so no
+    wiring mistake here can produce a pass that skipped the mapping rules — or
+    the refusal to write into a field only the candidate may fill."""
+    return AutofillApplicationForm(
+        job_posting_repository,
+        profile_repository,
+        document_repository,
+        browser_automation,
+        AtsSafePdfRenderer(),
+    )
+
+
+def get_open_application_review_use_case(
+    review_repository: SqlAlchemyApplicationReviewRepository = Depends(
+        _application_review_repository
+    ),
+    handoff_repository: SqlAlchemyPortalHandoffRepository = Depends(
+        _portal_handoff_repository
+    ),
+) -> OpenApplicationReview:
+    return OpenApplicationReview(
+        review_repository=review_repository,
+        handoff_repository=handoff_repository,
+        id_generator=UuidIdGenerator(),
+    )
+
+
+def get_application_review_use_case(
+    review_repository: SqlAlchemyApplicationReviewRepository = Depends(
+        _application_review_repository
+    ),
+    handoff_repository: SqlAlchemyPortalHandoffRepository = Depends(
+        _portal_handoff_repository
+    ),
+) -> GetApplicationReview:
+    return GetApplicationReview(
+        review_repository=review_repository, handoff_repository=handoff_repository
+    )
+
+
+def get_revise_reviewed_answer_use_case(
+    review_repository: SqlAlchemyApplicationReviewRepository = Depends(
+        _application_review_repository
+    ),
+    handoff_repository: SqlAlchemyPortalHandoffRepository = Depends(
+        _portal_handoff_repository
+    ),
+) -> ReviseReviewedAnswer:
+    return ReviseReviewedAnswer(
+        review_repository=review_repository, handoff_repository=handoff_repository
+    )
+
+
+def get_submit_application_review_use_case(
+    review_repository: SqlAlchemyApplicationReviewRepository = Depends(
+        _application_review_repository
+    ),
+    handoff_repository: SqlAlchemyPortalHandoffRepository = Depends(
+        _portal_handoff_repository
+    ),
+) -> SubmitApplicationReview:
+    """The submit path takes a review store and the hand-off store, and nothing
+    else. Notably no browser: submitting records the candidate's own act, and
+    ApplyFlow does not press the portal's button (see
+    `SubmitApplicationReview`)."""
+    return SubmitApplicationReview(
+        review_repository=review_repository, handoff_repository=handoff_repository
+    )
 
 
 def _auth_verifier() -> AuthVerifierPort:

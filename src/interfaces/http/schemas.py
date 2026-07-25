@@ -377,3 +377,91 @@ class ResolvePortalHandoffRequest(BaseModel):
 class PortalHandoffListResponse(BaseModel):
     handoffs: list[PortalHandoffResponse] = Field(default_factory=list)
     open_count: int = 0
+
+
+class ReviewedAnswerResponse(BaseModel):
+    """One question on a filled application as it stands.
+
+    SENSITIVE: `value` is what goes onto a real application. Returned to its
+    owner only, and never logged (see `ApplicationReview`)."""
+
+    key: str
+    label: str
+    widget_kind: str
+    value: str
+    required: bool
+    origin: str
+    slot: str | None = None
+    sensitivity: str | None = None
+    is_sensitive: bool = False
+    needs_decision: bool = False
+    explanation: str = ""
+
+
+class SubmissionBlockerResponse(BaseModel):
+    kind: str
+    detail: str
+    field_key: str | None = None
+    field_label: str = ""
+
+
+class ApplicationReviewResponse(BaseModel):
+    """A filled application, everything still waiting on the candidate, and the
+    one flag a submit button binds to (`can_submit`)."""
+
+    id: str
+    job_posting_id: str
+    apply_url: str
+    ats_provider: str
+    status: str
+    is_open: bool
+    created_at: datetime
+    answers: list[ReviewedAnswerResponse] = Field(default_factory=list)
+    blockers: list[SubmissionBlockerResponse] = Field(default_factory=list)
+    can_submit: bool = False
+    handoff: PortalHandoffResponse | None = None
+    unanswered_required_keys: list[str] = Field(default_factory=list)
+    screenshot_captured: bool = False
+    submitted_at: datetime | None = None
+    submission_note: str = ""
+
+
+class OpenApplicationReviewResponse(BaseModel):
+    """The result of filling a form and opening a review over it.
+
+    `review` is null only when the portal is blocked by a hard stop: nothing was
+    filled, and `handoff` says why — a correct outcome, which is why it is a 200
+    rather than an error."""
+
+    job_posting_id: str
+    review: ApplicationReviewResponse | None = None
+    handoff: PortalHandoffResponse | None = None
+    #: The filled form as a base64 PNG, when the pass captured one. Proof the
+    #: candidate can check the answers against; not stored server-side.
+    screenshot_base64: str | None = None
+
+
+class ReviseReviewedAnswerRequest(BaseModel):
+    """One decision about one field: write an answer, approve the one that is
+    there, or leave it deliberately blank."""
+
+    action: Literal["set", "confirm", "decline"]
+    value: str = ""
+
+
+class SubmitApplicationReviewRequest(BaseModel):
+    # Capped at the entity's own limit (`ApplicationReview.MAX_NOTE_LENGTH`) so
+    # an over-long note is a 422 here rather than a domain error deeper in.
+    note: str = Field(default="", max_length=1000)
+
+
+class SubmitApplicationReviewResponse(BaseModel):
+    """What comes back when the candidate submits.
+
+    Carries `apply_url` because ApplyFlow does not press the portal's submit
+    button — it cannot (see `BrowserAutomationPort`). The submission is
+    recorded; sending it is the candidate's own act, and this is where they go
+    to finish."""
+
+    review: ApplicationReviewResponse
+    apply_url: str

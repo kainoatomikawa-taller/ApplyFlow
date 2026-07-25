@@ -232,3 +232,79 @@ export interface PortalHandoffList {
   handoffs: PortalHandoff[];
   open_count: number;
 }
+
+// ---- Review & submit ------------------------------------------------------
+
+/** Who is responsible for the answer currently in a field. */
+export type AnswerOrigin = 'unanswered' | 'autofilled' | 'candidate' | 'declined';
+
+export type FieldSensitivity = 'legal_attestation' | 'voluntary_self_id';
+
+export type ReviewStatus = 'in_review' | 'submitted_by_user';
+
+/**
+ * One question on the filled application. `needs_decision` is true for every
+ * sensitive field the candidate has not settled — the backend clears it only
+ * on their own action, so a UI can neither skip the decision nor fake it.
+ */
+export interface ReviewedAnswer {
+  key: string;
+  label: string;
+  widget_kind: string;
+  value: string;
+  required: boolean;
+  origin: AnswerOrigin;
+  slot: string | null;
+  sensitivity: FieldSensitivity | null;
+  is_sensitive: boolean;
+  needs_decision: boolean;
+  explanation: string;
+}
+
+export type SubmissionBlockerKind = 'pending_sensitive_decision' | 'open_hard_stop';
+
+export interface SubmissionBlocker {
+  kind: SubmissionBlockerKind;
+  detail: string;
+  field_key: string | null;
+  field_label: string;
+}
+
+export interface ApplicationReview {
+  id: string;
+  job_posting_id: string;
+  /** Where the candidate goes to send it. */
+  apply_url: string;
+  ats_provider: string;
+  status: ReviewStatus;
+  is_open: boolean;
+  created_at: string;
+  answers: ReviewedAnswer[];
+  blockers: SubmissionBlocker[];
+  /** False while anything in `blockers` stands. The submit button binds to it,
+   *  and the submit route re-checks the same rule. */
+  can_submit: boolean;
+  handoff: PortalHandoff | null;
+  /** Required fields with no answer — warnings, not blockers, since `required`
+   *  is only as trustworthy as the portal's markup. */
+  unanswered_required_keys: string[];
+  screenshot_captured: boolean;
+  submitted_at: string | null;
+  submission_note: string;
+}
+
+/** `review` is null only when a hard stop blocked the portal — nothing was
+ *  filled, and `handoff` says why. */
+export interface OpenApplicationReview {
+  job_posting_id: string;
+  review: ApplicationReview | null;
+  handoff: PortalHandoff | null;
+  screenshot_base64: string | null;
+}
+
+export type AnswerAction = 'set' | 'confirm' | 'decline';
+
+export interface SubmittedApplicationReview {
+  review: ApplicationReview;
+  apply_url: string;
+}

@@ -16,6 +16,7 @@ from src.infrastructure.persistence.database import dispose_engine
 from src.interfaces.http.controllers import (
     application_controller,
     application_document_controller,
+    application_review_controller,
     cover_letter_controller,
     document_revision_controller,
     gap_resolution_controller,
@@ -68,6 +69,7 @@ def create_app() -> FastAPI:
     app.include_router(document_revision_controller.router)
     app.include_router(application_document_controller.router)
     app.include_router(portal_handoff_controller.router)
+    app.include_router(application_review_controller.router)
     return app
 
 
