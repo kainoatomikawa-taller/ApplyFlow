@@ -219,7 +219,7 @@ class SubmitApplicationForm:
         excerpt = ""
         boundaries: tuple[ApplicationBoundary, ...] = ()
         try:
-            signals = await review.session.read_page_signals()
+            signals = await review.session.read_boundary_signals()
             boundaries = boundaries_in(signals)
             excerpt = signals.visible_text[:_CONFIRMATION_EXCERPT_LENGTH]
             final_url = signals.url

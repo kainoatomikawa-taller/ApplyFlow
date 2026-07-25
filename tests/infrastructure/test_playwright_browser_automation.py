@@ -26,10 +26,13 @@ from src.application.exceptions import (
     BrowserNavigationError,
     BrowserSessionClosedError,
     FormFieldNotFillableError,
+    HumanOnlyFieldError,
     RejectedFieldValueError,
     StaleFormFieldError,
 )
 from src.application.ports.browser_automation_port import FormField, FormFieldKind
+from src.domain.services.hard_stop_detector import HardStopDetector
+from src.domain.value_objects.hard_stop_kind import HardStopKind
 from src.infrastructure.browser_automation.playwright_browser_automation import (
     PlaywrightBrowserAutomation,
 )
@@ -898,6 +901,7 @@ async def test_shutdown_closes_open_sessions_and_the_browser(server):
     await harness.shutdown()
 
 
+<<<<<<< HEAD
 # --- observing the page ----------------------------------------------------
 
 
@@ -908,10 +912,167 @@ async def test_page_signals_report_what_the_page_carries(harness, server):
     server.page("/recaptcha/api2/anchor", CHALLENGE_FRAME_HTML)
     url = server.page("/wall", BOUNDARY_PAGE_HTML)
 
+=======
+# --- hard boundaries: page signals -----------------------------------------
+#
+# These drive the real detection path end to end: a real page, the real
+# in-page signal pass, and the real domain detector. Unit tests cover the
+# rules from literals (tests/domain/test_hard_stop_detector.py); what can
+# only be checked here is that the collection pass actually hands the domain
+# the facts those rules need — from a real DOM, including inside frames.
+
+
+CAPTCHA_FORM_HTML = """<!doctype html>
+<html><head><title>Apply — Globex</title>
+<script src="/vendor/recaptcha/api.js"></script></head>
+<body>
+<h1>Apply: Senior Backend Engineer</h1>
+<form>
+  <label for="name">Full name</label>
+  <input id="name" name="full_name">
+  <div class="g-recaptcha" data-sitekey="6LcExampleSiteKey"></div>
+</form>
+</body></html>
+"""
+
+LOGIN_WALL_HTML = """<!doctype html>
+<html><head><title>Sign in — Globex Careers</title></head>
+<body>
+<h1>Sign in to continue</h1>
+<form>
+  <label for="email">Email</label>
+  <input id="email" name="email" type="email">
+  <label for="pw">Password</label>
+  <input id="pw" name="password" type="password" autocomplete="current-password">
+</form>
+<p>Already have an account? Forgot your password?</p>
+</body></html>
+"""
+
+SIGNATURE_FORM_HTML = """<!doctype html>
+<html><head><title>Authorization — Globex</title></head>
+<body>
+<form>
+  <label for="name">Full name</label>
+  <input id="name" name="full_name">
+  <p>Type your full name to sign this authorization electronically.</p>
+  <label for="sig">Applicant signature</label>
+  <input id="sig" name="applicant_signature">
+  <canvas class="signature-pad" width="300" height="100"></canvas>
+</form>
+</body></html>
+"""
+
+#: A challenge answer box and a masked credential that lies about its type —
+#: the two shapes a field-level refusal has to catch that a `type` check alone
+#: would not.
+DISGUISED_FIELDS_HTML = """<!doctype html>
+<html><body>
+<form>
+  <label for="a">Full name</label>
+  <input id="a" name="full_name">
+  <label for="b">Enter the characters you see</label>
+  <input id="b" name="g-recaptcha-response">
+  <label for="c">Account access</label>
+  <input id="c" name="user_password" type="text" autocomplete="current-password">
+  <label for="d">Signed offer letter</label>
+  <input id="d" name="signature_upload" type="file">
+</form>
+</body></html>
+"""
+
+#: An ordinary outer page whose embedded frame is the login wall. A reading
+#: that stopped at the main document would call this page clean.
+EMBEDDED_LOGIN_HTML = """<!doctype html>
+<html><head><title>Careers — Globex</title></head><body>
+<h1>Senior Backend Engineer</h1>
+<iframe width="400" height="300" srcdoc="
+  <h2>Sign in to continue</h2>
+  <label for='pw'>Password</label><input id='pw' type='password'>
+"></iframe>
+</body></html>
+"""
+
+
+async def test_page_signals_describe_an_ordinary_form_without_flagging_it(
+    harness, server
+):
+    url = server.page("/apply", APPLICATION_FORM_HTML)
+    async with await harness.open(url) as session:
+        signals = await session.read_page_signals()
+        fields = await session.read_fields()
+
+    assert signals.url == url
+    assert "Senior Backend Engineer" in signals.text
+    assert signals.password_field_count == 0
+    # The detector's view of the form is exactly the form the harness would
+    # fill — both come from the one discovery pass.
+    assert signals.fillable_field_count == len(fields)
+    assert "Full name *" in signals.field_labels
+    assert HardStopDetector().detect(signals) == ()
+
+
+async def test_a_captcha_widget_on_a_real_page_is_detected(harness, server):
+    url = server.page("/apply", CAPTCHA_FORM_HTML)
+    async with await harness.open(url) as session:
+        signals = await session.read_page_signals()
+
+    stops = HardStopDetector().detect(signals)
+
+    assert [stop.kind for stop in stops] == [HardStopKind.CAPTCHA]
+    # Recognized from the markup and the script it pulls in — the widget
+    # itself never rendered, since nothing here talks to the network.
+    assert any("recaptcha" in hint for hint in signals.element_hints)
+    assert any("recaptcha" in script for script in signals.script_urls)
+
+
+async def test_a_login_wall_on_a_real_page_is_detected(harness, server):
+    url = server.page("/login", LOGIN_WALL_HTML)
+    async with await harness.open(url) as session:
+        signals = await session.read_page_signals()
+
+    stops = HardStopDetector().detect(signals)
+
+    assert [stop.kind for stop in stops] == [HardStopKind.ACCOUNT_WALL]
+    assert signals.password_field_count == 1
+    assert stops[0].evidence[0] == "the form presents 1 password field"
+
+
+async def test_a_signature_block_on_a_real_page_is_detected(harness, server):
+    url = server.page("/sign", SIGNATURE_FORM_HTML)
+    async with await harness.open(url) as session:
+        signals = await session.read_page_signals()
+
+    stops = HardStopDetector().detect(signals)
+
+    assert [stop.kind for stop in stops] == [HardStopKind.ELECTRONIC_SIGNATURE]
+    assert "Applicant signature" in signals.field_labels
+
+
+async def test_signals_are_read_from_inside_frames_too(harness, server):
+    """ATS forms are routinely embedded, so a wall inside the frame is still
+    a wall — and a reading that stopped at the outer document would miss it."""
+    url = server.page("/embedded-login", EMBEDDED_LOGIN_HTML)
+    async with await harness.open(url) as session:
+        signals = await session.read_page_signals()
+
+    assert signals.password_field_count == 1
+    assert "sign in to continue" in signals.readable_text
+    assert [stop.kind for stop in HardStopDetector().detect(signals)] == [
+        HardStopKind.ACCOUNT_WALL
+    ]
+
+
+async def test_a_page_with_no_form_still_yields_signals(harness, server):
+    """A dead posting or an interstitial presents nothing fillable, and its
+    URL and text are frequently the whole story."""
+    url = server.page("/gone-but-200", NO_FORM_HTML)
+>>>>>>> origin/main
     async with await harness.open(url) as session:
         signals = await session.read_page_signals()
 
     assert signals.url == url
+<<<<<<< HEAD
     assert "please sign in to continue" in signals.visible_text.casefold()
     assert any("/recaptcha/api2/anchor" in frame for frame in signals.frame_urls)
     assert "g-recaptcha" in signals.element_markers
@@ -1056,3 +1217,104 @@ async def test_a_press_invalidates_every_handle_on_both_sides(harness, server):
 
     # And the application went out exactly once.
     assert server.requests["/thanks"] == 1
+=======
+    assert signals.fillable_field_count == 0
+    assert "no longer accepting applications" in signals.text
+
+
+# --- hard boundaries: refusing to write ------------------------------------
+
+
+async def test_a_password_field_is_reported_but_can_never_be_filled(harness, server):
+    """Reported, because it is the evidence a hand-off is needed. Unfillable,
+    because ApplyFlow never types a credential."""
+    url = server.page("/login", LOGIN_WALL_HTML)
+    async with await harness.open(url) as session:
+        password = _by_name(await session.read_fields(), "password")
+
+        assert password.kind is FormFieldKind.PASSWORD
+        assert password.human_only_boundary is HardStopKind.ACCOUNT_WALL
+        assert password.is_human_only is True
+
+        with pytest.raises(HumanOnlyFieldError) as caught:
+            await session.fill(password.handle, "hunter2")
+
+        # Nothing was typed: the refusal happens before the element is even
+        # located, and the page proves it.
+        assert _by_name(await session.read_fields(), "password").value == ""
+
+    assert caught.value.boundary == HardStopKind.ACCOUNT_WALL.value
+    assert "never solves CAPTCHAs" in str(caught.value)
+    # The attempted value is never echoed — that would put a credential in a
+    # log line.
+    assert "hunter2" not in str(caught.value)
+
+
+async def test_a_challenge_answer_box_cannot_be_filled(harness, server):
+    url = server.page("/disguised", DISGUISED_FIELDS_HTML)
+    async with await harness.open(url) as session:
+        captcha_field = _by_name(await session.read_fields(), "g-recaptcha-response")
+
+        assert captcha_field.human_only_boundary is HardStopKind.CAPTCHA
+
+        with pytest.raises(HumanOnlyFieldError) as caught:
+            await session.fill(captcha_field.handle, "ABC123")
+
+    assert caught.value.boundary == HardStopKind.CAPTCHA.value
+
+
+async def test_a_credential_masked_as_a_text_input_cannot_be_filled(harness, server):
+    """`type="text"` with a password name and autocomplete hint. A refusal
+    driven only by the input type would have typed into this one."""
+    url = server.page("/disguised", DISGUISED_FIELDS_HTML)
+    async with await harness.open(url) as session:
+        disguised = _by_name(await session.read_fields(), "user_password")
+
+        assert disguised.kind is FormFieldKind.TEXT
+        assert disguised.human_only_boundary is HardStopKind.ACCOUNT_WALL
+
+        with pytest.raises(HumanOnlyFieldError):
+            await session.fill(disguised.handle, "hunter2")
+
+
+async def test_a_signature_field_cannot_be_filled(harness, server):
+    url = server.page("/sign", SIGNATURE_FORM_HTML)
+    async with await harness.open(url) as session:
+        signature = _by_name(await session.read_fields(), "applicant_signature")
+
+        with pytest.raises(HumanOnlyFieldError) as caught:
+            await session.fill(signature.handle, "Ada Lovelace")
+
+        assert _by_name(await session.read_fields(), "applicant_signature").value == ""
+
+    assert caught.value.boundary == HardStopKind.ELECTRONIC_SIGNATURE.value
+
+
+async def test_a_signature_upload_slot_refuses_a_file_too(harness, server):
+    """An upload asking for a signed copy of something is no more automatable
+    than a signature box, so `attach_file` refuses on the same terms."""
+    url = server.page("/disguised", DISGUISED_FIELDS_HTML)
+    async with await harness.open(url) as session:
+        slot = _by_name(await session.read_fields(), "signature_upload")
+
+        assert slot.human_only_boundary is HardStopKind.ELECTRONIC_SIGNATURE
+
+        with pytest.raises(HumanOnlyFieldError):
+            await session.attach_file(
+                slot.handle, filename="signed.pdf", content=b"%PDF-1.4"
+            )
+
+
+async def test_ordinary_fields_on_the_same_form_are_still_fillable(harness, server):
+    """The refusal is per field, not per page: a form with a signature box on
+    it is not a form where nothing may be answered."""
+    url = server.page("/sign", SIGNATURE_FORM_HTML)
+    async with await harness.open(url) as session:
+        name = _by_name(await session.read_fields(), "full_name")
+
+        await session.fill(name.handle, "Ada Lovelace")
+
+        assert _by_name(await session.read_fields(), "full_name").value == (
+            "Ada Lovelace"
+        )
+>>>>>>> origin/main

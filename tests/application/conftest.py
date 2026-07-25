@@ -1,9 +1,16 @@
-"""Shared fakes for the provenance-guarded generation use cases.
+"""Shared fakes for the application-layer use case tests.
 
-`GenerateTailoredResume` and `GenerateCoverLetter` take the same
-collaborators, so their tests share one set of in-memory doubles rather
-than each defining its own — the two flows must stay verifiably identical
-about what counts as evidence.
+Two groups, each shared because the flows under test have to stay verifiably
+identical to each other:
+
+- the provenance-guarded generation collaborators. `GenerateTailoredResume`
+  and `GenerateCoverLetter` take the same ones, and the two flows must agree
+  about what counts as evidence.
+- the portal-automation doubles (a scriptable browser harness, an in-memory
+  hand-off store, and an in-memory review store), shared by the inspection
+  flow, the two hand-off resolutions, and the review-and-submit flow — all of
+  which have to agree about what an open hand-off is and what an open review
+  is.
 """
 
 from __future__ import annotations
@@ -13,12 +20,18 @@ from types import TracebackType
 
 import pytest
 
+<<<<<<< HEAD
 from src.application.exceptions import StaleFormFieldError
+=======
+>>>>>>> origin/main
 from src.application.ports.browser_automation_port import (
     BrowserAutomationPort,
     BrowserSessionPort,
     FormField,
+<<<<<<< HEAD
     SubmitControl,
+=======
+>>>>>>> origin/main
 )
 from src.application.ports.id_generator_port import IdGeneratorPort
 from src.application.ports.resume_pdf_renderer_port import ResumePdfRendererPort
@@ -28,20 +41,34 @@ from src.application.services.application_document_archive import (
 from src.application.services.provenance_fact_assembler import ProvenanceFactAssembler
 from src.domain.entities.answer_memory import AnswerMemory
 from src.domain.entities.application_document import ApplicationDocument
+from src.domain.entities.application_review import ApplicationReview
 from src.domain.entities.job_posting import JobPosting
+from src.domain.entities.portal_handoff import PortalHandoff
 from src.domain.entities.skill import Skill
 from src.domain.entities.user_profile import UserProfile
 from src.domain.entities.work_history_entry import WorkHistoryEntry
+from src.domain.exceptions import (
+    ApplicationReviewNotFoundError,
+    PortalHandoffNotFoundError,
+)
 from src.domain.repositories.answer_memory_repository import AnswerMemoryRepository
 from src.domain.repositories.application_document_repository import (
     ApplicationDocumentRepository,
 )
+from src.domain.repositories.application_review_repository import (
+    ApplicationReviewRepository,
+)
 from src.domain.repositories.job_posting_repository import JobPostingRepository
+from src.domain.repositories.portal_handoff_repository import PortalHandoffRepository
 from src.domain.repositories.profile_repository import ProfileRepository
 from src.domain.value_objects.email_address import EmailAddress
 from src.domain.value_objects.generated_document_kind import GeneratedDocumentKind
 from src.domain.value_objects.job_requirements import JobRequirements
+<<<<<<< HEAD
 from src.domain.value_objects.page_signals import PageSignals
+=======
+from src.domain.value_objects.portal_page_signals import PortalPageSignals
+>>>>>>> origin/main
 from src.domain.value_objects.provenance_source import ProvenanceSource
 
 
@@ -471,3 +498,212 @@ def fact_assembler(profile: UserProfile) -> ProvenanceFactAssembler:
         profile_repository=StubProfileRepository(profile),
         answer_memory_repository=StubAnswerMemoryRepository(),
     )
+
+
+# ---- portal automation doubles ----------------------------------------------
+
+
+class ScriptedBrowserSession(BrowserSessionPort):
+    """A browser session on a page whose signals and fields are given up
+    front.
+
+    Records whether `read_fields` was called, which is how the inspection
+    tests assert the property that matters most: on a portal with a hard
+    boundary, the form is never even read.
+    """
+
+    def __init__(
+        self,
+        *,
+        signals: PortalPageSignals,
+        fields: tuple[FormField, ...] = (),
+        signals_error: Exception | None = None,
+    ) -> None:
+        self._signals = signals
+        self._fields = fields
+        self._signals_error = signals_error
+        self.read_fields_calls = 0
+        self.read_signals_calls = 0
+        self.closed = False
+
+    @property
+    def current_url(self) -> str:
+        return self._signals.url
+
+    async def read_page_signals(self) -> PortalPageSignals:
+        self.read_signals_calls += 1
+        if self._signals_error is not None:
+            raise self._signals_error
+        return self._signals
+
+    async def read_fields(self) -> tuple[FormField, ...]:
+        self.read_fields_calls += 1
+        return self._fields
+
+    async def fill(self, handle: str, value: str) -> None:
+        raise AssertionError("inspection must never write to a form")
+
+    async def attach_file(self, handle: str, *, filename: str, content: bytes) -> None:
+        raise AssertionError("inspection must never upload to a form")
+
+    async def screenshot(self) -> bytes:
+        return b"png"
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class ScriptedBrowserAutomation(BrowserAutomationPort):
+    """A harness that hands out one scripted session and remembers the URLs it
+    was asked to open."""
+
+    def __init__(
+        self,
+        *,
+        signals: PortalPageSignals,
+        fields: tuple[FormField, ...] = (),
+        signals_error: Exception | None = None,
+        open_error: Exception | None = None,
+    ) -> None:
+        self._signals = signals
+        self._fields = fields
+        self._signals_error = signals_error
+        self._open_error = open_error
+        self.opened: list[str] = []
+        self.sessions: list[ScriptedBrowserSession] = []
+
+    async def open(self, url: str) -> BrowserSessionPort:
+        self.opened.append(url)
+        if self._open_error is not None:
+            raise self._open_error
+        session = ScriptedBrowserSession(
+            signals=self._signals,
+            fields=self._fields,
+            signals_error=self._signals_error,
+        )
+        self.sessions.append(session)
+        return session
+
+    async def shutdown(self) -> None:  # pragma: no cover - not exercised
+        pass
+
+
+class InMemoryPortalHandoffRepository(PortalHandoffRepository):
+    """Stores hand-offs by id, and enforces the same "one open per posting"
+    rule the database does — a fake that allowed two would let a test pass
+    that production would reject."""
+
+    def __init__(self, handoffs: list[PortalHandoff] | None = None) -> None:
+        self.handoffs: dict[str, PortalHandoff] = {
+            handoff.id: handoff for handoff in handoffs or []
+        }
+
+    async def add(self, handoff: PortalHandoff) -> None:
+        if handoff.is_open and any(
+            other.is_open
+            and other.user_id == handoff.user_id
+            and other.job_posting_id == handoff.job_posting_id
+            for other in self.handoffs.values()
+        ):
+            raise AssertionError(
+                "a second open hand-off was added for the same posting"
+            )
+        self.handoffs[handoff.id] = handoff
+
+    async def update(self, handoff: PortalHandoff) -> None:
+        if handoff.id not in self.handoffs:
+            raise PortalHandoffNotFoundError(handoff.id)
+        self.handoffs[handoff.id] = handoff
+
+    async def get_by_id(self, handoff_id: str) -> PortalHandoff | None:
+        return self.handoffs.get(handoff_id)
+
+    async def get_open_for_job(
+        self, *, user_id: str, job_posting_id: str
+    ) -> PortalHandoff | None:
+        for handoff in self.handoffs.values():
+            if (
+                handoff.is_open
+                and handoff.user_id == user_id
+                and handoff.job_posting_id == job_posting_id
+            ):
+                return handoff
+        return None
+
+    async def list_for_user(
+        self, user_id: str, *, limit: int = 100
+    ) -> list[PortalHandoff]:
+        owned = [h for h in self.handoffs.values() if h.user_id == user_id]
+        owned.sort(key=lambda handoff: handoff.created_at, reverse=True)
+        return owned[:limit]
+
+
+@pytest.fixture
+def handoff_repository() -> InMemoryPortalHandoffRepository:
+    return InMemoryPortalHandoffRepository()
+
+
+class InMemoryApplicationReviewRepository(ApplicationReviewRepository):
+    """Stores reviews by id, and enforces the same one-open-per-posting rule the
+    database does — a fake that allowed two would let a test pass that
+    production rejects."""
+
+    def __init__(self, reviews: list[ApplicationReview] | None = None) -> None:
+        self.reviews: dict[str, ApplicationReview] = {
+            review.id: review for review in reviews or []
+        }
+        self.superseded: list[tuple[str, str]] = []
+
+    async def add(self, review: ApplicationReview) -> None:
+        if review.is_open and any(
+            other.is_open
+            and other.user_id == review.user_id
+            and other.job_posting_id == review.job_posting_id
+            for other in self.reviews.values()
+        ):
+            raise AssertionError(
+                "a second open review was added for the same posting"
+            )
+        self.reviews[review.id] = review
+
+    async def update(self, review: ApplicationReview) -> None:
+        if review.id not in self.reviews:
+            raise ApplicationReviewNotFoundError(review.id)
+        self.reviews[review.id] = review
+
+    async def get_by_id(self, review_id: str) -> ApplicationReview | None:
+        return self.reviews.get(review_id)
+
+    async def get_active_for_job(
+        self, *, user_id: str, job_posting_id: str
+    ) -> ApplicationReview | None:
+        for review in self.reviews.values():
+            if (
+                review.is_open
+                and review.user_id == user_id
+                and review.job_posting_id == job_posting_id
+            ):
+                return review
+        return None
+
+    async def supersede_active(self, *, user_id: str, job_posting_id: str) -> None:
+        self.superseded.append((user_id, job_posting_id))
+        for review_id, review in list(self.reviews.items()):
+            if (
+                review.is_open
+                and review.user_id == user_id
+                and review.job_posting_id == job_posting_id
+            ):
+                del self.reviews[review_id]
+
+    async def list_for_user(
+        self, user_id: str, *, limit: int = 100
+    ) -> list[ApplicationReview]:
+        owned = [r for r in self.reviews.values() if r.user_id == user_id]
+        owned.sort(key=lambda review: review.created_at, reverse=True)
+        return owned[:limit]
+
+
+@pytest.fixture
+def review_repository() -> InMemoryApplicationReviewRepository:
+    return InMemoryApplicationReviewRepository()

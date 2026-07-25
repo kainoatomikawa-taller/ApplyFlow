@@ -42,7 +42,11 @@ from src.domain.value_objects.eeo_categories import GenderIdentity
 from src.domain.value_objects.eeo_self_identification import EeoSelfIdentification
 from src.domain.value_objects.email_address import EmailAddress
 from src.domain.value_objects.generated_document_kind import GeneratedDocumentKind
+<<<<<<< HEAD
 from src.domain.value_objects.page_signals import PageSignals
+=======
+from src.domain.value_objects.portal_page_signals import PortalPageSignals
+>>>>>>> origin/main
 from src.domain.value_objects.profile_links import ProfileLinks
 from src.domain.value_objects.provenance_source import ProvenanceSource
 from src.domain.value_objects.work_authorization import WorkAuthorization
@@ -67,6 +71,116 @@ ASHBY_URL = "https://jobs.ashbyhq.com/globex/1a2b3c4d"
 # ---- Fakes -------------------------------------------------------------------
 
 
+<<<<<<< HEAD
+=======
+class FakeBrowserSession(BrowserSessionPort):
+    """Records every write instead of performing one, and can be told to
+    fail a specific handle so per-field error handling is exercised without
+    a real portal."""
+
+    def __init__(
+        self,
+        fields: tuple[FormField, ...],
+        *,
+        current_url: str,
+        failures: dict[str, Exception] | None = None,
+        screenshot_error: Exception | None = None,
+    ) -> None:
+        self._fields = fields
+        self._current_url = current_url
+        self._failures = failures or {}
+        self._screenshot_error = screenshot_error
+        self.filled: list[tuple[str, str]] = []
+        self.attached: list[tuple[str, str, bytes]] = []
+        self.read_count = 0
+        self.signal_reads = 0
+        self.screenshots = 0
+        self.closed = False
+
+    @property
+    def current_url(self) -> str:
+        return self._current_url
+
+    async def read_page_signals(self) -> PortalPageSignals:
+        """Derived from the fields this fake holds rather than hardcoded
+        clean, so a fake form containing a password box reads as one — a
+        double that always reported a boundary-free page would let a caller
+        pass a hard-stop check no real portal would."""
+        self.signal_reads += 1
+        return PortalPageSignals(
+            url=self._current_url,
+            field_labels=tuple(field.label for field in self._fields),
+            password_field_count=sum(
+                1 for field in self._fields if field.kind is FormFieldKind.PASSWORD
+            ),
+            fillable_field_count=len(self._fields),
+        )
+
+    async def read_fields(self) -> tuple[FormField, ...]:
+        self.read_count += 1
+        return self._fields
+
+    async def fill(self, handle: str, value: str) -> None:
+        failure = self._failures.get(handle)
+        if failure is not None:
+            raise failure
+        self.filled.append((handle, value))
+
+    async def attach_file(self, handle: str, *, filename: str, content: bytes) -> None:
+        failure = self._failures.get(handle)
+        if failure is not None:
+            raise failure
+        self.attached.append((handle, filename, content))
+
+    async def screenshot(self) -> bytes:
+        if self._screenshot_error is not None:
+            raise self._screenshot_error
+        self.screenshots += 1
+        return b"\x89PNG fake"
+
+    async def close(self) -> None:
+        self.closed = True
+
+    async def __aenter__(self) -> "FakeBrowserSession":
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        await self.close()
+
+    # Convenience for assertions.
+    def value_for(self, handle: str) -> str | None:
+        return next((v for h, v in self.filled if h == handle), None)
+
+
+class FakeBrowser(BrowserAutomationPort):
+    def __init__(
+        self,
+        session: FakeBrowserSession | None = None,
+        *,
+        open_error: Exception | None = None,
+    ) -> None:
+        self.session = session
+        self._open_error = open_error
+        self.opened: list[str] = []
+        self.shutdowns = 0
+
+    async def open(self, url: str) -> BrowserSessionPort:
+        self.opened.append(url)
+        if self._open_error is not None:
+            raise self._open_error
+        assert self.session is not None
+        return self.session
+
+    async def shutdown(self) -> None:
+        self.shutdowns += 1
+
+
+>>>>>>> origin/main
 def build_use_case(
     *,
     session: FakeBrowserSession | None = None,

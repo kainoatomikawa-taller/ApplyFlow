@@ -44,7 +44,7 @@ async def scan_application_boundaries(
     working set of handles is lost.
     """
     return boundaries_in(
-        await session.read_page_signals(),
+        await session.read_boundary_signals(),
         field_labels=field_labels,
         has_password_field=has_password_field,
     )

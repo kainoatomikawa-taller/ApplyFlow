@@ -27,13 +27,17 @@ from src.application.services.application_review_sessions import (
 )
 from src.application.services.provenance_fact_assembler import ProvenanceFactAssembler
 from src.application.services.relevant_answer_selector import RelevantAnswerSelector
+from src.application.use_cases.abandon_portal_handoff import AbandonPortalHandoff
 from src.application.use_cases.analyze_job_application import (
     AnalyzeJobApplication,
 )
 from src.application.use_cases.analyze_scoring_feedback import (
     AnalyzeScoringFeedback,
 )
+<<<<<<< HEAD
 from src.application.use_cases.answer_application_field import AnswerApplicationField
+=======
+>>>>>>> origin/main
 from src.application.use_cases.autofill_application_form import AutofillApplicationForm
 from src.application.use_cases.create_job_application import (
     CreateJobApplication,
@@ -50,10 +54,14 @@ from src.application.use_cases.generate_gap_resolution_questions import (
 )
 from src.application.use_cases.generate_tailored_resume import GenerateTailoredResume
 from src.application.use_cases.get_application_document import GetApplicationDocument
+from src.application.use_cases.get_application_review import GetApplicationReview
 from src.application.use_cases.get_latest_application_document import (
     GetLatestApplicationDocument,
 )
 from src.application.use_cases.get_resume import GetResume
+from src.application.use_cases.inspect_application_portal import (
+    InspectApplicationPortal,
+)
 from src.application.use_cases.list_application_documents import (
     ListApplicationDocuments,
 )
@@ -63,16 +71,26 @@ from src.application.use_cases.list_candidate_applications import (
 from src.application.use_cases.list_job_match_feedback import (
     ListJobMatchFeedback,
 )
+from src.application.use_cases.list_portal_handoffs import ListPortalHandoffs
 from src.application.use_cases.list_resumes import ListResumes
+from src.application.use_cases.open_application_review import OpenApplicationReview
 from src.application.use_cases.parse_resume import ParseResume
 from src.application.use_cases.rank_matched_job_postings import (
     RankMatchedJobPostings,
 )
 from src.application.use_cases.resolve_gap_answer import ResolveGapAnswer
+from src.application.use_cases.resume_portal_handoff import ResumePortalHandoff
 from src.application.use_cases.revise_generated_document import (
     ReviseGeneratedDocument,
 )
+<<<<<<< HEAD
 from src.application.use_cases.submit_application_form import SubmitApplicationForm
+=======
+from src.application.use_cases.revise_reviewed_answer import ReviseReviewedAnswer
+from src.application.use_cases.submit_application_review import (
+    SubmitApplicationReview,
+)
+>>>>>>> origin/main
 from src.application.use_cases.submit_job_application import (
     SubmitJobApplication,
 )
@@ -114,6 +132,9 @@ from src.infrastructure.persistence.answer_memory_repository_impl import (
 from src.infrastructure.persistence.application_document_repository_impl import (
     SqlAlchemyApplicationDocumentRepository,
 )
+from src.infrastructure.persistence.application_review_repository_impl import (
+    SqlAlchemyApplicationReviewRepository,
+)
 from src.infrastructure.persistence.database import get_session
 from src.infrastructure.persistence.job_application_repository_impl import (
     SqlAlchemyJobApplicationRepository,
@@ -123,6 +144,9 @@ from src.infrastructure.persistence.job_match_feedback_repository_impl import (
 )
 from src.infrastructure.persistence.job_posting_repository_impl import (
     SqlAlchemyJobPostingRepository,
+)
+from src.infrastructure.persistence.portal_handoff_repository_impl import (
+    SqlAlchemyPortalHandoffRepository,
 )
 from src.infrastructure.persistence.profile_repository_impl import (
     SqlAlchemyProfileRepository,
@@ -456,6 +480,7 @@ def get_analyze_scoring_feedback_use_case(
     return AnalyzeScoringFeedback(repository=repository)
 
 
+<<<<<<< HEAD
 # -- Portal autofill, review, and submit (Epic 05) ---------------------------
 #
 # The only two process-wide singletons in this module, and both have to be:
@@ -495,6 +520,82 @@ async def shutdown_portal_automation() -> None:
     """
     await get_review_sessions().close_all()
     await get_browser_automation().shutdown()
+=======
+def _portal_handoff_repository(
+    session: AsyncSession = Depends(get_session),
+) -> SqlAlchemyPortalHandoffRepository:
+    return SqlAlchemyPortalHandoffRepository(session)
+
+
+#: The one deliberately process-wide adapter here. A browser launch costs a
+#: process and hundreds of milliseconds, and the harness is built to own one
+#: browser across many sessions (each request still gets its own isolated
+#: `BrowserContext`), so creating a harness per request would launch and tear
+#: down a Chromium per inspection. Closed by `shutdown_browser_automation` on
+#: application shutdown — see `lifespan` in app.py — which is what keeps a
+#: browser process from outliving the API.
+_browser_automation_instance: PlaywrightBrowserAutomation | None = None
+
+
+def _browser_automation() -> PlaywrightBrowserAutomation:
+    global _browser_automation_instance
+    if _browser_automation_instance is None:
+        _browser_automation_instance = PlaywrightBrowserAutomation(get_settings())
+    return _browser_automation_instance
+
+
+async def shutdown_browser_automation() -> None:
+    """Release the shared browser, if one was ever launched. Idempotent."""
+    global _browser_automation_instance
+    harness, _browser_automation_instance = _browser_automation_instance, None
+    if harness is not None:
+        await harness.shutdown()
+
+
+def get_inspect_application_portal_use_case(
+    job_posting_repository: SqlAlchemyJobPostingRepository = Depends(
+        _job_posting_repository
+    ),
+    handoff_repository: SqlAlchemyPortalHandoffRepository = Depends(
+        _portal_handoff_repository
+    ),
+    browser_automation: PlaywrightBrowserAutomation = Depends(_browser_automation),
+) -> InspectApplicationPortal:
+    """The detector is not injected: it is a pure default the use case builds
+    itself, exactly like the provenance guard on the generation use cases. No
+    wiring mistake here can produce an inspection that skipped the
+    hard-boundary check."""
+    return InspectApplicationPortal(
+        job_posting_repository=job_posting_repository,
+        handoff_repository=handoff_repository,
+        browser_automation=browser_automation,
+        id_generator=UuidIdGenerator(),
+    )
+
+
+def get_list_portal_handoffs_use_case(
+    repository: SqlAlchemyPortalHandoffRepository = Depends(_portal_handoff_repository),
+) -> ListPortalHandoffs:
+    return ListPortalHandoffs(repository=repository)
+
+
+def get_resume_portal_handoff_use_case(
+    repository: SqlAlchemyPortalHandoffRepository = Depends(_portal_handoff_repository),
+) -> ResumePortalHandoff:
+    return ResumePortalHandoff(repository=repository)
+
+
+def get_abandon_portal_handoff_use_case(
+    repository: SqlAlchemyPortalHandoffRepository = Depends(_portal_handoff_repository),
+) -> AbandonPortalHandoff:
+    return AbandonPortalHandoff(repository=repository)
+
+
+def _application_review_repository(
+    session: AsyncSession = Depends(get_session),
+) -> SqlAlchemyApplicationReviewRepository:
+    return SqlAlchemyApplicationReviewRepository(session)
+>>>>>>> origin/main
 
 
 def get_autofill_application_form_use_case(
@@ -505,14 +606,23 @@ def get_autofill_application_form_use_case(
     document_repository: SqlAlchemyApplicationDocumentRepository = Depends(
         _application_document_repository
     ),
+<<<<<<< HEAD
 ) -> AutofillApplicationForm:
     """The field planner is a pure default the use case builds itself, so no
     wiring mistake here can put a different set of mapping rules — or a
     different sensitive-field policy — in front of a real form."""
+=======
+    browser_automation: PlaywrightBrowserAutomation = Depends(_browser_automation),
+) -> AutofillApplicationForm:
+    """The field planner is a pure default the use case builds itself, so no
+    wiring mistake here can produce a pass that skipped the mapping rules — or
+    the refusal to write into a field only the candidate may fill."""
+>>>>>>> origin/main
     return AutofillApplicationForm(
         job_posting_repository,
         profile_repository,
         document_repository,
+<<<<<<< HEAD
         get_browser_automation(),
         AtsSafePdfRenderer(),
         get_review_sessions(),
@@ -529,6 +639,69 @@ def get_submit_application_form_use_case() -> SubmitApplicationForm:
 
 def get_discard_application_review_use_case() -> DiscardApplicationReview:
     return DiscardApplicationReview(get_review_sessions())
+=======
+        browser_automation,
+        AtsSafePdfRenderer(),
+    )
+
+
+def get_open_application_review_use_case(
+    review_repository: SqlAlchemyApplicationReviewRepository = Depends(
+        _application_review_repository
+    ),
+    handoff_repository: SqlAlchemyPortalHandoffRepository = Depends(
+        _portal_handoff_repository
+    ),
+) -> OpenApplicationReview:
+    return OpenApplicationReview(
+        review_repository=review_repository,
+        handoff_repository=handoff_repository,
+        id_generator=UuidIdGenerator(),
+    )
+
+
+def get_application_review_use_case(
+    review_repository: SqlAlchemyApplicationReviewRepository = Depends(
+        _application_review_repository
+    ),
+    handoff_repository: SqlAlchemyPortalHandoffRepository = Depends(
+        _portal_handoff_repository
+    ),
+) -> GetApplicationReview:
+    return GetApplicationReview(
+        review_repository=review_repository, handoff_repository=handoff_repository
+    )
+
+
+def get_revise_reviewed_answer_use_case(
+    review_repository: SqlAlchemyApplicationReviewRepository = Depends(
+        _application_review_repository
+    ),
+    handoff_repository: SqlAlchemyPortalHandoffRepository = Depends(
+        _portal_handoff_repository
+    ),
+) -> ReviseReviewedAnswer:
+    return ReviseReviewedAnswer(
+        review_repository=review_repository, handoff_repository=handoff_repository
+    )
+
+
+def get_submit_application_review_use_case(
+    review_repository: SqlAlchemyApplicationReviewRepository = Depends(
+        _application_review_repository
+    ),
+    handoff_repository: SqlAlchemyPortalHandoffRepository = Depends(
+        _portal_handoff_repository
+    ),
+) -> SubmitApplicationReview:
+    """The submit path takes a review store and the hand-off store, and nothing
+    else. Notably no browser: submitting records the candidate's own act, and
+    ApplyFlow does not press the portal's button (see
+    `SubmitApplicationReview`)."""
+    return SubmitApplicationReview(
+        review_repository=review_repository, handoff_repository=handoff_repository
+    )
+>>>>>>> origin/main
 
 
 def _auth_verifier() -> AuthVerifierPort:

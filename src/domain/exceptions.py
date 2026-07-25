@@ -119,6 +119,62 @@ class DocumentSnapshotIntegrityError(DomainError):
         self.actual_digest = actual_digest
 
 
+class ApplicationReviewNotFoundError(DomainError):
+    """Raised when a candidate's review of a filled application cannot be
+    located.
+
+    Carries only the id — never any answer, which is sensitive (see
+    `ApplicationReview`) — so it is safe to log and to return.
+    """
+
+    def __init__(self, review_id: str) -> None:
+        super().__init__(f"Application review '{review_id}' was not found.")
+        self.review_id = review_id
+
+
+class NoActiveApplicationReviewError(DomainError):
+    """Raised when a job posting has no review still open for this candidate —
+    nothing has been filled for it yet, or the last one was already submitted.
+
+    Distinct from `ApplicationReviewNotFoundError`, which means a specific id
+    does not resolve: this one means "there is nothing to review", and the
+    remedy is to open a review rather than to look for a different id.
+    """
+
+    def __init__(self, job_posting_id: str) -> None:
+        super().__init__(
+            f"No application review is open for job posting '{job_posting_id}'."
+        )
+        self.job_posting_id = job_posting_id
+
+
+class ReviewedAnswerNotFoundError(DomainError):
+    """Raised when an edit addresses a field the review does not contain.
+
+    Loud rather than silent: an edit that quietly landed nowhere would look to
+    the candidate exactly like one that was saved.
+    """
+
+    def __init__(self, review_id: str, field_key: str) -> None:
+        super().__init__(
+            f"Application review '{review_id}' has no field '{field_key}'."
+        )
+        self.review_id = review_id
+        self.field_key = field_key
+
+
+class PortalHandoffNotFoundError(DomainError):
+    """Raised when a hand-off to the candidate cannot be located by id.
+
+    Carries only the id — never the resolution note, which is candidate free
+    text (see `PortalHandoff`) — so it is safe to log and to return.
+    """
+
+    def __init__(self, handoff_id: str) -> None:
+        super().__init__(f"Portal hand-off '{handoff_id}' was not found.")
+        self.handoff_id = handoff_id
+
+
 class ProfileNotFoundError(DomainError):
     """Raised when a candidate profile cannot be located."""
 

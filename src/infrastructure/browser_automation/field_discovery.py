@@ -23,6 +23,14 @@ What is deliberately NOT discovered here:
 Visibility is judged by Playwright's own definition — non-empty bounding
 box, `visibility` not `hidden` — precisely so that everything reported as
 fillable is something Playwright will actually agree to interact with.
+
+What *is* discovered but can never be written to: a field the domain's
+`HumanOnlyFieldPolicy` recognizes as a boundary — a password, a signature, a
+CAPTCHA answer. Each one is tagged with `human_only_boundary` here and refused
+by `fill`/`attach_file`. Dropping them from the snapshot instead would be
+worse in both directions: it would hide the strongest evidence that a portal
+needs a hand-off, and it would leave the refusal to whoever remembered to
+check, rather than to the layer that does the typing.
 """
 
 from __future__ import annotations
@@ -34,6 +42,7 @@ from src.application.ports.browser_automation_port import (
     FormFieldKind,
     FormFieldOption,
 )
+from src.domain.services.human_only_field_policy import HumanOnlyFieldPolicy
 
 #: The CSS selector field handles are resolved against. The in-page pass
 #: below MUST enumerate exactly this selector, in document order, because a
@@ -223,16 +232,33 @@ def to_form_field(handle: str, raw: dict[str, Any]) -> FormField:
     attributes = {
         str(key): str(value) for key, value in (raw.get("attributes") or {}).items()
     }
+    kind = field_kind(tag, input_type)
+    label = str(raw.get("label", ""))
+    name = str(raw.get("name", ""))
+    placeholder = str(raw.get("placeholder", ""))
     return FormField(
         handle=handle,
-        kind=field_kind(tag, input_type),
-        label=str(raw.get("label", "")),
-        name=str(raw.get("name", "")),
+        kind=kind,
+        label=label,
+        name=name,
         required=bool(raw.get("required", False)),
-        placeholder=str(raw.get("placeholder", "")),
+        placeholder=placeholder,
         value=str(raw.get("value", "")),
         checked=bool(raw.get("checked", False)),
         options=options,
         max_length=int(max_length) if isinstance(max_length, int | float) else None,
         attributes=attributes,
+        # Decided once, here, from everything the markup said — including the
+        # `autocomplete` hint, which is where a portal that styles its own
+        # credential box usually gives it away ("current-password"). Deciding
+        # it at discovery rather than at write time means a caller can see
+        # which field is off limits *before* it plans a value for it, and
+        # means the refusal in `fill` is a property of the snapshot rather
+        # than a second judgment that could disagree with the first.
+        human_only_boundary=HumanOnlyFieldPolicy.boundary_for(
+            kind_name=kind.value,
+            label=label,
+            name=name,
+            attribute_values=(*attributes.values(), placeholder),
+        ),
     )

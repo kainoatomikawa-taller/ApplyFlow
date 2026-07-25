@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { AutofillReview } from './AutofillReview';
 import { DocumentReviewPanel } from './DocumentReviewPanel';
+import { PortalHandoffPanel } from './PortalHandoffPanel';
+import { ReviewAndSubmit } from './ReviewAndSubmit';
 import { GapQuestionLoop } from './GapQuestionLoop';
 import type { GapOutcome } from './GapQuestionLoop';
 import type { RankedJob } from '../types';
@@ -24,6 +26,18 @@ interface Props {
  * done, but "Skip to documents" is always there. A candidate with nothing
  * to add to any gap should not have to click through every question to
  * reach the thing they came for.
+ *
+ * Step three is the portal itself: ApplyFlow reads the application form before
+ * touching it, and stops outright at a CAPTCHA, a signature, or a sign-in wall
+ * (see `PortalHandoffPanel`). It is not gated behind the documents — a
+ * candidate who wants to know up front whether this portal is one they will
+ * have to finish by hand should be able to find out first.
+ *
+ * Step four is where the application actually gets sent, and it is the
+ * candidate who sends it (see `ReviewAndSubmit`). Last for a real reason rather
+ * than for tidiness: it fills the form from the profile, the gap answers, and
+ * the documents produced above, so running it earlier would submit a thinner
+ * application than the one the candidate just spent three steps improving.
  */
 export function TailoringReview({ job, onClose }: Props) {
   const [outcomes, setOutcomes] = useState<GapOutcome[]>([]);
@@ -96,6 +110,7 @@ export function TailoringReview({ job, onClose }: Props) {
       )}
 
       <h3>
+<<<<<<< HEAD
         <span className="step-number">3</span> Review and submit
       </h3>
       {/*
@@ -105,6 +120,20 @@ export function TailoringReview({ job, onClose }: Props) {
         candidate would have to run it twice.
       */}
       <AutofillReview job={job} />
+=======
+        <span className="step-number">3</span> Check the portal
+      </h3>
+      <PortalHandoffPanel jobPostingId={job.job_posting.id} />
+
+      <h3>
+        <span className="step-number">4</span> Review &amp; submit
+      </h3>
+      <ReviewAndSubmit
+        jobPostingId={job.job_posting.id}
+        jobTitle={job.job_posting.title}
+        company={job.job_posting.company}
+      />
+>>>>>>> origin/main
     </section>
   );
 }

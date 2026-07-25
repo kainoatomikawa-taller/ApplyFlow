@@ -1,7 +1,12 @@
 import { getAccessToken } from './accessToken';
 import type {
+<<<<<<< HEAD
   ApplicationAutofillReport,
   ApplicationSubmissionReceipt,
+=======
+  AnswerAction,
+  ApplicationReview,
+>>>>>>> origin/main
   CreateApplicationInput,
   DocumentKind,
   FeedbackRating,
@@ -10,8 +15,13 @@ import type {
   HealthStatus,
   JobApplication,
   JobMatchFeedback,
+  OpenApplicationReview,
+  PortalHandoff,
+  PortalHandoffList,
+  PortalInspection,
   RankedJob,
   ResolvedGapAnswer,
+  SubmittedApplicationReview,
   TailoredResume,
 } from '../types';
 
@@ -143,6 +153,7 @@ export const applyFlowApi = {
   },
 
   /**
+<<<<<<< HEAD
    * Fill this posting's application form in a real browser and park it for
    * review. Never submits: sending is a separate call the candidate makes
    * (`submitAutofilledApplication`).
@@ -150,10 +161,60 @@ export const applyFlowApi = {
   autofillApplication(jobPostingId: string): Promise<ApplicationAutofillReport> {
     return request<ApplicationAutofillReport>(
       `/api/job-postings/${jobPostingId}/autofill`,
+=======
+   * Open the posting's application portal and report what it presents. A
+   * portal with a hard boundary comes back with `is_handed_off: true` and no
+   * fields — that is a normal 200, not a failure: ApplyFlow stopped where it
+   * should.
+   */
+  inspectPortal(jobPostingId: string): Promise<PortalInspection> {
+    return request<PortalInspection>('/api/portal/inspections', {
+      method: 'POST',
+      body: JSON.stringify({ job_posting_id: jobPostingId }),
+    });
+  },
+
+  listPortalHandoffs(openOnly = false, limit = 100): Promise<PortalHandoffList> {
+    return request<PortalHandoffList>(
+      `/api/portal/handoffs?open_only=${openOnly}&limit=${limit}`,
+    );
+  },
+
+  /**
+   * Tell ApplyFlow the human-only step is done. This records the candidate's
+   * word for it — the next inspection is what re-reads the portal, and raises
+   * a fresh hand-off if the boundary is still there.
+   */
+  resumePortalHandoff(handoffId: string, note = ''): Promise<PortalHandoff> {
+    return request<PortalHandoff>(`/api/portal/handoffs/${handoffId}/resume`, {
+      method: 'POST',
+      body: JSON.stringify({ note }),
+    });
+  },
+
+  /** The candidate is finishing this application themselves. */
+  abandonPortalHandoff(handoffId: string, note = ''): Promise<PortalHandoff> {
+    return request<PortalHandoff>(`/api/portal/handoffs/${handoffId}/abandon`, {
+      method: 'POST',
+      body: JSON.stringify({ note }),
+    });
+  },
+
+  /**
+   * Fill this posting's application form and open a review over it. Supersedes
+   * any review still in progress for the job. A portal with a hard boundary
+   * comes back with `review: null` and the hand-off attached — a normal 200,
+   * because stopping there is correct.
+   */
+  openApplicationReview(jobPostingId: string): Promise<OpenApplicationReview> {
+    return request<OpenApplicationReview>(
+      `/api/job-postings/${jobPostingId}/review`,
+>>>>>>> origin/main
       { method: 'POST' },
     );
   },
 
+<<<<<<< HEAD
   /**
    * Write the candidate's own answer into one field of the parked form —
    * the company's screening questions, and EEO self-identification, which
@@ -169,10 +230,31 @@ export const applyFlowApi = {
     return request<ApplicationAutofillReport>(
       `/api/autofill-sessions/${reviewSessionId}/fields/${fieldId}`,
       { method: 'POST', body: JSON.stringify({ value }) },
+=======
+  /** The review in progress for this posting, if there is one (404 if not). */
+  getApplicationReview(jobPostingId: string): Promise<ApplicationReview> {
+    return request<ApplicationReview>(`/api/job-postings/${jobPostingId}/review`);
+  },
+
+  /**
+   * Write an answer, approve the one that is there, or decline the field.
+   * Returns the whole review: one decision can change what is blocking submit.
+   */
+  reviseReviewedAnswer(
+    reviewId: string,
+    fieldKey: string,
+    action: AnswerAction,
+    value = '',
+  ): Promise<ApplicationReview> {
+    return request<ApplicationReview>(
+      `/api/application-reviews/${reviewId}/answers/${encodeURIComponent(fieldKey)}`,
+      { method: 'POST', body: JSON.stringify({ action, value }) },
+>>>>>>> origin/main
     );
   },
 
   /**
+<<<<<<< HEAD
    * Send the reviewed application. `confirmedFieldIds` are the sensitive
    * values the candidate has looked at and approved; the backend refuses
    * the submission without them, so this is never defaulted here.
@@ -211,6 +293,21 @@ export const applyFlowApi = {
     }
   },
 
+=======
+   * The candidate submits. Refused (409) while a blocker stands or if the
+   * review was already submitted — ApplyFlow never reaches this on its own.
+   */
+  submitApplicationReview(
+    reviewId: string,
+    note = '',
+  ): Promise<SubmittedApplicationReview> {
+    return request<SubmittedApplicationReview>(
+      `/api/application-reviews/${reviewId}/submit`,
+      { method: 'POST', body: JSON.stringify({ note }) },
+    );
+  },
+
+>>>>>>> origin/main
   /**
    * Store the candidate's edited text as the next version of this document.
    * The edit goes back through the provenance guard, so the returned

@@ -153,6 +153,7 @@ class RejectedFieldValueError(BrowserAutomationError):
         )
 
 
+<<<<<<< HEAD
 class SubmitControlNotPressableError(BrowserAutomationError):
     """Raised when a form's submit control was located but would not accept
     the press — obscured by an overlay or a cookie banner, disabled between
@@ -169,6 +170,37 @@ class SubmitControlNotPressableError(BrowserAutomationError):
         self.handle = handle
         self.reason = reason
         super().__init__(f"Submit control '{handle}' could not be pressed: {reason}")
+=======
+class HumanOnlyFieldError(BrowserAutomationError):
+    """Raised when something tried to write into a field only the candidate
+    may fill — a password, a signature, a CAPTCHA answer.
+
+    Not a variant of `FormFieldNotFillableError`, which means "this element
+    would not take input". This field would take input perfectly well;
+    ApplyFlow refuses to give it any. That is the non-negotiable rule the
+    browser harness enforces at the point where typing happens, so it holds
+    even when the caller asking for the write is a model that decided the
+    field looked ordinary (see `HumanOnlyFieldPolicy`).
+
+    There is no override, no force flag, and no retry that changes the
+    answer: the remedy is a hand-off to the candidate (`PortalHandoff`), and
+    `boundary` says which kind. Carries no value — the whole point is that
+    nothing was written, and echoing the attempted value would put a
+    credential in a log line.
+    """
+
+    def __init__(self, handle: str, boundary: str, field_label: str = "") -> None:
+        self.handle = handle
+        self.boundary = boundary
+        self.field_label = field_label
+        described = f" ('{field_label}')" if field_label else ""
+        super().__init__(
+            f"Form field '{handle}'{described} is a '{boundary}' boundary: "
+            "only the candidate may fill it. ApplyFlow never solves CAPTCHAs, "
+            "creates accounts, or enters passwords — hand off to the user "
+            "instead."
+        )
+>>>>>>> origin/main
 
 
 class UnsupportedAtsFormError(ApplicationError):

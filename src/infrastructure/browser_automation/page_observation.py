@@ -1,5 +1,9 @@
-"""Page observation — the in-page passes behind `read_page_signals()` and
-`read_submit_controls()`.
+"""Page observation — the in-page passes behind `read_boundary_signals()`
+and `read_submit_controls()`.
+
+(The pass behind `read_page_signals()`, which feeds `HardStopDetector`, is
+its own module — `page_signals`. Two readings, two judges: see
+`BrowserSessionPort`.)
 
 Two jobs that both look at the page as a whole rather than at its fields,
 kept beside `field_discovery` because they share its ground rules: one
@@ -41,10 +45,16 @@ MAX_MARKERS = 600
 
 #: Evaluated in each frame. Returns the frame's visible text, the URLs of
 #: the scripts it loaded, and every `id`/`class` token on it.
+#:
+#: Named for the judge it feeds rather than for the page it reads, because
+#: `page_signals.PAGE_SIGNALS_JS` is the *other* in-page pass — the one
+#: `HardStopDetector` reads (see `BrowserSessionPort`, "Two readings, two
+#: judges"). One importer holds both, so they cannot share a name.
+#:
 #: The two limits are substituted rather than interpolated: the source is
 #: full of braces and percent-free JavaScript, and neither an f-string nor
 #: `%`-formatting can be applied to it without escaping the whole thing.
-PAGE_SIGNALS_JS = """
+BOUNDARY_SIGNALS_JS = """
 () => {
   const MAX_TEXT = __MAX_TEXT__;
   const MAX_MARKERS = __MAX_MARKERS__;

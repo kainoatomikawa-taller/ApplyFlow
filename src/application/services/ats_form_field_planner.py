@@ -66,6 +66,7 @@ from src.application.ports.browser_automation_port import FormField, FormFieldKi
 from src.domain.entities.user_profile import UserProfile
 from src.domain.services.application_boundary_detector import is_signature_field
 from src.domain.services.ats_field_mapper import recognize_application_field
+from src.domain.services.human_only_field_policy import HumanOnlyFieldPolicy
 from src.domain.services.profile_field_values import resolve_profile_field
 from src.domain.services.sensitive_field_policy import (
     SensitiveFieldRefusal,
@@ -187,10 +188,14 @@ class SurfaceReason(StrEnum):
     #: holder asked about future sponsorship, an "other" status. Answering
     #: approximately is the one thing these fields must never do.
     SENSITIVE_ANSWER_NOT_DERIVABLE = "sensitive_answer_not_derivable"
-    #: Recognized, with data available, but the widget cannot take it — a
-    #: checkbox where a value was expected, or a password field. Usually
-    #: means the field was recognized wrongly, which is why it goes to a
-    #: human instead of being forced.
+    #: Recognized, with data available, but ApplyFlow will not write it:
+    #: either the widget cannot take the value (a checkbox where a value was
+    #: expected — usually means the field was recognized wrongly, which is why
+    #: it goes to a human instead of being forced), or the field is one only
+    #: the candidate may ever fill — a password, a signature, a challenge
+    #: answer (see `HumanOnlyFieldPolicy`). The second case is not a defect in
+    #: the reading and never becomes fillable; the boundary is explained to
+    #: the candidate through the hand-off flow (`PortalHandoff`), not here.
     UNSUPPORTED_FIELD_KIND = "unsupported_field_kind"
     #: Recognized as the resume or cover letter, but no such document has
     #: been generated for this job yet. Generating one fixes it.
@@ -308,11 +313,20 @@ class AtsFormFieldPlanner:
         if slot is None:
             return self._surface(field, SurfaceReason.UNRECOGNIZED)
 
-        # Checked after recognition so a password field the recognizer
-        # matched (a "Confirm email" style field mis-typed by the portal, or
-        # a genuine account-creation box) is reported as recognized and
+        # Checked after recognition so a field the recognizer matched but
+        # ApplyFlow may never answer (a "Confirm email" style field mis-typed
+        # by the portal, a genuine account-creation box, a signature line
+        # named like a full-name field) is reported as recognized and
         # refused, rather than looking like an unknown field.
-        if field.kind is FormFieldKind.PASSWORD:
+        #
+        # Asks the domain policy rather than reading `field.human_only_boundary`
+        # alone: the tag is applied by field discovery, and this guard has to
+        # hold for a `FormField` from any source. It is also what keeps the
+        # harness's own refusal (`HumanOnlyFieldError`) unreachable from here —
+        # that error is raised at the moment of typing and is not caught
+        # per-field, so a pass that reached it would lose the report for every
+        # field it had already filled correctly.
+        if _is_human_only(field):
             return self._surface(field, SurfaceReason.UNSUPPORTED_FIELD_KIND, slot=slot)
 
         # Before the ordinary paths, so a sensitive slot can never reach the
@@ -431,3 +445,23 @@ class AtsFormFieldPlanner:
             slot=slot,
             surface_reason=reason,
         )
+
+
+def _is_human_only(field: FormField) -> bool:
+    """Whether this field is one only the candidate may ever fill.
+
+    Prefers the boundary field discovery already assigned, and falls back to
+    re-deriving it from the same domain policy, so the answer does not depend
+    on which layer built the `FormField`.
+    """
+    if field.human_only_boundary is not None:
+        return True
+    return (
+        HumanOnlyFieldPolicy.boundary_for(
+            kind_name=field.kind.value,
+            label=field.label,
+            name=field.name,
+            attribute_values=(*field.attributes.values(), field.placeholder),
+        )
+        is not None
+    )

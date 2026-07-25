@@ -162,6 +162,7 @@ export interface TailoredResume {
   ats_safety_violations: AtsSafetyViolation[];
 }
 
+<<<<<<< HEAD
 /**
  * A check on the application page that only the candidate can pass: a
  * sign-in wall, a CAPTCHA, or a request for their signature.
@@ -237,4 +238,151 @@ export interface ApplicationSubmissionReceipt {
   screenshot_png_base64: string | null;
   outstanding_boundaries: ApplicationBoundary[];
   is_confirmed_sent: boolean;
+=======
+// ---- Application portals & hand-offs --------------------------------------
+
+/**
+ * A boundary ApplyFlow will not cross on an application portal. Not a list of
+ * things the automation has not learned yet: each one is a step where the act
+ * itself is the point, so it stays a hand-off however capable the app gets.
+ */
+export type HardStopKind = 'captcha' | 'electronic_signature' | 'account_wall';
+
+export type HandoffStatus = 'awaiting_user' | 'resumed' | 'abandoned';
+
+/**
+ * One detected boundary. `evidence` describes the portal's own page — a script
+ * it loaded, a phrase it showed, a field it presented — so the candidate can
+ * check the claim against the page themselves. It never contains anything
+ * about the candidate.
+ */
+export interface HardStop {
+  kind: HardStopKind;
+  refusal_reason: string;
+  human_action: string;
+  evidence: string[];
+}
+
+export interface PortalHandoff {
+  id: string;
+  job_posting_id: string;
+  apply_url: string;
+  /** Where automation stopped — the URL to open to finish the step. Often not
+   *  the apply URL, since portals redirect. */
+  paused_url: string;
+  status: HandoffStatus;
+  is_open: boolean;
+  created_at: string;
+  last_detected_at: string;
+  resolved_at: string | null;
+  resolution_note: string;
+  hard_stops: HardStop[];
+}
+
+/** One question the portal asks. No handle: nothing here can write to a form. */
+export interface PortalField {
+  label: string;
+  kind: string;
+  name: string;
+  required: boolean;
+  human_only_boundary: HardStopKind | null;
+}
+
+/**
+ * `is_handed_off` is the only thing to branch on. When it is true, `handoff`
+ * is set and `fields` is empty — the backend withholds the form rather than
+ * merely flagging it, so a paused portal cannot be filled by accident.
+ */
+export interface PortalInspection {
+  job_posting_id: string;
+  apply_url: string;
+  landed_url: string;
+  is_handed_off: boolean;
+  handoff: PortalHandoff | null;
+  fields: PortalField[];
+  /** Set when this check found the boundary gone and closed an open hand-off
+   *  on its own evidence. */
+  cleared_handoff_id: string | null;
+}
+
+export interface PortalHandoffList {
+  handoffs: PortalHandoff[];
+  open_count: number;
+}
+
+// ---- Review & submit ------------------------------------------------------
+
+/** Who is responsible for the answer currently in a field. */
+export type AnswerOrigin = 'unanswered' | 'autofilled' | 'candidate' | 'declined';
+
+export type FieldSensitivity = 'legal_attestation' | 'voluntary_self_id';
+
+export type ReviewStatus = 'in_review' | 'submitted_by_user';
+
+/**
+ * One question on the filled application. `needs_decision` is true for every
+ * sensitive field the candidate has not settled — the backend clears it only
+ * on their own action, so a UI can neither skip the decision nor fake it.
+ */
+export interface ReviewedAnswer {
+  key: string;
+  label: string;
+  widget_kind: string;
+  value: string;
+  required: boolean;
+  origin: AnswerOrigin;
+  slot: string | null;
+  sensitivity: FieldSensitivity | null;
+  is_sensitive: boolean;
+  needs_decision: boolean;
+  explanation: string;
+}
+
+export type SubmissionBlockerKind = 'pending_sensitive_decision' | 'open_hard_stop';
+
+export interface SubmissionBlocker {
+  kind: SubmissionBlockerKind;
+  detail: string;
+  field_key: string | null;
+  field_label: string;
+}
+
+export interface ApplicationReview {
+  id: string;
+  job_posting_id: string;
+  /** Where the candidate goes to send it. */
+  apply_url: string;
+  ats_provider: string;
+  status: ReviewStatus;
+  is_open: boolean;
+  created_at: string;
+  answers: ReviewedAnswer[];
+  blockers: SubmissionBlocker[];
+  /** False while anything in `blockers` stands. The submit button binds to it,
+   *  and the submit route re-checks the same rule. */
+  can_submit: boolean;
+  handoff: PortalHandoff | null;
+  /** Required fields with no answer — warnings, not blockers, since `required`
+   *  is only as trustworthy as the portal's markup. */
+  unanswered_required_keys: string[];
+  screenshot_captured: boolean;
+  submitted_at: string | null;
+  submission_note: string;
+}
+
+/** `review` is null only when a hard stop blocked the portal — nothing was
+ *  filled, and `handoff` says why. */
+export interface OpenApplicationReview {
+  job_posting_id: string;
+  review: ApplicationReview | null;
+  handoff: PortalHandoff | null;
+  screenshot_base64: string | null;
+}
+
+export type AnswerAction = 'set' | 'confirm' | 'decline';
+
+export interface SubmittedApplicationReview {
+  review: ApplicationReview;
+  apply_url: string;
+>>>>>>> origin/main
 }

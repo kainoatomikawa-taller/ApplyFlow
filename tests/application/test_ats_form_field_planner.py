@@ -458,6 +458,38 @@ def test_a_password_field_is_never_filled(planner, profile):
     assert planned.surface_reason is SurfaceReason.UNSUPPORTED_FIELD_KIND
 
 
+def test_a_field_only_the_candidate_may_fill_is_never_planned_as_a_write(
+    planner, profile
+):
+    """Wider than the password check: a signature line named like a full-name
+    field is recognized, and still refused (see `HumanOnlyFieldPolicy`).
+
+    This is the guard that keeps the harness's own refusal
+    (`HumanOnlyFieldError`) out of reach. That error is raised at the moment of
+    typing and is not caught per field, so a plan that included this write
+    would abandon the pass and lose the report for every field already filled
+    correctly.
+    """
+    for form_field in (
+        field("Full name", name="job_application[signature]"),
+        field("Signature", name="applicant_signature"),
+        field("Account access", attributes={"autocomplete": "current-password"}),
+    ):
+        planned = plan_one(planner, profile, form_field)
+
+        assert planned.disposition is FieldDisposition.SURFACE, form_field
+        assert planned.value is None, form_field
+
+    # The one the recognizer *did* match reports being refused rather than
+    # unknown, which is the distinction a reviewer needs: ApplyFlow read this
+    # field correctly and will still never answer it.
+    recognized = plan_one(
+        planner, profile, field("Full name", name="job_application[signature]")
+    )
+    assert recognized.slot is Slot.FULL_NAME
+    assert recognized.surface_reason is SurfaceReason.UNSUPPORTED_FIELD_KIND
+
+
 def test_a_checkbox_where_a_value_was_expected_is_surfaced(planner, profile):
     """Writing "+1 512 555 0100" into a tick box means the field was read
     wrongly, so a human looks at it rather than the harness guessing a

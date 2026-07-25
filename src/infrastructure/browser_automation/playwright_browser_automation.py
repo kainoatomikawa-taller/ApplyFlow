@@ -40,6 +40,17 @@ far more transient failure modes than an API call — but only for timeouts,
 connection failures, 5xx, and 429. Any other 4xx means the portal
 answered, so retrying it just wastes the budget.
 
+## The boundary this layer will not cross
+
+Every write first consults the boundary the domain assigned to the field at
+discovery time (`FormField.human_only_boundary`), and refuses if there is one.
+That is why "ApplyFlow never solves CAPTCHAs, creates accounts, or enters
+passwords" is a property of the system rather than a convention: the refusal
+lives at the only layer that can produce a keystroke, so no use case — and no
+model driving one — can route around it. `read_page_signals()` is the other
+half, the pre-touch reading that lets a caller recognize such a portal and
+hand off before it has filled anything.
+
 ## The one deliberate cost
 
 Every field interaction re-derives the element's signature and compares it
@@ -83,6 +94,7 @@ from src.application.exceptions import (
     BrowserNavigationError,
     BrowserSessionClosedError,
     FormFieldNotFillableError,
+    HumanOnlyFieldError,
     RejectedFieldValueError,
     StaleFormFieldError,
     SubmitControlNotPressableError,
@@ -95,6 +107,7 @@ from src.application.ports.browser_automation_port import (
     SubmitControl,
 )
 from src.domain.value_objects.page_signals import PageSignals
+from src.domain.value_objects.portal_page_signals import PortalPageSignals
 from src.infrastructure.browser_automation.field_discovery import (
     FIELD_DISCOVERY_JS,
     FIELD_SELECTOR,
@@ -108,12 +121,16 @@ from src.infrastructure.browser_automation.field_values import (
     matches_own_value,
 )
 from src.infrastructure.browser_automation.page_observation import (
-    PAGE_SIGNALS_JS,
+    BOUNDARY_SIGNALS_JS,
     SUBMIT_DISCOVERY_JS,
     SUBMIT_SELECTOR,
     SUBMIT_SIGNATURE_JS,
     build_page_signals,
     to_submit_control,
+)
+from src.infrastructure.browser_automation.page_signals import (
+    PAGE_SIGNALS_JS,
+    to_page_signals,
 )
 from src.infrastructure.config import Settings
 
@@ -201,17 +218,39 @@ class PlaywrightBrowserSession(BrowserSessionPort):
         self._require_open()
         return self._page.url
 
+    async def read_page_signals(self) -> PortalPageSignals:
+        self._require_open()
+        # Waits on the same budget as `read_fields`, and for the same reason
+        # with higher stakes: a boundary check that ran before the form
+        # mounted would read a blank page as a clean one, and a clean reading
+        # is the only thing that lets anything above start filling. The
+        # page-level pass runs *after* the wait so its text and markup
+        # describe the page the form actually landed on.
+        entries = await self._await_fields()
+        readings: list[dict[str, Any]] = []
+        for frame_index, frame in enumerate(self._page.frames):
+            try:
+                reading = await frame.evaluate(PAGE_SIGNALS_JS)
+            except PlaywrightError as exc:
+                # A frame detaching or navigating mid-read is ordinary on a
+                # live page; what it was showing simply isn't in this reading.
+                logger.debug(
+                    "Skipped frame %d during signal collection: %s", frame_index, exc
+                )
+                continue
+            if isinstance(reading, dict):
+                readings.append(reading)
+
+        return to_page_signals(
+            url=self._page.url,
+            frame_urls=[frame.url for frame in self._page.frames],
+            frame_readings=readings,
+            field_entries=[raw for _, _, _, raw in entries],
+        )
+
     async def read_fields(self) -> tuple[FormField, ...]:
         self._require_open()
-        deadline = time.monotonic() + self._settings.browser_field_wait_timeout_seconds
-        while True:
-            entries = await self._discover()
-            if entries or time.monotonic() >= deadline:
-                break
-            # A form that mounts after first paint is the norm on modern
-            # ATS portals; an empty page is only accepted once the wait
-            # budget is spent.
-            await asyncio.sleep(_FIELD_POLL_INTERVAL_SECONDS)
+        entries = await self._await_fields()
 
         self._generation += 1
         snapshot: dict[str, _SnapshotEntry] = {}
@@ -232,6 +271,11 @@ class PlaywrightBrowserSession(BrowserSessionPort):
     async def fill(self, handle: str, value: str) -> None:
         entry = self._entry(handle)
         field = entry.field
+        # Before the kind, before the element is even located: the one rule
+        # with no exception path. Nothing gets typed into a credential, a
+        # signature, or a challenge answer, whatever the caller believes it
+        # is doing (see `_refuse_if_human_only`).
+        self._refuse_if_human_only(field)
         # Kind is checked before the element is located: a caller who
         # reached for the wrong operation should be told exactly that,
         # rather than getting whatever the page happened to do next.
@@ -262,6 +306,9 @@ class PlaywrightBrowserSession(BrowserSessionPort):
 
     async def attach_file(self, handle: str, *, filename: str, content: bytes) -> None:
         entry = self._entry(handle)
+        # Same first check as `fill`: an upload slot asking for a signed copy
+        # of something is no more automatable than a signature box.
+        self._refuse_if_human_only(entry.field)
         if entry.field.kind is not FormFieldKind.FILE:
             raise FormFieldNotFillableError(
                 handle,
@@ -291,7 +338,7 @@ class PlaywrightBrowserSession(BrowserSessionPort):
                 handle, f"the portal refused the upload: {_first_line(exc)}"
             ) from exc
 
-    async def read_page_signals(self) -> PageSignals:
+    async def read_boundary_signals(self) -> PageSignals:
         self._require_open()
         payloads: list[dict[str, Any]] = []
         frame_urls: list[str] = []
@@ -304,7 +351,7 @@ class PlaywrightBrowserSession(BrowserSessionPort):
             if frame is not self._page.main_frame and frame.url:
                 frame_urls.append(frame.url)
             try:
-                payload = await frame.evaluate(PAGE_SIGNALS_JS)
+                payload = await frame.evaluate(BOUNDARY_SIGNALS_JS)
             except PlaywrightError as exc:
                 # Same as field discovery: a frame detaching mid-read is
                 # ordinary on a live page, and what it held is simply not
@@ -426,6 +473,21 @@ class PlaywrightBrowserSession(BrowserSessionPort):
 
     # -- internals ---------------------------------------------------------
 
+    async def _await_fields(self) -> list[tuple[int, int, Frame, dict[str, Any]]]:
+        """Run the discovery pass, re-checking a page that has shown no field
+        yet until the wait budget is spent.
+
+        A form that mounts after first paint is the norm on modern ATS
+        portals; an empty page is only accepted once there has been time for
+        one to appear.
+        """
+        deadline = time.monotonic() + self._settings.browser_field_wait_timeout_seconds
+        while True:
+            entries = await self._discover()
+            if entries or time.monotonic() >= deadline:
+                return entries
+            await asyncio.sleep(_FIELD_POLL_INTERVAL_SECONDS)
+
     async def _discover(
         self,
     ) -> list[tuple[int, int, Frame, dict[str, Any]]]:
@@ -473,6 +535,22 @@ class PlaywrightBrowserSession(BrowserSessionPort):
             raise BrowserSessionClosedError(
                 "This browser session is closed; open a new one to continue."
             )
+
+    @staticmethod
+    def _refuse_if_human_only(field: FormField) -> None:
+        """Refuse any write to a field the domain marked as a boundary.
+
+        The enforcement point for "ApplyFlow never solves CAPTCHAs, creates
+        accounts, or enters passwords". It sits here — at the layer that
+        actually types — rather than in a use case, because a rule enforced
+        one level up is a rule the *next* caller has to remember. The
+        judgment itself was made at discovery time by
+        `HumanOnlyFieldPolicy`; this only obeys it.
+        """
+        boundary = field.human_only_boundary
+        if boundary is None:
+            return
+        raise HumanOnlyFieldError(field.handle, boundary.value, field.label)
 
     def _entry(self, handle: str) -> _SnapshotEntry:
         self._require_open()

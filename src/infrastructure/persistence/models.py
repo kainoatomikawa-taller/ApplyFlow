@@ -19,6 +19,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -329,6 +330,188 @@ class ApplicationDocumentModel(Base):
         JSON, comment=_PROVENANCE_COMMENT
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ApplicationReviewModel(Base):
+    """One filled application under review by the candidate, and the record of
+    them submitting it — see `ApplicationReview`.
+
+    Stored because reviewing an application is not a single-sitting job: the
+    candidate reads the answers, goes to check what their visa is actually
+    called, comes back, and finishes later. A review that lived only in a
+    response would lose every decision they had already made, starting with the
+    sensitive ones they had confirmed.
+
+    The partial unique index allows at most one review *in progress* per
+    candidate and posting. Two would mean two sets of answers for one
+    application and nothing to say which the candidate meant. Submitted rows are
+    exempt: a posting applied to twice is two real events, each keeping its own
+    answers and timestamps. (Partial indexes are a Postgres feature; on a
+    backend that ignores the `WHERE` clause this would become "one review per
+    posting, ever", which would reject the second application — this store is
+    Postgres.)
+
+    `ON DELETE CASCADE` on the posting, matching `portal_handoffs` rather than
+    `application_documents`: a review is the working surface for an application
+    in flight, not the archived record of what was sent. The documents that went
+    with it are what survive a posting being pruned, and they have their own
+    table with RESTRICT.
+
+    SENSITIVE: `answers` is what goes onto a real application — name, email,
+    address, and the work-authorization declarations — and `submission_note` is
+    the candidate's own free text. Never log either; log `id`, `status`, and
+    counts.
+    """
+
+    __tablename__ = "application_reviews"
+    __table_args__ = (
+        Index(
+            "uq_application_reviews_open_per_job",
+            "user_id",
+            "job_posting_id",
+            unique=True,
+            postgresql_where=text("status = 'in_review'"),
+        ),
+        # "What have I reviewed and sent?", newest first.
+        Index("ix_application_reviews_user_id_created_at", "user_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64))
+    job_posting_id: Mapped[str] = mapped_column(
+        ForeignKey("job_postings.id", ondelete="CASCADE"), index=True
+    )
+    #: The apply URL the fill pass ended on — where the candidate goes to send
+    #: the application.
+    apply_url: Mapped[str] = mapped_column(Text)
+    ats_provider: Mapped[str] = mapped_column(
+        String(32),
+        comment=(
+            "Which supported ATS platform the form was read as: greenhouse | "
+            "lever | ashby. See src/domain/value_objects/ats_provider.py."
+        ),
+    )
+    status: Mapped[str] = mapped_column(
+        String(32),
+        comment=(
+            "Review lifecycle: in_review | submitted_by_user. Only a "
+            "candidate's own action reaches the second. See "
+            "src/domain/value_objects/review_status.py."
+        ),
+    )
+    #: Every question the form presented, in page order, as
+    #: `[{"key", "label", "widget_kind", "value", "slot", "sensitivity",
+    #: "required", "origin", "decided_by_candidate", "explanation"}]`.
+    answers: Mapped[list[dict[str, object]]] = mapped_column(
+        JSON,
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=(
+            "SENSITIVE: the answers on a real application, plus their "
+            "provenance and the candidate's decisions. "
+            "See src/domain/value_objects/reviewed_answer.py."
+        ),
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    #: Whether the fill pass captured a screenshot. The image is not stored —
+    #: it is proof for the session that produced it.
+    screenshot_captured: Mapped[bool] = mapped_column(Boolean, default=False)
+    submitted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    submission_note: Mapped[str] = mapped_column(
+        Text, default="", info=_SENSITIVE_COLUMN_INFO, comment=_SENSITIVE_COMMENT
+    )
+
+
+class PortalHandoffModel(Base):
+    """One application portal where automation stopped at a hard boundary and
+    handed control to the candidate — see `PortalHandoff`.
+
+    This row is what makes the pause resumable. The candidate leaves to solve
+    a CAPTCHA, sign a form, or log in somewhere else entirely; without a
+    stored hand-off they would come back to a reloaded page with no idea what
+    they were in the middle of, and nothing downstream could tell a portal
+    that is waiting on a human from one nobody has looked at.
+
+    The partial unique index is the important constraint here: at most one
+    *open* hand-off per (candidate, posting). Two concurrent inspections of
+    the same portal would otherwise each open one and the candidate would be
+    asked to do the same thing twice. Resolved rows are exempt, because a
+    portal that puts up a wall, gets resolved, and puts up another one is a
+    sequence of real events and each one keeps its own evidence and timestamps.
+    (Partial indexes are a Postgres feature. On a backend that ignores the
+    `WHERE` clause the constraint becomes "one hand-off per posting, ever",
+    which would reject that second event — this store is Postgres.)
+
+    The foreign key is `ON DELETE CASCADE`, unlike `application_documents`'
+    RESTRICT, and the difference is deliberate: a document snapshot records
+    what was sent to an employer and must outlive the posting, while a
+    hand-off is an in-flight interaction with a portal. Once the posting is
+    gone there is no application to resume, so the row's whole purpose has
+    already expired.
+
+    SENSITIVE: `resolution_note` is free text the candidate wrote about how
+    they handled the boundary, which can carry anything they thought was
+    relevant — an address they registered with, a reference number, a reason.
+    Never log it; log `id` and `status`. The `hard_stops` evidence is the
+    opposite: it describes the portal's own page and carries nothing about the
+    candidate, so it is safe to log and display.
+    """
+
+    __tablename__ = "portal_handoffs"
+    __table_args__ = (
+        Index(
+            "uq_portal_handoffs_open_per_job",
+            "user_id",
+            "job_posting_id",
+            unique=True,
+            postgresql_where=text("status = 'awaiting_user'"),
+        ),
+        # "What is waiting on me?", newest first — the panel's only query.
+        Index("ix_portal_handoffs_user_id_created_at", "user_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64))
+    job_posting_id: Mapped[str] = mapped_column(
+        ForeignKey("job_postings.id", ondelete="CASCADE"), index=True
+    )
+    #: The apply URL automation was asked to work on.
+    apply_url: Mapped[str] = mapped_column(Text)
+    #: Where it actually stopped — frequently a redirect target, and the URL
+    #: the candidate is pointed at to finish the step.
+    paused_url: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(
+        String(32),
+        comment=(
+            "Hand-off lifecycle: awaiting_user | resumed | abandoned. "
+            "See src/domain/value_objects/handoff_status.py."
+        ),
+    )
+    #: The boundaries found, as `[{"kind": ..., "evidence": [...]}]`. JSON
+    #: because a page can present more than one at once (a login wall *and* a
+    #: CAPTCHA), and because the evidence is a list of lines whose only reader
+    #: is the candidate.
+    hard_stops: Mapped[list[dict[str, object]]] = mapped_column(
+        JSON,
+        comment=(
+            "Detected hard boundaries: kind + evidence lines about the "
+            "portal's page. See src/domain/value_objects/hard_stop.py."
+        ),
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    #: When the boundary was last seen. Equal to `created_at` until an
+    #: inspection re-reads the same unresolved hand-off.
+    last_detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    resolution_note: Mapped[str] = mapped_column(
+        Text,
+        default="",
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
+    )
 
 
 class WorkHistoryModel(Base):

@@ -306,6 +306,7 @@ class ScoringFeedbackSummaryResponse(BaseModel):
     buckets: list[ScoreBucketAgreementResponse]
 
 
+<<<<<<< HEAD
 class ApplicationBoundaryResponse(BaseModel):
     """A human-only check found on an application page.
 
@@ -413,3 +414,164 @@ class ApplicationSubmissionResponse(BaseModel):
         default_factory=list
     )
     is_confirmed_sent: bool = True
+=======
+class InspectPortalRequest(BaseModel):
+    job_posting_id: str = Field(min_length=1)
+
+
+class HardStopResponse(BaseModel):
+    """One boundary found on an application portal, with the case for
+    stopping. `evidence` describes the portal's page and carries nothing
+    about the candidate, so it is safe to show and to log."""
+
+    kind: str
+    refusal_reason: str
+    human_action: str
+    evidence: list[str] = Field(default_factory=list)
+
+
+class PortalHandoffResponse(BaseModel):
+    """A hand-off's full state — what ApplyFlow hit, where it stopped, and
+    how it stands. `paused_url` is the URL the candidate should open to do
+    the step themselves; it is frequently not the apply URL."""
+
+    id: str
+    job_posting_id: str
+    apply_url: str
+    paused_url: str
+    status: str
+    is_open: bool
+    created_at: datetime
+    last_detected_at: datetime
+    resolved_at: datetime | None = None
+    resolution_note: str = ""
+    hard_stops: list[HardStopResponse] = Field(default_factory=list)
+
+
+class PortalFieldResponse(BaseModel):
+    """One question the portal asks. Carries no field handle: a handle only
+    means anything inside the live browser session that minted it, and that
+    session is closed before this response is sent."""
+
+    label: str
+    kind: str
+    name: str = ""
+    required: bool = False
+    human_only_boundary: str | None = None
+
+
+class InspectPortalResponse(BaseModel):
+    """The result of inspecting a portal. Branch on `is_handed_off`: when it
+    is true, `handoff` is set and `fields` is empty — the form is withheld
+    rather than merely flagged, so nothing downstream can fill a portal
+    ApplyFlow stopped on (see `InspectApplicationPortalOutput`)."""
+
+    job_posting_id: str
+    apply_url: str
+    landed_url: str
+    is_handed_off: bool
+    handoff: PortalHandoffResponse | None = None
+    fields: list[PortalFieldResponse] = Field(default_factory=list)
+    cleared_handoff_id: str | None = None
+
+
+class ResolvePortalHandoffRequest(BaseModel):
+    # Free text, and optional: "I signed in" is useful context, but nothing
+    # downstream requires it. Capped at the entity's own limit
+    # (`PortalHandoff.MAX_NOTE_LENGTH`) so an over-long note is a 422 here
+    # rather than a domain error deeper in.
+    note: str = Field(default="", max_length=1000)
+
+
+class PortalHandoffListResponse(BaseModel):
+    handoffs: list[PortalHandoffResponse] = Field(default_factory=list)
+    open_count: int = 0
+
+
+class ReviewedAnswerResponse(BaseModel):
+    """One question on a filled application as it stands.
+
+    SENSITIVE: `value` is what goes onto a real application. Returned to its
+    owner only, and never logged (see `ApplicationReview`)."""
+
+    key: str
+    label: str
+    widget_kind: str
+    value: str
+    required: bool
+    origin: str
+    slot: str | None = None
+    sensitivity: str | None = None
+    is_sensitive: bool = False
+    needs_decision: bool = False
+    explanation: str = ""
+
+
+class SubmissionBlockerResponse(BaseModel):
+    kind: str
+    detail: str
+    field_key: str | None = None
+    field_label: str = ""
+
+
+class ApplicationReviewResponse(BaseModel):
+    """A filled application, everything still waiting on the candidate, and the
+    one flag a submit button binds to (`can_submit`)."""
+
+    id: str
+    job_posting_id: str
+    apply_url: str
+    ats_provider: str
+    status: str
+    is_open: bool
+    created_at: datetime
+    answers: list[ReviewedAnswerResponse] = Field(default_factory=list)
+    blockers: list[SubmissionBlockerResponse] = Field(default_factory=list)
+    can_submit: bool = False
+    handoff: PortalHandoffResponse | None = None
+    unanswered_required_keys: list[str] = Field(default_factory=list)
+    screenshot_captured: bool = False
+    submitted_at: datetime | None = None
+    submission_note: str = ""
+
+
+class OpenApplicationReviewResponse(BaseModel):
+    """The result of filling a form and opening a review over it.
+
+    `review` is null only when the portal is blocked by a hard stop: nothing was
+    filled, and `handoff` says why — a correct outcome, which is why it is a 200
+    rather than an error."""
+
+    job_posting_id: str
+    review: ApplicationReviewResponse | None = None
+    handoff: PortalHandoffResponse | None = None
+    #: The filled form as a base64 PNG, when the pass captured one. Proof the
+    #: candidate can check the answers against; not stored server-side.
+    screenshot_base64: str | None = None
+
+
+class ReviseReviewedAnswerRequest(BaseModel):
+    """One decision about one field: write an answer, approve the one that is
+    there, or leave it deliberately blank."""
+
+    action: Literal["set", "confirm", "decline"]
+    value: str = ""
+
+
+class SubmitApplicationReviewRequest(BaseModel):
+    # Capped at the entity's own limit (`ApplicationReview.MAX_NOTE_LENGTH`) so
+    # an over-long note is a 422 here rather than a domain error deeper in.
+    note: str = Field(default="", max_length=1000)
+
+
+class SubmitApplicationReviewResponse(BaseModel):
+    """What comes back when the candidate submits.
+
+    Carries `apply_url` because ApplyFlow does not press the portal's submit
+    button — it cannot (see `BrowserAutomationPort`). The submission is
+    recorded; sending it is the candidate's own act, and this is where they go
+    to finish."""
+
+    review: ApplicationReviewResponse
+    apply_url: str
+>>>>>>> origin/main
