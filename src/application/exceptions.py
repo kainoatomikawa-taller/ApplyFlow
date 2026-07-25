@@ -67,6 +67,41 @@ class DocumentVersionConflictError(ApplicationError):
         )
 
 
+class TrackedApplicationReferenceError(ApplicationError):
+    """Raised when a tracked application could not be stored because one of
+    the rows it points at does not exist — the job posting, the resume
+    snapshot, or the cover letter snapshot.
+
+    Surfaced as its own error rather than as a driver-level integrity failure
+    because the cause is always the same kind of mistake: something tried to
+    file an application against a posting or a document that was never stored
+    (or was stored in a transaction that rolled back). The tracker's whole
+    value is that its references resolve, so a row whose documents point
+    nowhere is refused at write time instead of becoming a tracker entry that
+    cannot show what was sent.
+
+    Carries only ids — a document id is not sensitive, its content is (see
+    `ApplicationDocument`) — so this is safe to log.
+    """
+
+    def __init__(
+        self,
+        *,
+        job_posting_id: str,
+        resume_document_id: str,
+        cover_letter_document_id: str | None = None,
+    ) -> None:
+        self.job_posting_id = job_posting_id
+        self.resume_document_id = resume_document_id
+        self.cover_letter_document_id = cover_letter_document_id
+        letter = cover_letter_document_id or "none"
+        super().__init__(
+            "Cannot track this application: one of the records it references "
+            f"does not exist (job posting '{job_posting_id}', resume document "
+            f"'{resume_document_id}', cover letter document '{letter}')."
+        )
+
+
 class BrowserAutomationError(ApplicationError):
     """Base class for failures driving a browser over an application
     portal (see `BrowserAutomationPort`)."""
@@ -153,7 +188,6 @@ class RejectedFieldValueError(BrowserAutomationError):
         )
 
 
-<<<<<<< HEAD
 class SubmitControlNotPressableError(BrowserAutomationError):
     """Raised when a form's submit control was located but would not accept
     the press — obscured by an overlay or a cookie banner, disabled between
@@ -170,7 +204,8 @@ class SubmitControlNotPressableError(BrowserAutomationError):
         self.handle = handle
         self.reason = reason
         super().__init__(f"Submit control '{handle}' could not be pressed: {reason}")
-=======
+
+
 class HumanOnlyFieldError(BrowserAutomationError):
     """Raised when something tried to write into a field only the candidate
     may fill — a password, a signature, a CAPTCHA answer.
@@ -200,7 +235,6 @@ class HumanOnlyFieldError(BrowserAutomationError):
             "creates accounts, or enters passwords — hand off to the user "
             "instead."
         )
->>>>>>> origin/main
 
 
 class UnsupportedAtsFormError(ApplicationError):

@@ -332,6 +332,93 @@ class ApplicationDocumentModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class TrackedApplicationModel(Base):
+    """One application the candidate actually sent — the tracker's spine. See
+    `TrackedApplication` for the full contract.
+
+    Every foreign key here is `ON DELETE RESTRICT`, matching
+    `application_documents` rather than `application_reviews`/
+    `portal_handoffs`. The distinction those tables draw is between an
+    application *in flight* (worthless once its posting is gone, so CASCADE)
+    and the archived record of one that was *sent* (a real event that must
+    outlive the posting being pruned, so RESTRICT). This table is squarely the
+    second. Pruning a posting a candidate applied to has to be a deliberate act
+    against this row, not a side effect.
+
+    `resume_document_id` / `cover_letter_document_id` point at
+    `application_documents` — the exact snapshots that went to the employer,
+    not the text of them. A `TEXT` column here would be a second copy free to
+    drift from the row that is supposed to be authoritative, which is the
+    failure `ApplicationDocument` exists to prevent. Note what the FK cannot
+    check: that the referenced row is the right *kind* of document and belongs
+    to this candidate and posting. Any `application_documents.id` satisfies the
+    constraint, so that check lives in `TrackedApplication.record_sent`.
+
+    `company_name`/`role_title` are copied from the posting at record time
+    rather than read through `job_posting_id` on every query. A posting is a
+    live row — re-ingested, re-normalized, retitled, eventually stale — and
+    this one states what the candidate applied to *then*.
+
+    No unique constraint on (`user_id`, `job_posting_id`): applying to the same
+    posting twice is two real events, each with its own date, documents, and
+    outcome. Same reasoning as the submitted rows in `application_reviews`.
+
+    Not sensitive. A role, a company, and a status carry nothing that
+    `work_authorizations` or `answer_memories` do — the sensitive material sits
+    in the documents this row references, behind their own flags. Which is why
+    these columns are ids: this row stays loggable.
+    """
+
+    __tablename__ = "tracked_applications"
+    __table_args__ = (
+        # The tracker's feed: a candidate's applications, most recent first.
+        Index(
+            "ix_tracked_applications_user_id_applied_at",
+            "user_id",
+            "applied_at",
+        ),
+        # "What is still live?" — the open-applications view filters on status
+        # before it orders, so the pair is worth its own index.
+        Index("ix_tracked_applications_user_id_status", "user_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64))
+    job_posting_id: Mapped[str] = mapped_column(
+        ForeignKey("job_postings.id", ondelete="RESTRICT"), index=True
+    )
+    #: Snapshotted from the posting — see the class docstring.
+    company_name: Mapped[str] = mapped_column(String(255))
+    role_title: Mapped[str] = mapped_column(String(255))
+    #: When the application was sent. Not nullable: this row exists because it
+    #: was, and a tracker whose "date applied" could be NULL would need a
+    #: branch in every reader for applications that were never applications.
+    applied_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(
+        String(32),
+        comment=(
+            "Application lifecycle: applied | interviewing | offer | rejected "
+            "| withdrawn. Never 'draft' — an application still being prepared "
+            "is an application_reviews row. See "
+            "src/domain/value_objects/application_status.py."
+        ),
+    )
+    #: The archived resume that went out. Required — an application ApplyFlow
+    #: sent always carried one.
+    resume_document_id: Mapped[str] = mapped_column(
+        ForeignKey("application_documents.id", ondelete="RESTRICT"), index=True
+    )
+    #: The archived cover letter, when the posting asked for one. Nullable
+    #: because plenty of forms do not ask.
+    cover_letter_document_id: Mapped[str | None] = mapped_column(
+        ForeignKey("application_documents.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class ApplicationReviewModel(Base):
     """One filled application under review by the candidate, and the record of
     them submitting it — see `ApplicationReview`.

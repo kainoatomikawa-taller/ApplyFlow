@@ -99,16 +99,19 @@ infrastructure ─►  application  ──►  domain
 ### `src/domain/` — the core (depends on nothing)
 Pure business logic with zero third-party imports.
 - `entities/` — `JobApplication` (aggregate root, protects its own invariants);
-  `UserProfile` (aggregate root — a candidate's contact info plus their
-  `WorkHistoryEntry`, `EducationEntry`, and `Skill` child entities — the data
-  spine matching, tailoring, and autofill read from); `Resume` (an uploaded
-  resume file's metadata + extracted text — enforces the accepted file
-  formats and size limit; see "Resume upload & file handling" below)
+  `TrackedApplication` (aggregate root — one application the candidate
+  actually sent, and the spine of the tracker; see "Application record data
+  model" below); `UserProfile` (aggregate root — a candidate's contact info
+  plus their `WorkHistoryEntry`, `EducationEntry`, and `Skill` child
+  entities — the data spine matching, tailoring, and autofill read from);
+  `Resume` (an uploaded resume file's metadata + extracted text — enforces
+  the accepted file formats and size limit; see "Resume upload & file
+  handling" below)
 - `value_objects/` — `ApplicationStatus` (state machine), `EmailAddress`,
   `MatchScore`, `ProficiencyLevel`, `ProvenanceSource` (source tag required
   on every stored fact — see "Provenance tagging" below)
-- `repositories/` — `JobApplicationRepository`, `ProfileRepository`,
-  `ResumeRepository` **interfaces** (WHAT, not HOW)
+- `repositories/` — `JobApplicationRepository`, `TrackedApplicationRepository`,
+  `ProfileRepository`, `ResumeRepository` **interfaces** (WHAT, not HOW)
 - `services/` — `ApplicationRankingService` (pure domain logic)
 - `exceptions.py` — domain exceptions
 
@@ -578,6 +581,72 @@ Only the resume's plain text is stored, and the PDF/structured exports are
 re-derived from it on demand (all three already come from that one guarded
 text, so they cannot disagree). Byte-exact PDF archival would go through
 `FileStoragePort` and is not part of this store.
+
+---
+
+## Application record data model (Epic 06)
+
+`TrackedApplication` (`tracked_applications`) is one row per application the
+candidate actually sent: role, company, date applied, status, the job posting
+it was made against, and references to the exact resume and cover letter that
+went out with it.
+
+- **It records a sent application, not a draft.** `applied_at` is required and
+  `draft` is refused. The in-flight state already has a home —
+  `ApplicationReview` is the form the candidate is still editing, one open per
+  posting — and a tracker that also held drafts would answer "when did you
+  apply?" with `NULL` for half its rows, putting a branch for
+  non-applications into every reader.
+- **Documents are referenced, never copied.** `resume_document_id` and
+  `cover_letter_document_id` point at `application_documents` — the Epic 04
+  snapshots above — so the tracker shows what the employer received rather
+  than something regenerated to resemble it. A `TEXT` column here would be a
+  second copy free to drift from the row that is supposed to be
+  authoritative. The cover letter reference is nullable because plenty of
+  forms never ask for one; a reference already set cannot be repointed, since
+  that would rewrite what was sent.
+- **The checks a foreign key cannot make live in the domain.** Any
+  `application_documents.id` satisfies the constraint, including another
+  job's resume or another candidate's. `TrackedApplication.record_sent` takes
+  the snapshot entities and verifies each is the right *kind* and belongs to
+  this candidate and this posting, so an application filed against the wrong
+  document is rejected instead of quietly misstating what an employer got. An
+  id that resolves to no row at all is refused at write time as
+  `TrackedApplicationReferenceError`.
+- **Role and company are snapshotted, not read through the posting.** They are
+  copied from `JobPosting` at record time. A posting is a live row —
+  re-ingested, re-normalized, retitled, eventually stale — while this one
+  states what the candidate applied to *then*, so a posting edited in June
+  cannot rewrite an application sent in March.
+- **Status reuses `ApplicationStatus`.** Same state machine, same transition
+  rules as the rest of the system, so the tracker cannot reach a different
+  conclusion about whether a rejected application can go back to
+  interviewing. Unlike the document store, this repository has an `update`:
+  following an application through its lifecycle is the point. It has no
+  `delete` — erasing a candidate's data is Epic 07's deliberate, user-scoped
+  purge, not an ambient capability.
+- **Every foreign key is `ON DELETE RESTRICT`,** matching
+  `application_documents` rather than the CASCADE on `application_reviews` and
+  `portal_handoffs`. That is the same distinction those tables draw: in-flight
+  state is worthless once its posting is gone, while the archived record of a
+  sent application is a real event that has to outlive pruning.
+- **Applying twice is two rows.** There is deliberately no unique constraint
+  on (`user_id`, `job_posting_id`): a candidate who applies again months later
+  has made two applications, each with its own date, documents, and outcome.
+- **Not sensitive.** A role, a company, and a status carry nothing that
+  `work_authorizations` or `answer_memories` do — the sensitive material sits
+  in the documents this row references, behind their own flags. Which is why
+  these columns are ids: the row stays loggable.
+
+`tests/infrastructure/test_tracked_application_persistence_smoke.py` proves the
+path against a **real** database, the same way `test_persistence_smoke.py`
+does: it archives an Epic 04 resume and cover letter, records an application
+against them, reads it back, follows the reference to the snapshots to confirm
+they come back byte for byte, drives a status transition, and checks that a
+dangling reference and a delete of an applied-to posting are both refused. It
+skips (instead of failing) when nothing is reachable at `DATABASE_URL`.
+
+The migration is `migrations/versions/0017_create_tracked_applications.py`.
 
 ---
 
