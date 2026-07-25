@@ -367,10 +367,34 @@ def greenhouse_form() -> tuple[FormField, ...]:
             ),
         ),
         form_field(
+            "Will you now or in the future require sponsorship? *",
+            handle="f-sponsorship",
+            kind=FormFieldKind.RADIO,
+            required=True,
+            options=(
+                FormFieldOption(label="Yes", value="1"),
+                FormFieldOption(label="No", value="0"),
+            ),
+        ),
+        form_field(
             "Gender",
             handle="f-gender",
             kind=FormFieldKind.SELECT,
-            options=(FormFieldOption(label="Female", value="2"),),
+            options=(
+                FormFieldOption(label="Female", value="2"),
+                FormFieldOption(label="Male", value="1"),
+                FormFieldOption(label="Decline to self identify", value="0"),
+            ),
+        ),
+        form_field(
+            "Are you a protected veteran? *",
+            handle="f-veteran",
+            kind=FormFieldKind.SELECT,
+            required=True,
+            options=(
+                FormFieldOption(label="I am a protected veteran", value="1"),
+                FormFieldOption(label="I am not a protected veteran", value="2"),
+            ),
         ),
     )
 
@@ -410,6 +434,10 @@ async def test_standard_fields_are_autofilled_from_the_profile(
         "f-degree": "B.S.",
         "f-linkedin": "https://www.linkedin.com/in/danareyes",
         "f-cover": "Dear Globex team,\n...",
+        # The two legal questions, answered exactly from the attested record:
+        # a US citizen who stated they need no sponsorship.
+        "f-auth": "Yes",
+        "f-sponsorship": "No",
     }
 
 
@@ -497,38 +525,87 @@ async def test_a_company_screening_question_is_surfaced_untouched(
     assert "f-why" not in dict(session.filled)
 
 
-async def test_sensitive_questions_are_recognized_and_left_to_the_candidate(
+async def test_the_legal_questions_are_answered_and_flagged_for_confirmation(
     profile, posting, documents
 ):
-    """The profile holds both answers. Neither reaches the form, and the
-    report names the question so the candidate knows what to answer."""
-    output, session, _ = await run_greenhouse(profile, posting, documents)
+    """AC1: filled exactly from attested profile data — and flagged, because a
+    legal declaration written from stored data is still the candidate's
+    statement to make to this particular employer."""
+    output, _, _ = await run_greenhouse(profile, posting, documents)
 
     auth = outcome_for(
         output, "Are you legally authorized to work in the United States? *"
     )
+    sponsorship = outcome_for(
+        output, "Will you now or in the future require sponsorship? *"
+    )
+
+    assert (auth.slot, auth.value) == (Slot.WORK_AUTHORIZATION, "Yes")
+    assert (sponsorship.slot, sponsorship.value) == (Slot.SPONSORSHIP_REQUIRED, "No")
+    for item in (auth, sponsorship):
+        assert item.outcome == FieldAutofillOutcome.FILLED
+        assert item.is_sensitive is True
+        assert item.sensitivity == "legal_attestation"
+        assert item.requires_confirmation is True
+
+
+async def test_eeo_questions_are_surfaced_never_filled(profile, posting, documents):
+    """AC2: the profile answers every EEO category and none of it reaches the
+    form. The report names each question so the candidate can decide for this
+    application."""
+    output, session, _ = await run_greenhouse(profile, posting, documents)
+
     gender = outcome_for(output, "Gender")
-    for item in (auth, gender):
+    veteran = outcome_for(output, "Are you a protected veteran? *")
+    for item in (gender, veteran):
         assert item.outcome == FieldAutofillOutcome.SURFACED
         assert item.reason == SurfaceReason.REQUIRES_CANDIDATE_ANSWER
+        assert item.slot == Slot.EEO_SELF_IDENTIFICATION
         assert item.value is None
+        assert item.is_sensitive is True
+        assert item.sensitivity == "voluntary_self_id"
+        # Nothing was written, so there is nothing to confirm — this one is
+        # the candidate's to answer, not to approve.
+        assert item.requires_confirmation is False
 
-    assert auth.slot == Slot.WORK_AUTHORIZATION
-    assert gender.slot == Slot.EEO_SELF_IDENTIFICATION
     written = {handle for handle, _ in session.filled}
-    assert written.isdisjoint({"f-auth", "f-gender"})
+    assert written.isdisjoint({"f-gender", "f-veteran"})
 
 
-async def test_no_sensitive_value_is_written_anywhere_on_the_form(
+async def test_no_eeo_value_reaches_the_form_under_any_label(
     profile, posting, documents
 ):
-    """A blunt sweep over everything that was written: none of the stored
-    sensitive answers may appear in any field, whatever it was labelled."""
+    """A blunt sweep over everything written anywhere on the form: no stored
+    EEO answer may appear in any field, whatever it was labelled."""
     _, session, _ = await run_greenhouse(profile, posting, documents)
 
     written = " ".join(value for _, value in session.filled).lower()
-    for forbidden in ("citizen", "female", "sponsorship", "veteran", "disability"):
+    for forbidden in ("female", "male", "asian", "veteran", "disab", "decline"):
         assert forbidden not in written
+
+
+async def test_the_review_step_can_flag_every_sensitive_field(
+    profile, posting, documents
+):
+    """AC3: the report gives a review UI exactly two lists — what to flag, and
+    what must be approved before submission — so it never has to infer
+    sensitivity from a slot name."""
+    output, _, _ = await run_greenhouse(profile, posting, documents)
+
+    assert [item.label for item in output.sensitive_fields] == [
+        "Are you legally authorized to work in the United States? *",
+        "Will you now or in the future require sponsorship? *",
+        "Gender",
+        "Are you a protected veteran? *",
+    ]
+    assert [item.label for item in output.fields_awaiting_confirmation] == [
+        "Are you legally authorized to work in the United States? *",
+        "Will you now or in the future require sponsorship? *",
+    ]
+    # Every sensitive field is one or the other: flagged for approval because
+    # it was filled, or waiting on the candidate. None is merely ordinary.
+    for item in output.sensitive_fields:
+        assert item.requires_confirmation or not item.was_applied
 
 
 async def test_the_report_separates_what_was_filled_from_what_needs_review(
@@ -540,16 +617,16 @@ async def test_the_report_separates_what_was_filled_from_what_needs_review(
     assert [item.label for item in output.fields] == [
         f.label for f in greenhouse_form()
     ]
-    assert len(output.applied_fields) == 10
+    assert len(output.applied_fields) == 12
     assert [item.label for item in output.fields_needing_review] == [
         "Why do you want to work at Globex?",
-        "Are you legally authorized to work in the United States? *",
         "Gender",
+        "Are you a protected veteran? *",
     ]
-    # The two the portal marks required are the ones that block submission.
+    # The ones the portal marks required are what will block submission.
     assert [item.label for item in output.unanswered_required_fields] == [
         "Why do you want to work at Globex?",
-        "Are you legally authorized to work in the United States? *",
+        "Are you a protected veteran? *",
     ]
 
 
@@ -808,7 +885,7 @@ async def test_a_failed_capture_costs_the_proof_not_the_report(
     )
 
     assert output.screenshot_png is None
-    assert len(output.applied_fields) == 10
+    assert len(output.applied_fields) == 12
 
 
 # ---- Scope: only the three supported platforms ------------------------------
@@ -1030,3 +1107,177 @@ async def test_a_navigation_failure_propagates(profile, posting):
                 user_id="user-1", job_posting_id="job-posting-1"
             )
         )
+
+
+# ---- The policy is the same on every supported platform ---------------------
+
+
+def sensitive_form() -> tuple[FormField, ...]:
+    """The always-asked block, in the shape any of the three platforms serves
+    it: two legal questions and one EEO question."""
+    yes_no = (
+        FormFieldOption(label="Yes", value="1"),
+        FormFieldOption(label="No", value="0"),
+    )
+    return (
+        form_field(
+            "Are you legally authorized to work in the United States?",
+            handle="f-auth",
+            kind=FormFieldKind.SELECT,
+            required=True,
+            options=yes_no,
+        ),
+        form_field(
+            "Will you now or in the future require sponsorship?",
+            handle="f-sponsorship",
+            kind=FormFieldKind.RADIO,
+            required=True,
+            options=yes_no,
+        ),
+        form_field(
+            "Gender",
+            handle="f-gender",
+            kind=FormFieldKind.SELECT,
+            options=(FormFieldOption(label="Female", value="2"),),
+        ),
+    )
+
+
+@pytest.mark.parametrize("apply_url", [GREENHOUSE_URL, LEVER_URL, ASHBY_URL])
+async def test_the_sensitive_policy_is_identical_on_all_three_platforms(
+    profile, documents, apply_url
+):
+    """AC4. The policy lives in one domain service that no platform-specific
+    code can reach around, so the same questions get the same treatment
+    whichever portal asked them."""
+    session = FakeBrowserSession(sensitive_form(), current_url=apply_url)
+    use_case, _, _ = build_use_case(
+        session=session,
+        posting=posting_at(apply_url),
+        profile=profile,
+        documents=documents,
+    )
+
+    output = await use_case.execute(
+        AutofillApplicationFormInput(user_id="user-1", job_posting_id="job-posting-1")
+    )
+
+    assert dict(session.filled) == {"f-auth": "Yes", "f-sponsorship": "No"}
+    gender = outcome_for(output, "Gender")
+    assert gender.outcome == FieldAutofillOutcome.SURFACED
+    assert gender.reason == SurfaceReason.REQUIRES_CANDIDATE_ANSWER
+    assert [item.label for item in output.fields_awaiting_confirmation] == [
+        "Are you legally authorized to work in the United States?",
+        "Will you now or in the future require sponsorship?",
+    ]
+
+
+# ---- Exact or nothing, at execution time ------------------------------------
+
+
+async def test_a_portal_that_refuses_yes_reports_it_instead_of_approximating(
+    profile, posting, documents
+):
+    """A portal labelling its options "Yes, I am authorized" refuses the exact
+    "Yes" the policy produced, and the field is reported with the options that
+    would have worked — never quietly matched to the closest one."""
+    session = FakeBrowserSession(
+        sensitive_form(),
+        current_url=GREENHOUSE_URL,
+        failures={
+            "f-auth": RejectedFieldValueError(
+                handle="f-auth",
+                value="Yes",
+                accepted="'Yes, I am authorized to work in the US', 'No'",
+            )
+        },
+    )
+    use_case, _, _ = build_use_case(
+        session=session, posting=posting, profile=profile, documents=documents
+    )
+
+    output = await use_case.execute(
+        AutofillApplicationFormInput(user_id="user-1", job_posting_id="job-posting-1")
+    )
+
+    auth = outcome_for(
+        output, "Are you legally authorized to work in the United States?"
+    )
+    assert auth.outcome == FieldAutofillOutcome.NOT_ACCEPTED
+    assert auth.detail is not None and "Yes, I am authorized" in auth.detail
+    # Nothing reached the form, so there is nothing to confirm — the candidate
+    # has to choose, and one gate pointing at this field is enough.
+    assert auth.requires_confirmation is False
+    assert auth.is_sensitive is True
+    assert auth in output.fields_needing_review
+
+
+async def test_an_unattested_record_leaves_the_legal_questions_to_the_candidate(
+    posting, documents
+):
+    """A work authorization inferred from a resume rather than stated by the
+    candidate is never asserted to an employer, even though it would answer
+    the question."""
+    parsed = UserProfile(
+        id="profile-1",
+        user_id="user-1",
+        full_name="Dana Reyes",
+        email=EmailAddress("dana@example.com"),
+        contact_source=ProvenanceSource.USER_ENTERED,
+    )
+    parsed.set_work_authorization(
+        WorkAuthorization(
+            status=WorkAuthorizationStatus.CITIZEN,
+            requires_sponsorship=False,
+            source=ProvenanceSource.PARSED_RESUME,
+        )
+    )
+    session = FakeBrowserSession(sensitive_form(), current_url=GREENHOUSE_URL)
+    use_case, _, _ = build_use_case(
+        session=session, posting=posting, profile=parsed, documents=documents
+    )
+
+    output = await use_case.execute(
+        AutofillApplicationFormInput(user_id="user-1", job_posting_id="job-posting-1")
+    )
+
+    assert session.filled == []
+    for label in (
+        "Are you legally authorized to work in the United States?",
+        "Will you now or in the future require sponsorship?",
+    ):
+        item = outcome_for(output, label)
+        assert item.outcome == FieldAutofillOutcome.SURFACED
+        assert item.reason == SurfaceReason.SENSITIVE_DATA_NOT_ATTESTED
+        assert item.is_sensitive is True
+
+
+async def test_a_candidate_who_needs_sponsorship_gets_the_truthful_answers(
+    posting, documents
+):
+    """The policy is accuracy, not optimism: a candidate who requires
+    sponsorship has that written onto the form, exactly as they stated it."""
+    needs_sponsorship = UserProfile(
+        id="profile-1",
+        user_id="user-1",
+        full_name="Dana Reyes",
+        email=EmailAddress("dana@example.com"),
+        contact_source=ProvenanceSource.USER_ENTERED,
+    )
+    needs_sponsorship.set_work_authorization(
+        WorkAuthorization(
+            status=WorkAuthorizationStatus.REQUIRES_SPONSORSHIP,
+            requires_sponsorship=True,
+            source=ProvenanceSource.ANSWER,
+        )
+    )
+    session = FakeBrowserSession(sensitive_form(), current_url=GREENHOUSE_URL)
+    use_case, _, _ = build_use_case(
+        session=session, posting=posting, profile=needs_sponsorship, documents=documents
+    )
+
+    await use_case.execute(
+        AutofillApplicationFormInput(user_id="user-1", job_posting_id="job-posting-1")
+    )
+
+    assert dict(session.filled) == {"f-auth": "No", "f-sponsorship": "Yes"}

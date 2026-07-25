@@ -131,3 +131,38 @@ def test_describe_options_says_so_when_there_are_none():
 
 def test_normalize_collapses_whitespace_and_case():
     assert normalize("  United\n  STATES  ") == "united states"
+
+
+# ---- The yes/no legal questions ---------------------------------------------
+
+#: How the sensitive-field policy's "Yes"/"No" answers meet a real portal.
+_PLAIN_YES_NO = (
+    FormFieldOption(label="Yes", value="1"),
+    FormFieldOption(label="No", value="0"),
+)
+_SENTENCE_YES_NO = (
+    FormFieldOption(label="Yes, I am authorized to work in the US", value="1"),
+    FormFieldOption(label="No, I will require sponsorship", value="0"),
+)
+
+
+@pytest.mark.parametrize("answer", ["Yes", "No", "yes", " NO "])
+def test_a_yes_no_answer_matches_a_plainly_labelled_option(answer):
+    """The common case: `decide_sensitive_field` produces bare "Yes"/"No" and
+    that is how these options are labelled across Greenhouse, Lever, and
+    Ashby."""
+    matched = match_option(_PLAIN_YES_NO, answer)
+    assert matched is not None
+    assert matched.label.strip().casefold() == answer.strip().casefold()
+
+
+@pytest.mark.parametrize("answer", ["Yes", "No"])
+def test_a_yes_no_answer_is_refused_when_the_portal_writes_sentences(answer):
+    """ "Yes" does not match "Yes, I am authorized to work in the US", and must
+    not: on a work-authorization question, selecting the option that merely
+    starts with the right word is how a candidate ends up declaring something
+    they never said. The refusal hands back the real options instead."""
+    assert match_option(_SENTENCE_YES_NO, answer) is None
+    assert "Yes, I am authorized to work in the US" in describe_options(
+        _SENTENCE_YES_NO
+    )

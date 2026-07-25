@@ -40,16 +40,22 @@ person who ever sees it is a recruiter at the company.
 
 Why questions are refused
 -------------------------
-A label containing "?" is treated as a screening question, and only the
-slots in `REQUIRES_CANDIDATE_ANSWER` — which are never autofilled anyway —
-may match one. Standard fields are labelled as nouns ("Email", "Resume/CV");
-a question mark is the reliable signal that a company wrote this field
-itself. Without the guard, "Do you have a GitHub account?" (a yes/no)
-matches the GitHub rule and receives a URL, and "Which of our values
-resonates with you?" matches nothing sensible but would keep matching more
-as the rule table grows. The cost is a handful of false negatives on
-politely-phrased standard fields ("What is your name?"), which are surfaced
-rather than mangled.
+A label containing "?" is treated as a screening question, and only
+sensitive slots (`SENSITIVE_SLOTS`) may match one. Standard fields are
+labelled as nouns ("Email", "Resume/CV"); a question mark is the reliable
+signal that a company wrote this field itself. Without the guard, "Do you
+have a GitHub account?" (a yes/no) matches the GitHub rule and receives a
+URL, and "Which of our values resonates with you?" matches nothing sensible
+but would keep matching more as the rule table grows. The cost is a handful
+of false negatives on politely-phrased standard fields ("What is your
+name?"), which are surfaced rather than mangled.
+
+The sensitive slots are exempt because they are the exception that proves
+the rule: work authorization, sponsorship, and EEO are the questions every
+portal asks *as questions* ("Are you legally authorized to work in the
+United States?"). They are standard fields wearing a question mark, so they
+must be recognized through it — and what may then be done with them is the
+sensitive-field policy's decision, not the recognizer's.
 """
 
 from __future__ import annotations
@@ -57,8 +63,8 @@ from __future__ import annotations
 import re
 
 from src.domain.value_objects.application_field_slot import (
-    REQUIRES_CANDIDATE_ANSWER,
     ApplicationFieldSlot,
+    is_sensitive_slot,
 )
 from src.domain.value_objects.ats_form_question import AtsFormQuestion
 from src.domain.value_objects.ats_provider import AtsProvider
@@ -178,8 +184,11 @@ _AUTOCOMPLETE_SLOTS: dict[str, ApplicationFieldSlot] = {
 #: the first match wins, so **order encodes specificity** and moving an
 #: entry changes behavior.
 #:
-#: Three ordering constraints are load-bearing and must survive any edit:
+#: Four ordering constraints are load-bearing and must survive any edit:
 #:
+#: - the sensitive block precedes everything, so "Country of citizenship"
+#:   cannot be claimed by the generic `country` rule and answered with the
+#:   candidate's mailing-address country.
 #: - `email` precedes the address rules, or "Email address" becomes a
 #:   street address.
 #: - `address line 2` precedes bare `address`, and the modified name rules
@@ -189,7 +198,48 @@ _AUTOCOMPLETE_SLOTS: dict[str, ApplicationFieldSlot] = {
 #:   field gets the candidate's whole location string rather than a bare
 #:   city into a field that wants "Austin, TX".
 _LABEL_RULES: tuple[tuple[tuple[str, ...], ApplicationFieldSlot], ...] = (
-    # Documents. First because these labels are the most distinctive on the
+    # ---- Sensitive fields, first ----------------------------------------
+    # Ahead of everything else for two reasons: these are the highest-stakes
+    # questions on the form, and several of their labels contain words the
+    # general rules would otherwise claim ("Country of citizenship" →
+    # `country`, "Visa status" → nothing, but "Citizenship status" would
+    # drift). Each maps to its own slot because each takes a different
+    # answer — see `ApplicationFieldSlot`.
+    #
+    # Sponsorship precedes visa, so "Do you require visa sponsorship?" is
+    # read as the sponsorship question rather than as a request for a visa
+    # type. "Citizenship status" precedes bare "citizenship" for the same
+    # reason: it asks which category the candidate is in, not which country.
+    (("visa", "sponsorship"), ApplicationFieldSlot.SPONSORSHIP_REQUIRED),
+    (("sponsorship",), ApplicationFieldSlot.SPONSORSHIP_REQUIRED),
+    (("sponsor",), ApplicationFieldSlot.SPONSORSHIP_REQUIRED),
+    (("citizenship", "status"), ApplicationFieldSlot.WORK_AUTHORIZATION),
+    (("country", "of", "citizenship"), ApplicationFieldSlot.CITIZENSHIP_COUNTRY),
+    (("citizenship",), ApplicationFieldSlot.CITIZENSHIP_COUNTRY),
+    (("work", "authorization"), ApplicationFieldSlot.WORK_AUTHORIZATION),
+    (("work", "authorisation"), ApplicationFieldSlot.WORK_AUTHORIZATION),
+    (("authorized", "to", "work"), ApplicationFieldSlot.WORK_AUTHORIZATION),
+    (("authorised", "to", "work"), ApplicationFieldSlot.WORK_AUTHORIZATION),
+    (("legally", "authorized"), ApplicationFieldSlot.WORK_AUTHORIZATION),
+    (("legally", "authorised"), ApplicationFieldSlot.WORK_AUTHORIZATION),
+    (("eligible", "to", "work"), ApplicationFieldSlot.WORK_AUTHORIZATION),
+    (("right", "to", "work"), ApplicationFieldSlot.WORK_AUTHORIZATION),
+    (("work", "permit"), ApplicationFieldSlot.WORK_AUTHORIZATION),
+    (("visa", "type"), ApplicationFieldSlot.VISA_TYPE),
+    (("visa", "status"), ApplicationFieldSlot.VISA_TYPE),
+    (("visa",), ApplicationFieldSlot.VISA_TYPE),
+    # EEO self-identification. Recognized precisely so it can be refused
+    # with a useful reason — never to be answered.
+    (("gender",), ApplicationFieldSlot.EEO_SELF_IDENTIFICATION),
+    (("race",), ApplicationFieldSlot.EEO_SELF_IDENTIFICATION),
+    (("ethnicity",), ApplicationFieldSlot.EEO_SELF_IDENTIFICATION),
+    (("hispanic",), ApplicationFieldSlot.EEO_SELF_IDENTIFICATION),
+    (("latino",), ApplicationFieldSlot.EEO_SELF_IDENTIFICATION),
+    (("veteran",), ApplicationFieldSlot.EEO_SELF_IDENTIFICATION),
+    (("disability",), ApplicationFieldSlot.EEO_SELF_IDENTIFICATION),
+    (("disabled",), ApplicationFieldSlot.EEO_SELF_IDENTIFICATION),
+    (("pronouns",), ApplicationFieldSlot.EEO_SELF_IDENTIFICATION),
+    # Documents. Next because these labels are the most distinctive on the
     # form and the most costly to miss.
     (("cover", "letter"), ApplicationFieldSlot.COVER_LETTER),
     (("resume",), ApplicationFieldSlot.RESUME),
@@ -255,23 +305,6 @@ _LABEL_RULES: tuple[tuple[tuple[str, ...], ApplicationFieldSlot], ...] = (
     (("field", "of", "study"), ApplicationFieldSlot.FIELD_OF_STUDY),
     (("discipline",), ApplicationFieldSlot.FIELD_OF_STUDY),
     (("major",), ApplicationFieldSlot.FIELD_OF_STUDY),
-    # Never-autofilled. These are the only rules a question may match.
-    (("work", "authorization"), ApplicationFieldSlot.WORK_AUTHORIZATION),
-    (("authorized", "to", "work"), ApplicationFieldSlot.WORK_AUTHORIZATION),
-    (("legally", "authorized"), ApplicationFieldSlot.WORK_AUTHORIZATION),
-    (("right", "to", "work"), ApplicationFieldSlot.WORK_AUTHORIZATION),
-    (("sponsorship",), ApplicationFieldSlot.WORK_AUTHORIZATION),
-    (("visa",), ApplicationFieldSlot.WORK_AUTHORIZATION),
-    (("citizenship",), ApplicationFieldSlot.WORK_AUTHORIZATION),
-    (("gender",), ApplicationFieldSlot.EEO_SELF_IDENTIFICATION),
-    (("race",), ApplicationFieldSlot.EEO_SELF_IDENTIFICATION),
-    (("ethnicity",), ApplicationFieldSlot.EEO_SELF_IDENTIFICATION),
-    (("hispanic",), ApplicationFieldSlot.EEO_SELF_IDENTIFICATION),
-    (("latino",), ApplicationFieldSlot.EEO_SELF_IDENTIFICATION),
-    (("veteran",), ApplicationFieldSlot.EEO_SELF_IDENTIFICATION),
-    (("disability",), ApplicationFieldSlot.EEO_SELF_IDENTIFICATION),
-    (("disabled",), ApplicationFieldSlot.EEO_SELF_IDENTIFICATION),
-    (("pronouns",), ApplicationFieldSlot.EEO_SELF_IDENTIFICATION),
 )
 
 
@@ -378,9 +411,10 @@ def _recognize_by_autocomplete(autocomplete: str) -> ApplicationFieldSlot | None
 def _recognize_by_label(label: str) -> ApplicationFieldSlot | None:
     """Match the label's word tokens against `_LABEL_RULES`, first hit wins.
 
-    Interrogative labels are held to the never-autofilled slots only — see
-    the module docstring on why a question mark is treated as "a company
-    wrote this field".
+    Interrogative labels are held to the sensitive slots only — see the
+    module docstring on why a question mark is treated as "a company wrote
+    this field", and why the always-asked legal and EEO questions are the
+    exception.
     """
     tokens = _tokenize(label)
     if not tokens:
@@ -390,7 +424,7 @@ def _recognize_by_label(label: str) -> ApplicationFieldSlot | None:
     for phrase, slot in _LABEL_RULES:
         if not _contains_phrase(tokens, phrase):
             continue
-        if is_question and slot not in REQUIRES_CANDIDATE_ANSWER:
+        if is_question and not is_sensitive_slot(slot):
             return None
         return slot
     return None

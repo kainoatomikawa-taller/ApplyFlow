@@ -11,7 +11,7 @@ from src.domain.entities.work_history_entry import WorkHistoryEntry
 from src.domain.services.profile_field_values import resolve_profile_field
 from src.domain.value_objects.address import Address
 from src.domain.value_objects.application_field_slot import (
-    REQUIRES_CANDIDATE_ANSWER,
+    SENSITIVE_SLOTS,
     ApplicationFieldSlot,
 )
 from src.domain.value_objects.eeo_self_identification import EeoSelfIdentification
@@ -228,10 +228,17 @@ def test_document_slots_are_not_answered_from_the_profile(full_profile, slot):
 # ---- Refusal ----------------------------------------------------------------
 
 
-@pytest.mark.parametrize("slot", sorted(REQUIRES_CANDIDATE_ANSWER))
-def test_sensitive_self_identification_is_refused_even_when_on_file(full_profile, slot):
-    """This is a refusal, not an absence: the data is right there on the
-    profile and is still not handed out for autofill."""
+@pytest.mark.parametrize("slot", sorted(SENSITIVE_SLOTS))
+def test_every_sensitive_slot_is_refused_by_the_generic_resolver(full_profile, slot):
+    """A refusal, not an absence: the data is right there on the profile and
+    this function still will not hand it out.
+
+    Sensitive fields are governed by `decide_sensitive_field`, which applies
+    rules this resolver has no business duplicating — attestation, exact
+    answers, and the unconditional refusal of EEO. The guard is here so the
+    two paths cannot be crossed by accident: a contributor who routes a visa
+    question through the ordinary resolver gets nothing back rather than a
+    quietly-filled legal declaration."""
     full_profile.set_work_authorization(
         WorkAuthorization(
             status=WorkAuthorizationStatus.CITIZEN,

@@ -25,11 +25,27 @@ quietly discarded either, which is the same failure with better optics. A
 field ApplyFlow cannot answer comes back as `SURFACE` carrying the reason
 why, and the reason is what a review UI shows the candidate.
 
-The four ways a field ends up surfaced (`SurfaceReason`) are genuinely
-different situations for a human: "the company wrote this question",
-"ApplyFlow knows this field but your profile is silent", "this one is yours
-to answer", and "your data doesn't fit this widget". Collapsing them into
-one "couldn't fill it" would make the review step much harder to act on.
+The ways a field ends up surfaced (`SurfaceReason`) are genuinely different
+situations for a human: "the company wrote this question", "ApplyFlow knows
+this field but your profile is silent", "this one is yours to answer", "your
+data doesn't fit this widget". Collapsing them into one "couldn't fill it"
+would make the review step much harder to act on.
+
+Sensitive fields take their own path
+------------------------------------
+Work authorization, sponsorship, citizenship, visa, and EEO self-ID are
+routed to `decide_sensitive_field` before either ordinary path, and no rule
+about them lives here — this service only translates that verdict into a
+plan. Two consequences worth knowing:
+
+- A sensitive slot can never reach `resolve_profile_field`. That function
+  refuses them as well, so the policy holds even if this routing is later
+  changed by someone who hasn't read it.
+- Every `PlannedField` reports `is_sensitive`, `sensitivity`, and
+  `requires_confirmation` as *derived* properties of its slot rather than as
+  fields someone has to remember to set. A sensitive field cannot be
+  constructed here and reported as ordinary, which is what makes the review
+  step's flagging reliable rather than conventional.
 """
 
 from __future__ import annotations
@@ -41,10 +57,16 @@ from src.application.ports.browser_automation_port import FormField, FormFieldKi
 from src.domain.entities.user_profile import UserProfile
 from src.domain.services.ats_field_mapper import recognize_application_field
 from src.domain.services.profile_field_values import resolve_profile_field
+from src.domain.services.sensitive_field_policy import (
+    SensitiveFieldRefusal,
+    decide_sensitive_field,
+)
 from src.domain.value_objects.application_field_slot import (
     ApplicationFieldSlot,
+    FieldSensitivity,
     is_document_slot,
-    requires_candidate_answer,
+    is_sensitive_slot,
+    sensitivity_of,
 )
 from src.domain.value_objects.ats_form_question import AtsFormQuestion
 from src.domain.value_objects.ats_provider import AtsProvider
@@ -80,6 +102,28 @@ _DOCUMENT_TEXT_KINDS: frozenset[FormFieldKind] = frozenset(
     {FormFieldKind.TEXTAREA, FormFieldKind.TEXT}
 )
 
+#: Widget kinds a sensitive legal answer may be written into.
+#:
+#: `RADIO` is here and not in `_TEXT_VALUE_KINDS` because a Yes/No radio group
+#: is how portals most often ask the authorization and sponsorship questions,
+#: and it is safe for exactly this shape of answer: the harness selects a
+#: radio by its own option label, so "Yes" either names an option or is
+#: refused.
+#:
+#: `CHECKBOX` is excluded, and that exclusion is the point. A tick box is
+#: unlabelled as to polarity — "I require sponsorship" and "I do not require
+#: sponsorship" are both real labels, and a harness told to tick for "Yes"
+#: cannot tell them apart. Getting that backwards inverts a legal declaration,
+#: so these go to a human instead.
+_SENSITIVE_ANSWER_KINDS: frozenset[FormFieldKind] = frozenset(
+    {
+        FormFieldKind.TEXT,
+        FormFieldKind.TEXTAREA,
+        FormFieldKind.SELECT,
+        FormFieldKind.RADIO,
+    }
+)
+
 #: Which stored snapshot answers each document slot.
 _SLOT_DOCUMENTS: dict[ApplicationFieldSlot, GeneratedDocumentKind] = {
     ApplicationFieldSlot.RESUME: GeneratedDocumentKind.TAILORED_RESUME,
@@ -103,11 +147,12 @@ class FieldDisposition(StrEnum):
 class SurfaceReason(StrEnum):
     """Why a field was left for a human.
 
-    One vocabulary covers both halves of the flow. The planner produces the
-    first four from the form and the profile alone; the last two can only be
-    discovered while executing the plan, since they need a document read.
-    Keeping them in one enum means a review screen has a single set of
-    reasons to explain, rather than two that mostly overlap.
+    One vocabulary covers both halves of the flow. Most reasons are produced
+    by the planner from the form and the profile alone; the last two
+    (`DOCUMENT_NOT_GENERATED`, `VALUE_TOO_LONG`) can only be discovered while
+    executing the plan, since they need a document read. Keeping them in one
+    enum means a review screen has a single set of reasons to explain, rather
+    than two that mostly overlap.
     """
 
     #: Not one of the questions ApplyFlow claims to recognize — almost
@@ -118,9 +163,20 @@ class SurfaceReason(StrEnum):
     #: it. Actionable: filling in the profile fixes it for every future
     #: application.
     NO_PROFILE_DATA = "no_profile_data"
-    #: Recognized, and deliberately never autofilled — work authorization
-    #: and EEO self-identification (see `REQUIRES_CANDIDATE_ANSWER`).
+    #: Recognized, and deliberately never autofilled: EEO self-identification
+    #: (see `REQUIRES_CANDIDATE_ANSWER`). Not a gap in the profile and not
+    #: something filling one in would fix — the candidate decides this per
+    #: application.
     REQUIRES_CANDIDATE_ANSWER = "requires_candidate_answer"
+    #: A legal question whose answer is on file but was not stated by the
+    #: candidate themselves (see `WorkAuthorization.ATTESTING_SOURCES`).
+    #: Confirming it on the profile turns it into an answer ApplyFlow may
+    #: give.
+    SENSITIVE_DATA_NOT_ATTESTED = "sensitive_data_not_attested"
+    #: A legal question the stored record does not settle exactly — a visa
+    #: holder asked about future sponsorship, an "other" status. Answering
+    #: approximately is the one thing these fields must never do.
+    SENSITIVE_ANSWER_NOT_DERIVABLE = "sensitive_answer_not_derivable"
     #: Recognized, with data available, but the widget cannot take it — a
     #: checkbox where a value was expected, or a password field. Usually
     #: means the field was recognized wrongly, which is why it goes to a
@@ -133,6 +189,26 @@ class SurfaceReason(StrEnum):
     #: the field. Reported rather than truncated: a cover letter cut off
     #: mid-sentence still goes out under the candidate's name.
     VALUE_TOO_LONG = "value_too_long"
+
+
+#: The domain's refusal reasons, translated into the review vocabulary.
+#:
+#: Absent data maps onto the same `NO_PROFILE_DATA` an ordinary field would
+#: report, because the remedy is identical and a reviewer should not have to
+#: learn two words for "your profile doesn't say". The other three keep their
+#: own reasons — they call for confirming, answering, or nothing at all, which
+#: are different asks.
+_REFUSAL_REASONS: dict[SensitiveFieldRefusal, SurfaceReason] = {
+    SensitiveFieldRefusal.CANDIDATE_CHOICE_ONLY: (
+        SurfaceReason.REQUIRES_CANDIDATE_ANSWER
+    ),
+    SensitiveFieldRefusal.NOT_ON_FILE: SurfaceReason.NO_PROFILE_DATA,
+    SensitiveFieldRefusal.NOT_STATED: SurfaceReason.NO_PROFILE_DATA,
+    SensitiveFieldRefusal.NOT_CANDIDATE_ATTESTED: (
+        SurfaceReason.SENSITIVE_DATA_NOT_ATTESTED
+    ),
+    SensitiveFieldRefusal.NOT_DERIVABLE: (SurfaceReason.SENSITIVE_ANSWER_NOT_DERIVABLE),
+}
 
 
 @dataclass(frozen=True)
@@ -155,6 +231,32 @@ class PlannedField:
     is_derived: bool = False
     #: Set only when `disposition` is SURFACE.
     surface_reason: SurfaceReason | None = None
+
+    @property
+    def sensitivity(self) -> FieldSensitivity | None:
+        """This field's sensitivity category, or None if it isn't sensitive.
+
+        Derived from the slot rather than stored, so it cannot be forgotten
+        on a code path that constructs a `PlannedField` — a sensitive field
+        reported as ordinary is precisely the flagging failure this ticket
+        exists to prevent.
+        """
+        return sensitivity_of(self.slot) if self.slot is not None else None
+
+    @property
+    def is_sensitive(self) -> bool:
+        return self.sensitivity is not None
+
+    @property
+    def requires_confirmation(self) -> bool:
+        """Whether a human must confirm this value before it is submitted.
+
+        True for a sensitive field ApplyFlow filled. A legal declaration
+        derived from stored data is still the candidate's statement to make,
+        and the jurisdiction gap in `decide_sensitive_field` is caught here or
+        nowhere.
+        """
+        return self.is_sensitive and self.disposition is FieldDisposition.FILL
 
 
 class AtsFormFieldPlanner:
@@ -185,11 +287,6 @@ class AtsFormFieldPlanner:
         if slot is None:
             return self._surface(field, SurfaceReason.UNRECOGNIZED)
 
-        if requires_candidate_answer(slot):
-            return self._surface(
-                field, SurfaceReason.REQUIRES_CANDIDATE_ANSWER, slot=slot
-            )
-
         # Checked after recognition so a password field the recognizer
         # matched (a "Confirm email" style field mis-typed by the portal, or
         # a genuine account-creation box) is reported as recognized and
@@ -197,10 +294,42 @@ class AtsFormFieldPlanner:
         if field.kind is FormFieldKind.PASSWORD:
             return self._surface(field, SurfaceReason.UNSUPPORTED_FIELD_KIND, slot=slot)
 
+        # Before the ordinary paths, so a sensitive slot can never reach the
+        # generic profile resolver — the domain refuses it there too, and
+        # this ordering is what makes that second guard unreachable rather
+        # than load-bearing.
+        if is_sensitive_slot(slot):
+            return self._plan_sensitive_field(field, slot, profile)
+
         if is_document_slot(slot):
             return self._plan_document_field(field, slot)
 
         return self._plan_value_field(field, slot, profile)
+
+    def _plan_sensitive_field(
+        self, field: FormField, slot: ApplicationFieldSlot, profile: UserProfile
+    ) -> PlannedField:
+        """Apply the sensitive-field policy: fill an exact legal answer, or
+        surface the field with the reason it cannot be answered.
+
+        The whole decision belongs to `decide_sensitive_field` — this method
+        only translates its verdict into a plan, and deliberately contains no
+        rule of its own. EEO is refused inside that function before any data
+        is read, so there is no branch here that could answer it.
+        """
+        decision = decide_sensitive_field(slot, profile=profile)
+        if decision.refusal is not None:
+            return self._surface(field, _REFUSAL_REASONS[decision.refusal], slot=slot)
+
+        if field.kind not in _SENSITIVE_ANSWER_KINDS:
+            return self._surface(field, SurfaceReason.UNSUPPORTED_FIELD_KIND, slot=slot)
+
+        return PlannedField(
+            field=field,
+            disposition=FieldDisposition.FILL,
+            slot=slot,
+            value=decision.answer,
+        )
 
     def _plan_document_field(
         self, field: FormField, slot: ApplicationFieldSlot

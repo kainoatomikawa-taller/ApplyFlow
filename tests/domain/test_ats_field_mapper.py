@@ -301,25 +301,64 @@ def test_interrogative_labels_are_surfaced_rather_than_matched(label):
 @pytest.mark.parametrize(
     ("label", "expected"),
     [
+        # The authorization question, in the phrasings the three platforms use.
         (
             "Are you legally authorized to work in the United States?",
             Slot.WORK_AUTHORIZATION,
         ),
+        ("Are you authorised to work in the UK?", Slot.WORK_AUTHORIZATION),
+        ("Work authorization", Slot.WORK_AUTHORIZATION),
+        ("Do you have the right to work in Ireland?", Slot.WORK_AUTHORIZATION),
+        ("Are you eligible to work in this country?", Slot.WORK_AUTHORIZATION),
+        ("Citizenship status", Slot.WORK_AUTHORIZATION),
+        # Sponsorship is its own question with its own answer.
         (
             "Will you now or in the future require sponsorship?",
-            Slot.WORK_AUTHORIZATION,
+            Slot.SPONSORSHIP_REQUIRED,
         ),
-        ("What is your visa status?", Slot.WORK_AUTHORIZATION),
+        ("Do you require visa sponsorship?", Slot.SPONSORSHIP_REQUIRED),
+        ("Visa sponsorship needed", Slot.SPONSORSHIP_REQUIRED),
+        # The free-text legal details.
+        ("Country of citizenship", Slot.CITIZENSHIP_COUNTRY),
+        ("Citizenship", Slot.CITIZENSHIP_COUNTRY),
+        ("What is your visa status?", Slot.VISA_TYPE),
+        ("Visa type", Slot.VISA_TYPE),
+        # EEO self-identification.
         ("Gender", Slot.EEO_SELF_IDENTIFICATION),
         ("Race / Ethnicity", Slot.EEO_SELF_IDENTIFICATION),
         ("Are you a protected veteran?", Slot.EEO_SELF_IDENTIFICATION),
         ("Disability status", Slot.EEO_SELF_IDENTIFICATION),
     ],
 )
-def test_never_autofilled_slots_are_the_only_ones_a_question_may_match(label, expected):
-    """These are recognized *so that* they can be refused with a useful
-    reason — "answer the visa question yourself" beats "unknown field"."""
+def test_sensitive_slots_are_the_only_ones_a_question_may_match(label, expected):
+    """The always-asked legal and EEO questions are standard fields wearing a
+    question mark, so they must be recognized through the interrogative guard.
+    What may then be *done* with them is the policy's decision, not the
+    recognizer's."""
     assert recognize(label) is expected
+
+
+def test_sponsorship_is_read_as_sponsorship_rather_than_as_a_visa_request():
+    """ "Do you require visa sponsorship?" mentions a visa but is asking the
+    sponsorship question — filling a visa type into it would answer something
+    nobody asked."""
+    assert recognize("Do you require visa sponsorship?") is Slot.SPONSORSHIP_REQUIRED
+    assert recognize("Visa type") is Slot.VISA_TYPE
+
+
+def test_citizenship_status_is_the_authorization_question_not_a_country():
+    """It asks which category the candidate is in, not which country they are
+    a citizen of — so the country answer must not claim it."""
+    assert recognize("Citizenship status") is Slot.WORK_AUTHORIZATION
+    assert recognize("Country of citizenship") is Slot.CITIZENSHIP_COUNTRY
+
+
+def test_country_of_citizenship_is_not_claimed_by_the_mailing_address_rule():
+    """The load-bearing ordering constraint: the generic `country` rule would
+    otherwise answer a citizenship question with the candidate's mailing
+    address country."""
+    assert recognize("Country of citizenship") is Slot.CITIZENSHIP_COUNTRY
+    assert recognize("Country") is Slot.COUNTRY
 
 
 # ---- Signal precedence ------------------------------------------------------

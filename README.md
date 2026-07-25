@@ -704,31 +704,105 @@ have a GitHub account?" (a yes/no) receives a URL.
 
 Every field the form presented comes back in `output.fields`, in page order,
 whether it was filled or not — a field quietly dropped from the report is the
-same failure as one filled with a guess, just harder to notice. The four
-reasons a field is surfaced are genuinely different situations for whoever
-reviews it:
+same failure as one filled with a guess, just harder to notice. The reasons a
+field is surfaced are genuinely different situations for whoever reviews it:
 
 - `unrecognized` — the company wrote this question. Expected on much of a
   real form, and not a defect.
 - `no_profile_data` — ApplyFlow knows the field; the profile is silent.
   Actionable: filling it in fixes every future application.
-- `requires_candidate_answer` — work authorization and EEO self-ID. See below.
+- `requires_candidate_answer` — EEO self-ID, which is never autofilled. Not a
+  profile gap and not something filling one in would fix.
+- `sensitive_data_not_attested` — a legal answer is on file but the candidate
+  didn't state it themselves. Confirming it on the profile is the fix.
+- `sensitive_answer_not_derivable` — the record doesn't settle this legal
+  question exactly, and approximating is the one thing it must not do.
 - `unsupported_field_kind` — the data doesn't fit the widget, which usually
   means the field was read wrongly. Plus `document_not_generated` and
   `value_too_long`, which only surface while executing.
 
-### Two things it will never answer
+### Sensitive fields: two categories, opposite rules
 
-`WORK_AUTHORIZATION` and `EEO_SELF_IDENTIFICATION` are recognized and then
-always withheld, **even when the candidate's profile holds the data**. Both
-are stored only when a candidate explicitly went through the flow that
-records them, and autofilling either would mean translating a stored enum
-into whichever option label this portal happens to use — where a near miss
-submits a demographic or immigration answer the candidate never gave. They
-are still recognized rather than left unknown, because "this is the visa
-question, answer it yourself" is far more useful to a reviewer than
-"unrecognized field", and because it makes the refusal a property of the
-domain rather than an omission someone could later fill in by accident.
+The always-asked questions get their own domain service
+(`decide_sensitive_field`) and never touch the ordinary profile resolver —
+which refuses them too, so the policy holds even if that routing is later
+changed by someone who hasn't read it. `SENSITIVE_SLOTS` classifies each one:
+
+| Category | Slots | Rule |
+| --- | --- | --- |
+| `legal_attestation` | work authorization, sponsorship, citizenship country, visa type | **Must** be answered when the record answers it exactly |
+| `voluntary_self_id` | EEO (gender, race/ethnicity, veteran, disability) | **Never** answered, under any circumstances |
+
+The asymmetry is the whole design. For EEO, silence is safe and an answer is
+not. For work authorization it is the reverse: leaving a required
+authorization question blank stalls the application, so declining to answer
+is not a safe default — what's unsafe is answering *approximately*.
+
+**EEO is never autofilled, even with every category on file.** Disclosure is
+voluntary by law and is a decision made **per application** — the same person
+may reasonably answer for one employer and decline for the next. An autofill
+carrying last week's answer forward would quietly convert one disclosure into
+a standing one, and the candidate would never see it happen. An explicit
+"decline to self-identify" is itself such a decision, so that isn't submitted
+for them either.
+
+**Work authorization is answered exactly, through three gates.** No record →
+no answer. Not candidate-attested → no answer. Doesn't settle *this* question
+→ no answer, with a reason:
+
+- `PARSED_RESUME` provenance is refused outright
+  (`WorkAuthorization.ATTESTING_SOURCES`). Every other profile fact is fine to
+  read out of a resume — a slightly-wrong job title is cosmetic. A work
+  authorization status is a legal declaration the candidate signs their name
+  to, and one inferred from prose is a claim they never made.
+- "Are you authorized to work?" comes from the status alone. A visa holder is
+  authorized *today*, so yes; needing a sponsor is what "not authorized as
+  things stand" means, so no; `OTHER` settles nothing and is refused.
+- "Will you now or in the future require sponsorship?" prefers the
+  candidate's own explicit answer, and only falls back to the statuses that
+  settle it alone. `VISA_HOLDER` is deliberately refused here — a visa can
+  expire, need transferring, or need extending, so a current visa says nothing
+  reliable about the future.
+
+Answers are the literal strings "Yes"/"No", which is how all three platforms
+label these options. A portal writing "Yes, I am authorized to work in the US"
+instead gets the value refused and the real options handed back — selecting
+the option that merely *starts* with the right word is how a candidate ends up
+declaring something they never said.
+
+**Known limitation — jurisdiction.** These questions almost always name a
+country, and `WorkAuthorization` doesn't record which jurisdiction its status
+refers to, so the answers read the record as the candidate's answer to the
+standard application question. Guarding on `citizenship_country` was
+considered and rejected: it would falsely refuse every visa holder, whose
+citizenship country is by definition not where they're authorized, and
+blanking a correct "Yes" is its own harm. Fixing it properly means recording
+the jurisdiction on `WorkAuthorization` (an Epic 01 data-model change). Until
+then the safeguard is the review step below.
+
+### Flagging sensitive fields in the review step
+
+Every field in the report carries `is_sensitive`, `sensitivity`, and
+`requires_confirmation`, so a review UI never infers sensitivity by
+pattern-matching slot names — an inference that, gone wrong, renders a visa
+declaration as an ordinary text box. On `PlannedField` these are *derived*
+properties of the slot rather than fields someone has to remember to set, so a
+sensitive field cannot be constructed and reported as ordinary.
+
+Two lists are what a review screen needs:
+
+```python
+output.sensitive_fields             # everything to flag, filled or not
+output.fields_awaiting_confirmation # filled legal answers, pending approval
+```
+
+Both categories belong in the first list: an autofilled work-authorization
+answer needs confirming, and an untouched EEO question needs the candidate to
+decide. A UI highlighting only one would hide half the sensitive surface.
+`requires_confirmation` is the pre-submission gate — true only for a sensitive
+value that actually reached the form, since a field the portal refused is
+already surfaced for the candidate and doesn't need a second gate pointing at
+it.
 
 ### Scope is enforced, not documented
 

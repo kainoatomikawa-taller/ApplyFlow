@@ -51,8 +51,8 @@ from src.domain.entities.education_entry import EducationEntry
 from src.domain.entities.user_profile import UserProfile
 from src.domain.entities.work_history_entry import WorkHistoryEntry
 from src.domain.value_objects.application_field_slot import (
-    REQUIRES_CANDIDATE_ANSWER,
     ApplicationFieldSlot,
+    is_sensitive_slot,
 )
 
 
@@ -76,14 +76,18 @@ def resolve_profile_field(
 ) -> ProfileFieldValue | None:
     """Return what `profile` can state for `slot`, or None if it cannot.
 
-    Returns None for every slot in `REQUIRES_CANDIDATE_ANSWER` even when the
-    profile holds the data, which is a refusal rather than an absence: those
-    answers are the candidate's to give (see that frozenset). The check is
-    here as well as in the caller so that no future call site can reach a
-    stored visa status or EEO answer through this function by forgetting to
-    ask.
+    Returns None for every sensitive slot, whatever the profile holds. That
+    is a refusal rather than an absence: sensitive fields are governed by
+    `decide_sensitive_field`, which applies rules this function has no
+    business duplicating — attestation, exact-or-refuse answers, and the
+    unconditional refusal of EEO self-identification.
+
+    The check is here rather than only in the caller so the two paths cannot
+    be crossed by accident. A contributor who routes a visa question through
+    the ordinary resolver gets nothing back, not a quietly-filled legal
+    declaration.
     """
-    if slot in REQUIRES_CANDIDATE_ANSWER:
+    if is_sensitive_slot(slot):
         return None
 
     resolver = _RESOLVERS.get(slot)

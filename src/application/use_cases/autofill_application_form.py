@@ -40,6 +40,7 @@ import re
 from dataclasses import dataclass
 
 from src.application.dtos.application_autofill_dtos import (
+    APPLIED_OUTCOMES,
     ApplicationAutofillOutput,
     AutofillApplicationFormInput,
     AutofilledFieldOutput,
@@ -296,6 +297,7 @@ class AutofillApplicationForm:
         reason: str | None = None,
         detail: str | None = None,
     ) -> AutofilledFieldOutput:
+        sensitivity = item.sensitivity
         return AutofilledFieldOutput(
             label=item.field.label,
             kind=item.field.kind.value,
@@ -306,6 +308,16 @@ class AutofillApplicationForm:
             is_derived=item.is_derived,
             reason=reason,
             detail=detail,
+            is_sensitive=sensitivity is not None,
+            sensitivity=sensitivity.value if sensitivity is not None else None,
+            # Only a value that actually reached the form needs approving.
+            # A sensitive field the plan meant to fill but the portal refused
+            # is already surfaced for the candidate to answer, so asking them
+            # to *confirm* it too would be one gate too many pointing at the
+            # same field.
+            requires_confirmation=(
+                item.requires_confirmation and outcome in APPLIED_OUTCOMES
+            ),
         )
 
 

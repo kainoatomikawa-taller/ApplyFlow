@@ -26,15 +26,21 @@ being recognized and then *declined*: without them, a field labelled
 legal name written into it. Recognizing a question ApplyFlow cannot answer
 is how it gets surfaced instead of guessed.
 
-Slots ApplyFlow will never answer
----------------------------------
-`WORK_AUTHORIZATION` and `EEO_SELF_IDENTIFICATION` are recognized and then
-always withheld — see `REQUIRES_CANDIDATE_ANSWER`.
+Sensitive slots
+---------------
+Four slots carry the always-asked legal questions and one carries voluntary
+EEO self-identification. They are classified by `FieldSensitivity` and
+handled by their own domain service (`decide_sensitive_field`) rather than
+by the ordinary profile resolver — see `SENSITIVE_SLOTS` below for why the
+two categories are treated differently, and why neither can be answered
+through the generic path.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import StrEnum
+from types import MappingProxyType
 
 
 class ApplicationFieldSlot(StrEnum):
@@ -85,8 +91,19 @@ class ApplicationFieldSlot(StrEnum):
     RESUME = "resume"
     COVER_LETTER = "cover_letter"
 
-    # ---- Recognized, never answered --------------------------------------
+    # ---- Sensitive: the always-asked legal questions ----------------------
+    # Split into one slot per question rather than one "work authorization"
+    # catch-all, because each takes a *different* answer from the same stored
+    # record and only an exact answer is acceptable on a legal form. Lumping
+    # them together would leave nothing precise enough to fill: "are you
+    # authorized?" and "will you need sponsorship?" can both be yes, both be
+    # no, or disagree.
     WORK_AUTHORIZATION = "work_authorization"
+    SPONSORSHIP_REQUIRED = "sponsorship_required"
+    CITIZENSHIP_COUNTRY = "citizenship_country"
+    VISA_TYPE = "visa_type"
+
+    # ---- Sensitive: voluntary self-identification ------------------------
     EEO_SELF_IDENTIFICATION = "eeo_self_identification"
 
 
@@ -99,34 +116,96 @@ DOCUMENT_SLOTS: frozenset[ApplicationFieldSlot] = frozenset(
 )
 
 
-#: Slots ApplyFlow recognizes and then deliberately refuses to answer.
+class FieldSensitivity(StrEnum):
+    """Why a slot is sensitive, which decides how it may be answered.
+
+    The two categories look similar — both are data an employer asks for and
+    an employer must handle carefully — and they need opposite treatment, so
+    the distinction is drawn in the domain rather than left to a caller's
+    judgement.
+    """
+
+    #: A legal declaration the candidate is accountable for: work
+    #: authorization, sponsorship, citizenship, visa. Backed by
+    #: `WorkAuthorization`.
+    #:
+    #: These MUST be answered when the candidate's record answers them
+    #: exactly. Leaving a required authorization question blank stalls the
+    #: application; answering it approximately is a misstatement on a legal
+    #: form. So the rule is exact-or-refuse, never approximate, and every
+    #: filled answer is flagged for the candidate to confirm before anything
+    #: is submitted (see `requires_confirmation` on the autofill report).
+    LEGAL_ATTESTATION = "legal_attestation"
+
+    #: Voluntary EEO self-identification: gender, race/ethnicity, veteran
+    #: status, disability. Backed by `EeoSelfIdentification`.
+    #:
+    #: NEVER answered by ApplyFlow, under any circumstances — see
+    #: `REQUIRES_CANDIDATE_ANSWER`.
+    VOLUNTARY_SELF_ID = "voluntary_self_id"
+
+
+#: Every sensitive slot and its category. Read-only so no caller can extend
+#: the policy at runtime: which fields are sensitive is a domain decision,
+#: reviewed with the code, never assembled by configuration.
 #:
-#: Both are sensitive self-identification (`WorkAuthorization`,
-#: `EeoSelfIdentification`), and both are stored only when a candidate
-#: explicitly went through the flow that records them — so there is nothing
-#: to default and nothing to infer. Even with data on file, autofilling
-#: them would mean translating a stored enum member into whichever option
-#: label this particular portal happens to use, and a
-#: near-miss there submits a demographic or immigration answer the
-#: candidate never gave. These are surfaced for the candidate to answer
-#: themselves, every time.
-#:
-#: They are still *recognized* rather than left unknown, because "this is
-#: the visa question, answer it yourself" is a far more useful thing to
-#: hand a reviewer than "unrecognized field", and because it makes the
-#: refusal a property of the domain instead of an omission a later
-#: contributor could fill in by accident.
-REQUIRES_CANDIDATE_ANSWER: frozenset[ApplicationFieldSlot] = frozenset(
+#: Membership here has teeth beyond labelling. A slot in this mapping cannot
+#: be answered through `resolve_profile_field` at all (it refuses them
+#: outright) — only `decide_sensitive_field` may, and it applies this
+#: policy. That means a future contributor cannot accidentally route a visa
+#: question through the ordinary path and have it quietly answered.
+SENSITIVE_SLOTS: Mapping[ApplicationFieldSlot, FieldSensitivity] = MappingProxyType(
     {
-        ApplicationFieldSlot.WORK_AUTHORIZATION,
-        ApplicationFieldSlot.EEO_SELF_IDENTIFICATION,
+        ApplicationFieldSlot.WORK_AUTHORIZATION: FieldSensitivity.LEGAL_ATTESTATION,
+        ApplicationFieldSlot.SPONSORSHIP_REQUIRED: FieldSensitivity.LEGAL_ATTESTATION,
+        ApplicationFieldSlot.CITIZENSHIP_COUNTRY: FieldSensitivity.LEGAL_ATTESTATION,
+        ApplicationFieldSlot.VISA_TYPE: FieldSensitivity.LEGAL_ATTESTATION,
+        ApplicationFieldSlot.EEO_SELF_IDENTIFICATION: (
+            FieldSensitivity.VOLUNTARY_SELF_ID
+        ),
     }
+)
+
+
+#: Slots ApplyFlow will never answer, whatever is on file.
+#:
+#: EEO self-identification only, and the reasoning is specific to it rather
+#: than to sensitivity in general. Disclosing gender, race, veteran status,
+#: or disability is voluntary by law and is a decision a candidate makes
+#: **per application** — the same person may reasonably answer for one
+#: employer and decline for the next. An autofill that carried last week's
+#: answer forward would quietly convert one disclosure into a standing one,
+#: which is the opposite of what "voluntary" means, and the candidate would
+#: never see it happen.
+#:
+#: There is a mechanical reason too: a stored `RaceEthnicity` member would
+#: have to be translated into whichever option label this portal happens to
+#: use, and a near-miss there submits a demographic answer the candidate
+#: never gave.
+#:
+#: These are still *recognized* rather than left unknown, because "this is
+#: the EEO question, it's yours to answer" is far more useful to a reviewer
+#: than "unrecognized field", and because it makes the refusal a property of
+#: the domain instead of an omission a later contributor could fill in by
+#: accident.
+REQUIRES_CANDIDATE_ANSWER: frozenset[ApplicationFieldSlot] = frozenset(
+    {ApplicationFieldSlot.EEO_SELF_IDENTIFICATION}
 )
 
 
 def requires_candidate_answer(slot: ApplicationFieldSlot) -> bool:
     """Whether `slot` must be answered by the candidate rather than autofilled."""
     return slot in REQUIRES_CANDIDATE_ANSWER
+
+
+def is_sensitive_slot(slot: ApplicationFieldSlot) -> bool:
+    """Whether `slot` carries sensitive data — see `SENSITIVE_SLOTS`."""
+    return slot in SENSITIVE_SLOTS
+
+
+def sensitivity_of(slot: ApplicationFieldSlot) -> FieldSensitivity | None:
+    """The slot's sensitivity category, or None if it isn't sensitive."""
+    return SENSITIVE_SLOTS.get(slot)
 
 
 def is_document_slot(slot: ApplicationFieldSlot) -> bool:

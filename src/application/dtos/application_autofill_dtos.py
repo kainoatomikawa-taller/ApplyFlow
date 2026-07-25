@@ -1,10 +1,19 @@
 """DTOs — input/output contracts for autofilling an ATS application form.
 
 SENSITIVE: `AutofilledFieldOutput.value` carries what was written onto a real
-application form — the candidate's name, email, phone, and address. The
-output exists to be reviewed by the candidate, so it necessarily contains
-their contact details; it must never be logged. Log the `job_posting_id` and
-the outcome counts instead.
+application form — the candidate's name, email, phone, address, and, on the
+legal-attestation fields, their work-authorization answers. The output exists
+to be reviewed by the candidate, so it necessarily contains all of this; it
+must never be logged. Log the `job_posting_id` and the outcome counts instead.
+
+Flagging sensitive fields is part of the contract
+------------------------------------------------
+Each field carries `is_sensitive`, `sensitivity`, and
+`requires_confirmation`, so a review UI never has to infer sensitivity by
+pattern-matching slot names — a UI that got that inference wrong would render
+a visa declaration as an ordinary text box. `sensitive_fields` and
+`fields_awaiting_confirmation` are the two lists a review screen needs:
+what to flag, and what must be approved before anything is submitted.
 
 The output is one list, not two
 ------------------------------
@@ -56,8 +65,11 @@ class FieldAutofillOutcome(StrEnum):
     FAILED = "failed"
 
 
-#: Outcomes that mean something was actually written onto the form.
-_APPLIED_OUTCOMES = frozenset(
+#: Outcomes that mean something was actually written onto the form. Public
+#: because it is part of the contract, not an implementation detail: a caller
+#: deciding whether a value reached the form must use the same definition
+#: `was_applied` does, rather than re-listing the outcomes and drifting.
+APPLIED_OUTCOMES: frozenset[FieldAutofillOutcome] = frozenset(
     {FieldAutofillOutcome.FILLED, FieldAutofillOutcome.ATTACHED}
 )
 
@@ -97,11 +109,25 @@ class AutofilledFieldOutput:
     #: Human-readable detail — the options a select would have accepted, the
     #: reason a write failed. Safe to show a candidate.
     detail: str | None = None
+    #: Whether this field carries sensitive data. A review UI MUST flag these
+    #: distinctly; see `sensitivity` for which of the two kinds it is.
+    is_sensitive: bool = False
+    #: The `FieldSensitivity` category when sensitive, else None.
+    #: `legal_attestation` is a declaration the candidate is accountable for
+    #: (work authorization, sponsorship, citizenship, visa);
+    #: `voluntary_self_id` is EEO data, which is never autofilled and is the
+    #: candidate's choice on every individual application.
+    sensitivity: str | None = None
+    #: Whether a human must confirm this value before the form is submitted.
+    #: True for a sensitive field ApplyFlow filled: the value came from the
+    #: candidate's own attested record, but asserting it to *this* employer is
+    #: still theirs to approve.
+    requires_confirmation: bool = False
 
     @property
     def was_applied(self) -> bool:
         """Whether this field was actually written onto the form."""
-        return self.outcome in _APPLIED_OUTCOMES
+        return self.outcome in APPLIED_OUTCOMES
 
 
 @dataclass(frozen=True)
@@ -141,3 +167,24 @@ class ApplicationAutofillOutput:
         """The subset of `fields_needing_review` the portal marked required
         — the fields that will block submission."""
         return [item for item in self.fields_needing_review if item.required]
+
+    @property
+    def sensitive_fields(self) -> list[AutofilledFieldOutput]:
+        """Every sensitive field on the form, filled or not, in page order.
+
+        What a review screen flags distinctly. Filled or unfilled both belong
+        here: an autofilled work-authorization answer needs confirming, and an
+        untouched EEO question needs the candidate to decide — a UI that only
+        highlighted one of those would hide half the sensitive surface.
+        """
+        return [item for item in self.fields if item.is_sensitive]
+
+    @property
+    def fields_awaiting_confirmation(self) -> list[AutofilledFieldOutput]:
+        """Sensitive values ApplyFlow filled that a human has not approved.
+
+        The gate before submission: these are legal declarations written from
+        the candidate's stored record, and nothing should go out until they
+        have looked at them.
+        """
+        return [item for item in self.fields if item.requires_confirmation]

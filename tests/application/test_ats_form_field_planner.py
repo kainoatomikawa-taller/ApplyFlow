@@ -17,12 +17,24 @@ from src.application.services.ats_form_field_planner import (
 )
 from src.domain.entities.education_entry import EducationEntry
 from src.domain.entities.user_profile import UserProfile
-from src.domain.value_objects.application_field_slot import ApplicationFieldSlot
+from src.domain.value_objects.application_field_slot import (
+    ApplicationFieldSlot,
+    FieldSensitivity,
+)
 from src.domain.value_objects.ats_provider import AtsProvider
+from src.domain.value_objects.eeo_categories import (
+    DisabilityStatus,
+    GenderIdentity,
+    RaceEthnicity,
+    VeteranStatus,
+)
+from src.domain.value_objects.eeo_self_identification import EeoSelfIdentification
 from src.domain.value_objects.email_address import EmailAddress
 from src.domain.value_objects.generated_document_kind import GeneratedDocumentKind
 from src.domain.value_objects.profile_links import ProfileLinks
 from src.domain.value_objects.provenance_source import ProvenanceSource
+from src.domain.value_objects.work_authorization import WorkAuthorization
+from src.domain.value_objects.work_authorization_status import WorkAuthorizationStatus
 
 Slot = ApplicationFieldSlot
 
@@ -76,6 +88,37 @@ def profile() -> UserProfile:
             start_date=date(2012, 8, 1),
             end_date=date(2016, 5, 15),
             source=ProvenanceSource.PARSED_RESUME,
+        )
+    )
+    return profile
+
+
+@pytest.fixture
+def authorized_profile(profile: UserProfile) -> UserProfile:
+    """A candidate who stated their work authorization themselves — a US
+    citizen who needs no sponsorship."""
+    profile.set_work_authorization(
+        WorkAuthorization(
+            status=WorkAuthorizationStatus.CITIZEN,
+            citizenship_country="United States",
+            requires_sponsorship=False,
+            source=ProvenanceSource.USER_ENTERED,
+        )
+    )
+    return profile
+
+
+@pytest.fixture
+def eeo_profile(profile: UserProfile) -> UserProfile:
+    """A candidate who answered every EEO category. None of it may ever reach
+    a form."""
+    profile.set_eeo_self_identification(
+        EeoSelfIdentification(
+            source=ProvenanceSource.ANSWER,
+            gender_identity=GenderIdentity.FEMALE,
+            race_ethnicity=RaceEthnicity.ASIAN,
+            veteran_status=VeteranStatus.PROTECTED_VETERAN,
+            disability_status=DisabilityStatus.NO_DISABILITY,
         )
     )
     return profile
@@ -242,36 +285,168 @@ def test_a_recognized_field_with_no_profile_data_is_surfaced_as_such(planner, pr
     assert planned.surface_reason is SurfaceReason.NO_PROFILE_DATA
 
 
+# ---- Sensitive fields --------------------------------------------------------
+
+
+def yes_no(label: str, *, kind: FormFieldKind = FormFieldKind.SELECT) -> FormField:
+    """A Yes/No question as the three platforms render one."""
+    return field(
+        label,
+        kind=kind,
+        required=True,
+        options=(
+            FormFieldOption(label="Yes", value="1"),
+            FormFieldOption(label="No", value="0"),
+        ),
+    )
+
+
 @pytest.mark.parametrize(
     "label",
     [
-        "Are you legally authorized to work in the United States?",
-        "Will you now or in the future require sponsorship?",
         "Gender",
         "Race / Ethnicity",
         "Are you a protected veteran?",
         "Disability status",
+        "What are your pronouns?",
     ],
 )
-def test_sensitive_self_identification_is_recognized_and_refused(
-    planner, profile, label
+def test_eeo_is_recognized_and_never_filled(planner, eeo_profile, label):
+    """Recognized — so a reviewer is told which question it is — and refused
+    even though `eeo_profile` has answered every category."""
+    planned = plan_one(planner, eeo_profile, yes_no(label))
+
+    assert planned.disposition is FieldDisposition.SURFACE
+    assert planned.slot is Slot.EEO_SELF_IDENTIFICATION
+    assert planned.surface_reason is SurfaceReason.REQUIRES_CANDIDATE_ANSWER
+    assert planned.value is None
+    # Flagged for the review step as the candidate's own choice, not as a gap
+    # in their profile.
+    assert planned.sensitivity is FieldSensitivity.VOLUNTARY_SELF_ID
+    assert planned.requires_confirmation is False
+
+
+@pytest.mark.parametrize(
+    ("label", "expected_slot", "expected_value"),
+    [
+        (
+            "Are you legally authorized to work in the United States? *",
+            Slot.WORK_AUTHORIZATION,
+            "Yes",
+        ),
+        (
+            "Will you now or in the future require sponsorship?",
+            Slot.SPONSORSHIP_REQUIRED,
+            "No",
+        ),
+    ],
+)
+def test_legal_questions_are_filled_from_attested_data(
+    planner, authorized_profile, label, expected_slot, expected_value
 ):
-    """Recognized — so a reviewer is told which question it is — and never
-    filled."""
+    """The other half of the policy: leaving a required authorization question
+    blank stalls the application, so an exact answer must be given."""
+    planned = plan_one(planner, authorized_profile, yes_no(label))
+
+    assert planned.disposition is FieldDisposition.FILL
+    assert planned.slot is expected_slot
+    assert planned.value == expected_value
+    assert planned.sensitivity is FieldSensitivity.LEGAL_ATTESTATION
+    # Filled from the candidate's own record, and still theirs to approve.
+    assert planned.requires_confirmation is True
+
+
+@pytest.mark.parametrize("kind", [FormFieldKind.SELECT, FormFieldKind.RADIO])
+def test_a_yes_no_legal_question_is_answered_as_a_select_or_a_radio(
+    planner, authorized_profile, kind
+):
+    """A Yes/No radio group is how these questions are most often asked, and
+    the harness selects a radio by its own option label."""
     planned = plan_one(
         planner,
-        profile,
-        field(
-            label,
-            kind=FormFieldKind.SELECT,
-            options=(FormFieldOption(label="Yes", value="1"),),
-        ),
+        authorized_profile,
+        yes_no("Are you legally authorized to work in the US?", kind=kind),
+    )
+
+    assert planned.disposition is FieldDisposition.FILL
+    assert planned.value == "Yes"
+
+
+def test_a_legal_question_asked_as_a_checkbox_is_surfaced(planner, authorized_profile):
+    """A tick box is unlabelled as to polarity — "I require sponsorship" and
+    "I do not require sponsorship" are both real labels, and getting it
+    backwards inverts a legal declaration."""
+    planned = plan_one(
+        planner,
+        authorized_profile,
+        field("I require visa sponsorship", kind=FormFieldKind.CHECKBOX),
     )
 
     assert planned.disposition is FieldDisposition.SURFACE
-    assert planned.slot in {Slot.WORK_AUTHORIZATION, Slot.EEO_SELF_IDENTIFICATION}
-    assert planned.surface_reason is SurfaceReason.REQUIRES_CANDIDATE_ANSWER
+    assert planned.slot is Slot.SPONSORSHIP_REQUIRED
+    assert planned.surface_reason is SurfaceReason.UNSUPPORTED_FIELD_KIND
     assert planned.value is None
+
+
+def test_an_unattested_legal_record_is_surfaced_with_its_own_reason(planner, profile):
+    """Distinct from "no data": the answer is on file, it just was not stated
+    by the candidate, and confirming it on the profile is the fix."""
+    profile.set_work_authorization(
+        WorkAuthorization(
+            status=WorkAuthorizationStatus.CITIZEN,
+            requires_sponsorship=False,
+            source=ProvenanceSource.PARSED_RESUME,
+        )
+    )
+    planned = plan_one(
+        planner, profile, yes_no("Are you legally authorized to work in the US?")
+    )
+
+    assert planned.disposition is FieldDisposition.SURFACE
+    assert planned.surface_reason is SurfaceReason.SENSITIVE_DATA_NOT_ATTESTED
+    assert planned.value is None
+
+
+def test_a_legal_question_the_record_cannot_settle_is_surfaced(planner, profile):
+    """A visa holder asked about *future* sponsorship — the record does not
+    answer it, and approximating is the one thing these fields must not do."""
+    profile.set_work_authorization(
+        WorkAuthorization(
+            status=WorkAuthorizationStatus.VISA_HOLDER,
+            source=ProvenanceSource.USER_ENTERED,
+        )
+    )
+    planned = plan_one(
+        planner, profile, yes_no("Will you require sponsorship in the future?")
+    )
+
+    assert planned.disposition is FieldDisposition.SURFACE
+    assert planned.surface_reason is SurfaceReason.SENSITIVE_ANSWER_NOT_DERIVABLE
+
+
+def test_a_legal_question_with_nothing_on_file_reports_the_profile_gap(
+    planner, profile
+):
+    """Same remedy as any other missing profile field, so it reports the same
+    reason — a reviewer should not have to learn two words for it."""
+    planned = plan_one(
+        planner, profile, yes_no("Are you legally authorized to work in the US?")
+    )
+
+    assert planned.surface_reason is SurfaceReason.NO_PROFILE_DATA
+
+
+def test_no_ordinary_field_is_ever_flagged_sensitive(planner, authorized_profile):
+    """The flag has to mean something, so it must not be over-applied."""
+    for form_field in (
+        field("Email", kind=FormFieldKind.EMAIL, name="email"),
+        field("First Name", name="job_application[first_name]"),
+        field("A question the company wrote?", kind=FormFieldKind.TEXTAREA),
+    ):
+        planned = plan_one(planner, authorized_profile, form_field)
+        assert planned.is_sensitive is False
+        assert planned.sensitivity is None
+        assert planned.requires_confirmation is False
 
 
 def test_a_password_field_is_never_filled(planner, profile):
