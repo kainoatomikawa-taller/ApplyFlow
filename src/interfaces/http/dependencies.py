@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.application.dtos.auth_dtos import AuthenticatedUserDTO
 from src.application.exceptions import AuthenticationError
 from src.application.ports.auth_verifier_port import AuthVerifierPort
+from src.application.services.provenance_fact_assembler import ProvenanceFactAssembler
 from src.application.use_cases.analyze_job_application import (
     AnalyzeJobApplication,
 )
@@ -32,6 +33,7 @@ from src.application.use_cases.detect_job_requirement_gaps import (
 from src.application.use_cases.generate_gap_resolution_questions import (
     GenerateGapResolutionQuestions,
 )
+from src.application.use_cases.generate_tailored_resume import GenerateTailoredResume
 from src.application.use_cases.get_resume import GetResume
 from src.application.use_cases.list_candidate_applications import (
     ListCandidateApplications,
@@ -71,6 +73,9 @@ from src.infrastructure.llm.llm_requirement_gap_detector import (
     LlmRequirementGapDetector,
 )
 from src.infrastructure.llm.llm_resume_parser import LlmResumeParser
+from src.infrastructure.llm.llm_tailored_resume_generator import (
+    LlmTailoredResumeGenerator,
+)
 from src.infrastructure.llm.openai_embedding_client import OpenAiEmbeddingClient
 from src.infrastructure.persistence.answer_memory_repository_impl import (
     SqlAlchemyAnswerMemoryRepository,
@@ -251,6 +256,35 @@ def get_resolve_gap_answer_use_case(
         repository=answer_memory_repository,
         embedding_client=OpenAiEmbeddingClient(get_settings()),
         id_generator=UuidIdGenerator(),
+    )
+
+
+def _provenance_fact_assembler(
+    profile_repository: SqlAlchemyProfileRepository = Depends(_profile_repository),
+    answer_memory_repository: SqlAlchemyAnswerMemoryRepository = Depends(
+        _answer_memory_repository
+    ),
+) -> ProvenanceFactAssembler:
+    return ProvenanceFactAssembler(
+        profile_repository=profile_repository,
+        answer_memory_repository=answer_memory_repository,
+    )
+
+
+def get_generate_tailored_resume_use_case(
+    job_posting_repository: SqlAlchemyJobPostingRepository = Depends(
+        _job_posting_repository
+    ),
+    fact_assembler: ProvenanceFactAssembler = Depends(_provenance_fact_assembler),
+) -> GenerateTailoredResume:
+    """The generator is the only injected collaborator that talks to a
+    model; the guard, the ATS formatter, and the audit recorder are pure
+    defaults the use case builds itself, so no wiring mistake here can
+    produce an unguarded resume."""
+    return GenerateTailoredResume(
+        job_posting_repository=job_posting_repository,
+        fact_assembler=fact_assembler,
+        generator=LlmTailoredResumeGenerator(AnthropicLlmClient(get_settings())),
     )
 
 

@@ -135,6 +135,29 @@ class JobRequirementGapsResponse(BaseModel):
     gaps: list[str]
 
 
+class ProvenanceViolationResponse(BaseModel):
+    """One assertion the provenance guard removed from generated output,
+    and the terms nothing in the candidate's attested data backed."""
+
+    line: str
+    unsupported_terms: list[str] = Field(default_factory=list)
+
+
+class GuardedDocumentResponse(BaseModel):
+    """Generated content after the provenance guard has run. `content` is
+    post-guard text only — the raw model draft is never serialized.
+    `violations` is non-empty when the model asserted something it could
+    not support, which is useful to surface and never a request failure on
+    its own: the document that came back is still made only of attested
+    claims."""
+
+    job_posting_id: str
+    document_kind: str
+    content: str
+    backing_sources: list[str] = Field(default_factory=list)
+    violations: list[ProvenanceViolationResponse] = Field(default_factory=list)
+
+
 class GenerateGapQuestionsRequest(BaseModel):
     gaps: list[str] = Field(default_factory=list)
     # Optional override of the "already answered" match strictness; unset

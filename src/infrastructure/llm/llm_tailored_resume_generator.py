@@ -12,6 +12,18 @@ rather than a scrubber — reuse the facts' own wording, one claim per line,
 omit anything the facts don't cover. Every one of those instructions is
 also independently enforced after the fact, because a model that ignores
 them must not be able to turn its disobedience into output.
+
+It asks for ATS-safe structure for the same reason: standard section
+headings a parser recognizes, one column, plain "- " bullets, no tables or
+glyphs, dates in a single readable format. A resume that parses badly is
+rejected before a human ever reads it, so this is a correctness requirement
+rather than a stylistic one — and `AtsSafeResumeFormatter` enforces the
+mechanical half of it afterward, whatever the model returns.
+
+Tailoring is keyword-aware but never keyword-stuffed: the prompt directs
+the model to prefer the posting's own phrasing *only* where a fact already
+supports the claim, since an ATS matching on a term the candidate cannot
+back is the fabrication this pipeline exists to prevent.
 """
 
 from __future__ import annotations
@@ -41,8 +53,28 @@ Rules:
   things in — they are NOT information about the candidate. If a
   requirement is not covered by the facts, leave it out entirely. Never
   claim, imply, or hedge toward experience the facts do not state.
-- Plain text only: short section headings (SUMMARY, EXPERIENCE,
-  EDUCATION, SKILLS) and single-line entries. No markdown, no tables.
+- Where a fact and a requirement describe the same thing, use the
+  posting's wording for it, so an applicant tracking system matching on
+  that term finds it. Only ever do this for a claim the facts already
+  support — never to work a keyword in.
+- Lead with what this posting asks for: order sections and entries so the
+  most role-relevant attested experience comes first.
+
+Format for applicant tracking systems (ATS), which read plain text:
+- Use only these section headings, in caps, each on its own line, and only
+  when you have facts to put under them: SUMMARY, EXPERIENCE, EDUCATION,
+  SKILLS, CERTIFICATIONS, PROJECTS.
+- Put contact details (name, email, phone, location, links) as the first
+  lines, one per line, before any heading.
+- One single column. No tables, no columns, no headers or footers, no
+  images, no icons, no emoji, no text boxes, no page numbers.
+- No markdown of any kind: no #, *, _, backticks, or | pipes.
+- Bullets start with "- " and nothing else. One line per bullet, no
+  wrapping onto a second line.
+- Write each role as: Job Title, Company, Start - End on one line, then
+  its bullets beneath. Keep every date in the format the facts use.
+- Plain ASCII punctuation: straight quotes and hyphens, no en/em dashes,
+  no special glyphs.
 - If the facts are too thin to fill a section, omit that section rather
   than padding it.
 - Return ONLY the resume text — no preamble, no commentary, no notes

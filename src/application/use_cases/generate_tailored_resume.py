@@ -15,6 +15,22 @@ identifying title/company/location as referable context. A requirement is
 what the employer asked for; treating it as evidence would let the model
 claim every requirement as the candidate's own experience (see
 `ProvenanceGuard`).
+
+The full pipeline is normalize -> guard -> tidy -> attest:
+
+1. `AtsSafeResumeFormatter.normalize_plain_text` flattens the draft to
+   ATS-parseable plain text first, so the text the guard validates is the
+   text that ships and no post-guard rewriting is needed.
+2. `ProvenanceGuard` removes every line the candidate's facts don't back.
+3. `AtsSafeResumeFormatter.drop_empty_sections` clears headings left
+   standing over nothing — the shape a stripped fabrication leaves, and the
+   difference between a shorter resume and a broken-looking one.
+4. If no surviving line traces to a candidate fact, this raises
+   `UnattestedGenerationError` rather than returning a husk of headings as
+   a finished resume.
+
+Steps 1 and 3 only delete or transliterate characters, so neither can
+introduce a claim the guard rejected or never saw.
 """
 
 from __future__ import annotations
@@ -25,6 +41,7 @@ from src.application.dtos.generation_dtos import (
     GuardedDocumentOutput,
     ProvenanceViolationOutput,
 )
+from src.application.exceptions import UnattestedGenerationError
 from src.application.ports.tailored_resume_generator_port import (
     TailoredResumeGeneratorPort,
 )
@@ -32,6 +49,7 @@ from src.application.services.generation_guard_audit import GenerationGuardAudit
 from src.application.services.provenance_fact_assembler import ProvenanceFactAssembler
 from src.domain.exceptions import JobPostingNotFoundError
 from src.domain.repositories.job_posting_repository import JobPostingRepository
+from src.domain.services.ats_safe_resume_formatter import AtsSafeResumeFormatter
 from src.domain.services.provenance_guard import ProvenanceGuard
 from src.domain.services.requirement_classifier import RequirementClassifier
 from src.domain.value_objects.job_requirements import JobRequirements
@@ -46,6 +64,7 @@ class GenerateTailoredResume:
         guard: ProvenanceGuard | None = None,
         classifier: RequirementClassifier | None = None,
         audit: GenerationGuardAudit | None = None,
+        formatter: AtsSafeResumeFormatter | None = None,
     ) -> None:
         self._job_posting_repository = job_posting_repository
         self._fact_assembler = fact_assembler
@@ -53,6 +72,7 @@ class GenerateTailoredResume:
         self._guard = guard or ProvenanceGuard()
         self._classifier = classifier or RequirementClassifier()
         self._audit = audit or GenerationGuardAudit()
+        self._formatter = formatter or AtsSafeResumeFormatter()
 
     async def execute(self, dto: GenerateTailoredResumeInput) -> GuardedDocumentOutput:
         posting = await self._job_posting_repository.get_by_id(dto.job_posting_id)
@@ -76,7 +96,7 @@ class GenerateTailoredResume:
         )
 
         guarded = self._guard.enforce(
-            draft,
+            self._formatter.normalize_plain_text(draft),
             facts=facts,
             context_terms=tuple(
                 term
@@ -90,11 +110,16 @@ class GenerateTailoredResume:
             job_posting_id=posting.id,
             guarded=guarded,
         )
+        if not guarded.has_attested_content:
+            raise UnattestedGenerationError(
+                document_kind=GeneratedDocumentKind.TAILORED_RESUME.value,
+                unsupported_terms=guarded.unsupported_terms,
+            )
 
         return GuardedDocumentOutput(
             job_posting_id=posting.id,
             document_kind=GeneratedDocumentKind.TAILORED_RESUME.value,
-            content=guarded.content,
+            content=self._formatter.drop_empty_sections(guarded.content),
             backing_sources=[source.value for source in guarded.backing_sources],
             violations=[
                 ProvenanceViolationOutput(

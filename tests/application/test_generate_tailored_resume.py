@@ -11,6 +11,7 @@ import logging
 import pytest
 
 from src.application.dtos.generation_dtos import GenerateTailoredResumeInput
+from src.application.exceptions import UnattestedGenerationError
 from src.application.services.provenance_fact_assembler import ProvenanceFactAssembler
 from src.application.use_cases.generate_tailored_resume import GenerateTailoredResume
 from src.domain.exceptions import JobPostingNotFoundError, ProfileNotFoundError
@@ -124,11 +125,13 @@ async def test_an_inflated_number_is_stripped_even_though_the_claim_is_real(
         profile_repository=StubProfileRepository(profile),
         answer_memory_repository=StubAnswerMemoryRepository([answer_memory]),
     )
-    generator = RecordingGenerator("Led a team of 25 engineers.")
+    generator = RecordingGenerator(
+        "Built payment services in Python.\nLed a team of 25 engineers."
+    )
 
     result = await _use_case(posting, fact_assembler, generator).execute(_INPUT)
 
-    assert result.content == ""
+    assert result.content == "Built payment services in Python."
     assert result.violations[0].unsupported_terms == ["25"]
 
 
@@ -136,7 +139,9 @@ async def test_an_inflated_number_is_stripped_even_though_the_claim_is_real(
 async def test_violations_are_logged_with_the_terms_that_failed(
     posting, fact_assembler, caplog
 ):
-    generator = RecordingGenerator("Staff Engineer at Initech (2016-2019)")
+    generator = RecordingGenerator(
+        "Built payment services in Python.\nStaff Engineer at Initech (2016-2019)"
+    )
 
     with caplog.at_level(logging.WARNING):
         await _use_case(posting, fact_assembler, generator).execute(_INPUT)
@@ -185,3 +190,120 @@ async def test_a_missing_profile_raises_rather_than_writing_from_nothing(posting
         await _use_case(posting, fact_assembler, generator).execute(_INPUT)
 
     assert generator.facts == ()
+
+
+# ---- ATS-safe formatting and post-guard coherence ---------------------------
+
+
+@pytest.mark.asyncio
+async def test_markdown_and_glyphs_are_flattened_before_the_resume_is_returned(
+    posting, fact_assembler
+):
+    """An ATS reads plain text, so what the model dressed up gets undressed
+    — and it happens before guarding, so the text validated is the text
+    returned."""
+    generator = RecordingGenerator(
+        "## EXPERIENCE\n"
+        "**Backend Engineer** at Acme Corp\n"
+        "• Built *payment* services in `Python`\n"
+    )
+
+    result = await _use_case(posting, fact_assembler, generator).execute(_INPUT)
+
+    assert result.content == (
+        "EXPERIENCE\n"
+        "Backend Engineer at Acme Corp\n"
+        "- Built payment services in Python"
+    )
+    assert result.violations == []
+
+
+@pytest.mark.asyncio
+async def test_a_table_is_flattened_rather_than_shipped_to_a_parser(
+    posting, fact_assembler
+):
+    generator = RecordingGenerator(
+        "EXPERIENCE\n| Backend Engineer | Acme Corp |\n| --- | --- |"
+    )
+
+    result = await _use_case(posting, fact_assembler, generator).execute(_INPUT)
+
+    assert "|" not in result.content
+    assert "Backend Engineer Acme Corp" in result.content
+
+
+@pytest.mark.asyncio
+async def test_a_section_the_guard_emptied_is_not_left_as_a_hollow_heading(
+    posting, fact_assembler
+):
+    """The guard strips the fabricated schooling; leaving "EDUCATION" over
+    nothing would read as broken rather than shorter."""
+    generator = RecordingGenerator(
+        "EXPERIENCE\n"
+        "Built payment services in Python.\n"
+        "\n"
+        "EDUCATION\n"
+        "PhD in Distributed Systems, Initech Institute\n"
+    )
+
+    result = await _use_case(posting, fact_assembler, generator).execute(_INPUT)
+
+    assert result.content == "EXPERIENCE\nBuilt payment services in Python."
+    assert "EDUCATION" not in result.content
+    assert result.violations[0].line.startswith("PhD in Distributed Systems")
+
+
+@pytest.mark.asyncio
+async def test_a_section_that_kept_its_body_keeps_its_heading(posting, fact_assembler):
+    generator = RecordingGenerator("SKILLS\nPython\n\nEXPERIENCE\nAcme Corp")
+
+    result = await _use_case(posting, fact_assembler, generator).execute(_INPUT)
+
+    assert result.content == "SKILLS\nPython\n\nEXPERIENCE\nAcme Corp"
+
+
+@pytest.mark.asyncio
+async def test_a_resume_with_nothing_attested_left_is_rejected_not_returned(
+    posting, fact_assembler
+):
+    """Everything the model claimed was fabricated. A page of bare headings
+    is not a resume, so the caller is told rather than handed one."""
+    generator = RecordingGenerator(
+        "EXPERIENCE\n"
+        "Staff Engineer at Initech (2016-2019)\n"
+        "\n"
+        "EDUCATION\n"
+        "PhD in Distributed Systems, Initech Institute\n"
+    )
+
+    with pytest.raises(UnattestedGenerationError) as exc_info:
+        await _use_case(posting, fact_assembler, generator).execute(_INPUT)
+
+    assert exc_info.value.document_kind == "tailored_resume"
+    assert "initech" in exc_info.value.unsupported_terms
+    assert "tailored_resume" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_resume_is_still_logged_for_debugging(
+    posting, fact_assembler, caplog
+):
+    """The audit record is written before the rejection, so the worst case
+    is the best documented."""
+    generator = RecordingGenerator("PhD in Distributed Systems, Initech Institute")
+
+    with caplog.at_level(logging.WARNING), pytest.raises(UnattestedGenerationError):
+        await _use_case(posting, fact_assembler, generator).execute(_INPUT)
+
+    assert "provenance violation" in caplog.text
+    assert "initech" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_headings_alone_do_not_count_as_attested_content(posting, fact_assembler):
+    """Section headings survive guarding by asserting nothing — which is
+    exactly why they cannot stand in for a resume."""
+    generator = RecordingGenerator("SUMMARY\n\nEXPERIENCE\n\nSKILLS")
+
+    with pytest.raises(UnattestedGenerationError):
+        await _use_case(posting, fact_assembler, generator).execute(_INPUT)

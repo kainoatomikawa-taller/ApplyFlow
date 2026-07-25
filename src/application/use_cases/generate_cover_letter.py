@@ -10,6 +10,13 @@ evidence. A cover letter needs the guard at least as much as a resume does:
 prose invites the model to editorialize a candidate's experience into
 something more impressive than their record states, and this is where that
 gets removed.
+
+It shares the resume flow's attestation rule too (`UnattestedGenerationError`
+when no surviving line traces to a candidate fact): a letter of pure
+salutation and enthusiasm passes the guard while saying nothing about the
+candidate, and handing that back as finished work would be the same failure
+in a different shape. ATS-safe formatting is not shared — that is a resume
+concern, since a cover letter is not what a parser reads for fields.
 """
 
 from __future__ import annotations
@@ -20,6 +27,7 @@ from src.application.dtos.generation_dtos import (
     GuardedDocumentOutput,
     ProvenanceViolationOutput,
 )
+from src.application.exceptions import UnattestedGenerationError
 from src.application.ports.cover_letter_generator_port import CoverLetterGeneratorPort
 from src.application.services.generation_guard_audit import GenerationGuardAudit
 from src.application.services.provenance_fact_assembler import ProvenanceFactAssembler
@@ -83,6 +91,11 @@ class GenerateCoverLetter:
             job_posting_id=posting.id,
             guarded=guarded,
         )
+        if not guarded.has_attested_content:
+            raise UnattestedGenerationError(
+                document_kind=GeneratedDocumentKind.COVER_LETTER.value,
+                unsupported_terms=guarded.unsupported_terms,
+            )
 
         return GuardedDocumentOutput(
             job_posting_id=posting.id,

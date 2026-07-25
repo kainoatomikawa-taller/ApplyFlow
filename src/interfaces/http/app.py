@@ -20,6 +20,7 @@ from src.interfaces.http.controllers import (
     job_match_feedback_controller,
     job_posting_controller,
     resume_controller,
+    tailored_resume_controller,
 )
 
 
@@ -53,6 +54,7 @@ def create_app() -> FastAPI:
     app.include_router(job_posting_controller.router)
     app.include_router(job_match_feedback_controller.router)
     app.include_router(gap_resolution_controller.router)
+    app.include_router(tailored_resume_controller.router)
     return app
 
 

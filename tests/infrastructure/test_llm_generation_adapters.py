@@ -10,10 +10,22 @@ keeps requirements labeled as something other than facts.
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import pytest
+from anthropic.types import TextBlock, Usage
+from anthropic.types.message import Message
+from pydantic import SecretStr
 
 from src.application.exceptions import ExternalServiceError
-from src.application.ports.llm_client_port import LlmClientPort, LlmTaskType
+from src.application.ports.llm_client_port import (
+    TASK_TYPE_TIERS,
+    LlmClientPort,
+    LlmModelTier,
+    LlmTaskType,
+)
+from src.infrastructure.config import Settings
+from src.infrastructure.llm.anthropic_client import AnthropicLlmClient
 from src.infrastructure.llm.llm_cover_letter_generator import LlmCoverLetterGenerator
 from src.infrastructure.llm.llm_tailored_resume_generator import (
     LlmTailoredResumeGenerator,
@@ -143,3 +155,104 @@ async def test_an_empty_response_is_an_external_service_error(index: int):
 
     with pytest.raises(ExternalServiceError):
         await _generate(_generators(client)[index])
+
+
+# ---- strong-tier routing, end to end through the real client --------------
+
+
+def _anthropic_client(**model_overrides: str) -> AnthropicLlmClient:
+    settings = Settings(
+        _env_file=None,
+        anthropic_api_key=SecretStr("sk-ant-test-key"),
+        **model_overrides,
+    )
+    return AnthropicLlmClient(settings)
+
+
+def _mock_sdk(client: AnthropicLlmClient, text: str = "EXPERIENCE") -> AsyncMock:
+    response = Message(
+        id="msg_test",
+        type="message",
+        role="assistant",
+        model="claude-sonnet-5",
+        content=[TextBlock(type="text", text=text)],
+        stop_reason="end_turn",
+        stop_sequence=None,
+        usage=Usage(input_tokens=1, output_tokens=1),
+    )
+    mock = AsyncMock(return_value=response)
+    client._client.messages.create = mock  # type: ignore[method-assign]
+    return mock
+
+
+@pytest.mark.asyncio
+async def test_resume_generation_reaches_the_configured_strong_model():
+    """Proves the whole path, not just the tier table: the adapter picks
+    RESUME_WRITING, TASK_TYPE_TIERS maps that to STRONG, and the client
+    resolves STRONG to ANTHROPIC_MODEL_STRONG."""
+    client = _anthropic_client(
+        anthropic_model_cheap="cheap-test-model",
+        anthropic_model_strong="strong-test-model",
+    )
+    mock_create = _mock_sdk(client)
+
+    await _generate(LlmTailoredResumeGenerator(client))
+
+    _, kwargs = mock_create.await_args
+    assert kwargs["model"] == "strong-test-model"
+
+
+@pytest.mark.asyncio
+async def test_resume_generation_uses_sonnet_by_default():
+    """The documented default for the strong tier — a resume is low-volume,
+    high-stakes writing and is not quietly downgraded to the cheap model."""
+    client = _anthropic_client()
+    mock_create = _mock_sdk(client)
+
+    await _generate(LlmTailoredResumeGenerator(client))
+
+    _, kwargs = mock_create.await_args
+    assert kwargs["model"] == "claude-sonnet-5"
+
+
+@pytest.mark.asyncio
+async def test_the_resume_tier_mapping_is_the_strong_one():
+    assert TASK_TYPE_TIERS[LlmTaskType.RESUME_WRITING] is LlmModelTier.STRONG
+
+
+# ---- ATS-safe instructions ------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_resume_prompt_asks_for_ats_safe_structure():
+    client = FakeLlmClient("draft")
+
+    await _generate(LlmTailoredResumeGenerator(client))
+
+    system = (client.calls[0][2] or "").lower()
+    assert "applicant tracking" in system
+    assert "no tables" in system
+    assert "no markdown" in system
+    assert "single column" in system
+    for heading in ("summary", "experience", "education", "skills"):
+        assert heading in system
+
+
+@pytest.mark.asyncio
+async def test_the_resume_prompt_allows_keyword_alignment_only_where_facts_back_it():
+    client = FakeLlmClient("draft")
+
+    await _generate(LlmTailoredResumeGenerator(client))
+
+    system = " ".join((client.calls[0][2] or "").split())
+    assert "use the posting's wording for it" in system
+    assert "never to work a keyword in" in system
+
+
+@pytest.mark.asyncio
+async def test_the_resume_prompt_asks_for_role_relevant_ordering():
+    client = FakeLlmClient("draft")
+
+    await _generate(LlmTailoredResumeGenerator(client))
+
+    assert "Lead with what this posting asks for" in (client.calls[0][2] or "")

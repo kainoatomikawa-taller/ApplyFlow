@@ -10,6 +10,7 @@ import logging
 import pytest
 
 from src.application.dtos.generation_dtos import GenerateCoverLetterInput
+from src.application.exceptions import UnattestedGenerationError
 from src.application.services.provenance_fact_assembler import ProvenanceFactAssembler
 from src.application.use_cases.generate_cover_letter import GenerateCoverLetter
 from src.domain.exceptions import JobPostingNotFoundError, ProfileNotFoundError
@@ -73,15 +74,17 @@ async def test_unearned_praise_is_stripped_from_the_letter(posting, fact_assembl
 async def test_naming_the_role_applied_for_is_not_treated_as_a_candidate_claim(
     posting, fact_assembler
 ):
-    line = "I am applying to Globex in Austin, TX."
-    generator = RecordingGenerator(line)
+    draft = (
+        "I am applying to Globex in Austin, TX.\nI built payment services in Python."
+    )
+    generator = RecordingGenerator(draft)
 
     result = await _use_case(posting, fact_assembler, generator).execute(_INPUT)
 
-    assert result.content == line
-    # Named the posting, claimed nothing about the candidate — so the line
-    # is credited to no provenance rather than borrowing one.
-    assert result.backing_sources == []
+    # The posting-naming line survives on the posting's own terms; only the
+    # second line claims anything, and only it needs provenance.
+    assert result.content == draft
+    assert result.backing_sources == ["parsed_resume"]
 
 
 @pytest.mark.asyncio
@@ -102,13 +105,14 @@ async def test_a_requirement_the_candidate_cannot_back_is_not_claimed(
     posting, fact_assembler
 ):
     generator = RecordingGenerator(
+        "I built payment services in Python.\n"
         "I have used Terraform to manage infrastructure for years."
     )
 
     result = await _use_case(posting, fact_assembler, generator).execute(_INPUT)
 
     assert "Terraform" in generator.requirements
-    assert result.content == ""
+    assert result.content == "I built payment services in Python."
     assert "terraform" in result.violations[0].unsupported_terms
 
 
@@ -134,7 +138,9 @@ async def test_answers_given_during_gap_resolution_can_ground_the_letter(
 async def test_violations_are_logged_against_the_cover_letter_flow(
     posting, fact_assembler, caplog
 ):
-    generator = RecordingGenerator("I am a seasoned Kubernetes architect.")
+    generator = RecordingGenerator(
+        "I built payment services in Python.\n" "I am a seasoned Kubernetes architect."
+    )
 
     with caplog.at_level(logging.WARNING):
         await _use_case(posting, fact_assembler, generator).execute(_INPUT)
@@ -143,6 +149,25 @@ async def test_violations_are_logged_against_the_cover_letter_flow(
     assert "cover_letter" in logged
     assert "provenance violation" in logged
     assert "seasoned" in logged
+
+
+@pytest.mark.asyncio
+async def test_a_letter_with_nothing_attested_left_is_rejected_not_returned(
+    posting, fact_assembler
+):
+    """Enthusiasm and a salutation pass the guard while claiming nothing, so
+    the letter has to be refused rather than sent as finished work — the
+    same rule the resume flow applies."""
+    generator = RecordingGenerator(
+        "Dear Hiring Manager,\n"
+        "I am excited to apply and eager to discuss the opportunity.\n"
+        "Sincerely,"
+    )
+
+    with pytest.raises(UnattestedGenerationError) as exc_info:
+        await _use_case(posting, fact_assembler, generator).execute(_INPUT)
+
+    assert exc_info.value.document_kind == "cover_letter"
 
 
 @pytest.mark.asyncio

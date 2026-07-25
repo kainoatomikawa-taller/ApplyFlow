@@ -104,15 +104,21 @@ _NEUTRAL_WORDS = frozenset(
         "up", "very", "was", "we", "were", "what", "when", "where",
         "which", "while", "who", "whom", "why", "will", "with", "would",
         "you", "your", "yours",
-        # document scaffolding: resume headings, letter salutation/sign-off
-        "additional", "application", "apply", "applying", "attached",
-        "best", "candidate", "consideration", "contact", "cover", "dear",
-        "details", "education", "email", "employment", "experience",
+        # document scaffolding: resume headings, letter salutation/sign-off.
+        # These are category nouns that name a section, never a specific
+        # claim — an "AWS Certifications" line still has to back "aws", and
+        # a "Languages: Spanish" line still has to back "spanish".
+        "achievements", "additional", "application", "apply", "applying",
+        "attached", "awards", "best", "candidate", "career",
+        "certifications", "consideration", "contact", "core", "cover",
+        "dear", "details", "education", "email", "employment", "experience",
         "further", "highlights", "hiring", "history", "info",
-        "information", "letter", "manager", "objective", "overview",
-        "phone", "position", "profile", "qualifications", "recruiter",
-        "references", "regards", "resume", "role", "section", "sincerely",
-        "skills", "summary", "team", "thank", "thanks", "title", "work",
+        "information", "languages", "letter", "licenses", "manager",
+        "objective", "overview", "phone", "position", "professional",
+        "profile", "projects", "publications", "qualifications",
+        "recruiter", "references", "regards", "resume", "role", "section",
+        "sincerely", "skills", "summary", "team", "technical", "thank",
+        "thanks", "title", "work",
         # neutral statements of interest/intent — no factual claim
         "add", "am", "available", "believe", "bring", "consider", "discuss",
         "eager", "enjoy", "excited", "forward", "glad", "happy", "hearing",
@@ -228,9 +234,21 @@ class GuardedContent:
     @property
     def content(self) -> str:
         """The output text, unsupported lines removed and nothing
-        rewritten — surviving lines are byte-identical to what was
-        generated."""
+        rewritten — surviving lines are byte-identical to the text that was
+        guarded."""
         return "\n".join(line.text for line in self.lines)
+
+    @property
+    def has_attested_content(self) -> bool:
+        """True when at least one surviving line traces to a candidate
+        fact.
+
+        Distinguishes a real document from a hollow one: headings,
+        salutations, and statements of interest all survive guarding while
+        asserting nothing, so a document can come back non-empty and still
+        say nothing about the candidate. Callers use this to refuse to
+        present that as a finished resume or letter."""
+        return any(line.backing_sources for line in self.lines)
 
     @property
     def backing_sources(self) -> tuple[ProvenanceSource, ...]:
@@ -243,6 +261,18 @@ class GuardedContent:
     def is_clean(self) -> bool:
         """True when the generator produced nothing that needed removing."""
         return not self.violations
+
+    @property
+    def unsupported_terms(self) -> tuple[str, ...]:
+        """Every term that failed across all violations, in order of first
+        appearance and without repeats — the one-line summary of what the
+        generator tried to assert and couldn't."""
+        terms: list[str] = []
+        for violation in self.violations:
+            for term in violation.unsupported_terms:
+                if term not in terms:
+                    terms.append(term)
+        return tuple(terms)
 
 
 class ProvenanceGuard:
