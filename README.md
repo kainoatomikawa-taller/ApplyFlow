@@ -630,12 +630,163 @@ launch flags are all in `Settings` (`BROWSER_*`).
 
 **Not yet in the container images.** The `Dockerfile` installs the
 Playwright wheel with the rest of `requirements.txt` but not the browser
-itself, since nothing invokes the harness in a container yet — there is no
-use case or Celery task on top of it, and it isn't wired into the
-composition root. Whoever builds the first autofill capability adds
+itself. `AutofillApplicationForm` (below) is the first use case on top of the
+harness, but nothing invokes it in a container yet — there is no Celery task
+for it and it isn't wired into the composition root. Whoever wires it adds
 `playwright install --with-deps chromium` to the image that runs it
 (the worker, most likely) and sets `BROWSER_LAUNCH_ARGS=["--no-sandbox"]`,
 since a container generally cannot use Chromium's sandbox.
+
+---
+
+## Field mapping & autofill (Greenhouse, Lever, Ashby)
+
+What turns "a browser can read this form" into "these are the candidate's
+answers". Given a posting whose `apply_url` is on one of the three supported
+platforms, `AutofillApplicationForm` reads the form once, fills every
+standard field it can from the profile and the stored documents, and reports
+back every field it did not fill and why.
+
+```python
+output = await AutofillApplicationForm(
+    job_posting_repository, profile_repository, document_repository,
+    browser, pdf_renderer,
+).execute(AutofillApplicationFormInput(user_id=..., job_posting_id=...))
+
+len(output.applied_fields)             # what it filled
+output.fields_needing_review           # what it refused to guess at, with reasons
+output.unanswered_required_fields      # ...of those, what will block submission
+output.screenshot_png                  # proof of the filled form
+```
+
+### Three pieces, deliberately separate
+
+| Piece | Layer | Answers |
+| --- | --- | --- |
+| `recognize_application_field` | domain | "What is this field *asking*?" → an `ApplicationFieldSlot`, or None |
+| `resolve_profile_field` | domain | "What does the candidate's record say about that?" → a value, or None |
+| `AtsFormFieldPlanner` | application | "So what do we do with this widget?" → fill / attach / surface |
+
+The first two are pure functions over markup and over a profile, with no
+browser and no database anywhere near them — which is why the mapping rules
+can be exercised against a literal form field and reviewed without running
+anything. The planner is the only piece that knows both, and it does no I/O
+either; the use case is the only piece that touches a browser.
+
+A **slot** is a question, not a widget and not a profile column. "Give us your
+family name" is one slot whether the portal calls it `last_name`,
+`job_application[last_name]`, or a React input labelled "Surname ✱" — and the
+resume slot is one slot whether the form takes an upload or a textarea.
+
+### Recognition, in descending order of trust
+
+1. **The control's own `name`/`id`** — `job_application[first_name]`,
+   `urls[LinkedIn]`, `_systemfield_email`. The portal stating what the field
+   is. Nested names are read with their nesting, because
+   `job_application[educations][][end_date]` is an education date while a bare
+   `end_date` could be anything.
+2. **`autocomplete`** — a standardized vocabulary the portal opted into.
+   Rarer than prose, and more reliable than it.
+3. **The label** — ordered phrase rules over whole words. Most of the real
+   coverage, and all of Ashby's, since its custom fields carry generated ids.
+
+Exact-or-nothing at every level: no scoring, no edit distance, no
+nearest-slot fallback. The two failure modes are wildly asymmetric — an
+unrecognized field costs a human a moment's attention, while a
+*misrecognized* one writes a wrong answer into a real application under the
+candidate's name, seen only by a recruiter at the company.
+
+A label containing "?" is treated as a screening question the company wrote,
+and can only match the never-autofilled slots. Without that guard, "Do you
+have a GitHub account?" (a yes/no) receives a URL.
+
+### Unmapped fields are surfaced, not guessed
+
+Every field the form presented comes back in `output.fields`, in page order,
+whether it was filled or not — a field quietly dropped from the report is the
+same failure as one filled with a guess, just harder to notice. The four
+reasons a field is surfaced are genuinely different situations for whoever
+reviews it:
+
+- `unrecognized` — the company wrote this question. Expected on much of a
+  real form, and not a defect.
+- `no_profile_data` — ApplyFlow knows the field; the profile is silent.
+  Actionable: filling it in fixes every future application.
+- `requires_candidate_answer` — work authorization and EEO self-ID. See below.
+- `unsupported_field_kind` — the data doesn't fit the widget, which usually
+  means the field was read wrongly. Plus `document_not_generated` and
+  `value_too_long`, which only surface while executing.
+
+### Two things it will never answer
+
+`WORK_AUTHORIZATION` and `EEO_SELF_IDENTIFICATION` are recognized and then
+always withheld, **even when the candidate's profile holds the data**. Both
+are stored only when a candidate explicitly went through the flow that
+records them, and autofilling either would mean translating a stored enum
+into whichever option label this portal happens to use — where a near miss
+submits a demographic or immigration answer the candidate never gave. They
+are still recognized rather than left unknown, because "this is the visa
+question, answer it yourself" is far more useful to a reviewer than
+"unrecognized field", and because it makes the refusal a property of the
+domain rather than an omission someone could later fill in by accident.
+
+### Scope is enforced, not documented
+
+`AtsProvider` has exactly three members, and `recognize_application_field`
+requires one — so there is no value a caller could pass to ask about a form
+the rules were never written for. An apply URL is resolved to a provider by
+`identify_ats_board`'s allowlist first, and anything else raises
+`UnsupportedAtsFormError` **before a browser is opened**.
+
+**Workday and the other dynamic platforms are out of scope on purpose.**
+They are a different problem, not a longer version of this one: they render
+in stages, re-mount controls between steps, and expose almost nothing stable
+to key on. Pointing these rules at one would not fail — it would confidently
+fill the wrong fields.
+
+### Values, documents, and what gets flagged
+
+Values are read verbatim where the profile stores them directly. Two are
+*derived* and come back flagged `is_derived`, so a review step can send
+attention exactly where the record was interpreted rather than read:
+
+- **First/last name**, split out of the single stored `full_name`. The last
+  whitespace-separated token is taken as the family name, which is right for
+  the common cases and wrong for others (Spanish and Portuguese names carry
+  two surnames). Every alternative is worse — refusing to split leaves
+  first/last name blank on nearly every form, and asking a model to guess
+  puts a fabricated legal name on a legal document — so it splits, flags, and
+  shows the candidate before anything is submitted.
+- **Location**, composed from the address when no explicit location is set.
+
+The resume and cover letter come from the stored `ApplicationDocument`
+snapshot for that job (the exact text that was produced, never a fresh
+generation), rendered to PDF for an upload field or pasted as text into a
+textarea — the form picks, and only the shape a field actually takes is
+produced, so a paste box never triggers a PDF render. A value longer than the
+portal's declared `maxlength` is surfaced rather than truncated: a cover
+letter clipped mid-sentence still goes out under the candidate's name.
+
+### Failure is per field, except when it isn't
+
+A form refusing one value (`RejectedFieldValueError`, reported as
+`not_accepted` with the values that *would* have worked) or one element
+refusing input (`FormFieldNotFillableError`) is recorded against that field
+and the rest of the form still fills. Twenty correct fields plus an honest
+"the degree dropdown wouldn't take 'B.S.'" is worth far more than an
+exception that abandons the form.
+
+`StaleFormFieldError` is the exception and propagates: the page moved
+underneath the snapshot, so every remaining handle is suspect and continuing
+risks writing into whatever field drifted into position.
+
+**Nothing here can submit.** Not by policy — the harness discovers no buttons
+and no submit inputs, so there is nothing to press (see above). This use case
+leaves a filled form in a browser session and hands back a report; a human
+decides whether it goes. Note the session closes when the pass ends, so what
+this currently delivers is the mapping plus the evidence of it — handing a
+live filled session to a human to finish is its own capability, as is
+submission.
 
 ---
 
