@@ -27,6 +27,23 @@ that session. Any navigation invalidates them; so does the page mutating
 underneath a snapshot. The remedy is always the same — call
 `read_fields()` again — which is why one error type covers both cases.
 
+Two things a session will not do
+-------------------------------
+`read_page_signals()` exists so a caller can find out what kind of page it
+is actually on before touching it — specifically, whether the portal has a
+hard boundary on it (a CAPTCHA, an e-signature, a sign-in wall). It returns
+a `PortalPageSignals` reading for `HardStopDetector` to judge; the port
+gathers facts and never decides.
+
+And regardless of what any caller asks for, a field the domain's
+`HumanOnlyFieldPolicy` recognizes as human-only — a password, a signature,
+a challenge answer — is refused (`HumanOnlyFieldError`), which is what makes
+"ApplyFlow never solves CAPTCHAs, creates accounts, or types passwords" a
+property of this layer instead of a promise about the layers above it. Such
+fields are still *reported* by `read_fields()`, carrying
+`human_only_boundary`: hiding them would hide the very evidence that a
+hand-off is needed.
+
 Implementations own the browser entirely: launching it, isolating each
 session from every other one, and tearing both down. Callers never see a
 browser, a page, or a driver object.
@@ -39,6 +56,9 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from types import TracebackType
 
+from src.domain.value_objects.hard_stop_kind import HardStopKind
+from src.domain.value_objects.portal_page_signals import PortalPageSignals
+
 
 class FormFieldKind(StrEnum):
     """What a discovered form field accepts, normalized away from HTML.
@@ -50,8 +70,9 @@ class FormFieldKind(StrEnum):
     still almost always a text box.
 
     `PASSWORD` is split out from `TEXT` on purpose despite filling
-    identically: an autofill layer must never invent a value for one, and
-    a distinct kind lets it enforce that rather than pattern-match labels.
+    identically: nothing may ever write into one, and a distinct kind lets
+    that be enforced by construction rather than by pattern-matching labels
+    (see `HumanOnlyFieldPolicy`, and `FormField.human_only_boundary`).
     """
 
     TEXT = "text"
@@ -126,6 +147,18 @@ class FormField:
     #: need to reason past the normalized shape above (`id`, `autocomplete`,
     #: the raw `input` type, …).
     attributes: dict[str, str] = field(default_factory=dict)
+    #: Which hard boundary this field belongs to, when it is one only the
+    #: candidate may fill — a password, a signature, a CAPTCHA answer — as
+    #: judged by the domain's `HumanOnlyFieldPolicy` at discovery time.
+    #: `None` for an ordinary question. A field with a boundary set is
+    #: reported (a caller has to be able to see *why* a portal needs a
+    #: hand-off) but can never be written to: `fill` and `attach_file`
+    #: refuse it with `HumanOnlyFieldError`.
+    human_only_boundary: HardStopKind | None = None
+
+    @property
+    def is_human_only(self) -> bool:
+        return self.human_only_boundary is not None
 
 
 class BrowserSessionPort(ABC):
@@ -148,6 +181,26 @@ class BrowserSessionPort(ABC):
     def current_url(self) -> str:
         """The URL actually loaded — which may differ from the one passed
         to `open()`, since portals routinely redirect an apply link."""
+
+    @abstractmethod
+    async def read_page_signals(self) -> PortalPageSignals:
+        """Read what kind of page this is, without touching it.
+
+        The reading a hard-boundary check runs on: the landed URL, what the
+        page says, what it loads, how its markup is named, and what its form
+        asks for — across the main document and every frame. Implementations
+        collect and normalize; they never judge (that is
+        `HardStopDetector`'s job, in the domain).
+
+        Safe to call on any page, including one with no form at all: a page
+        that presents nothing fillable still has a URL and text, and those
+        are frequently the whole story (a portal that redirected an apply
+        link to its login screen).
+
+        Call this *before* `read_fields()` on an unfamiliar portal. Reading a
+        boundary first is what lets a caller stop before it has touched
+        anything.
+        """
 
     @abstractmethod
     async def read_fields(self) -> tuple[FormField, ...]:
@@ -181,11 +234,14 @@ class BrowserSessionPort(ABC):
           the No button), and otherwise accepts any true-ish value. A
           radio can never be cleared — choose another option instead.
 
-        Raises `RejectedFieldValueError` when the field cannot represent
-        `value`, `FormFieldNotFillableError` when this operation doesn't
-        apply to the field's kind (a `FILE` field — use `attach_file`) or
-        the element refused to accept input, and `StaleFormFieldError`
-        when `handle` no longer identifies the same field.
+        Raises `HumanOnlyFieldError` when the field is one only the candidate
+        may fill (`human_only_boundary` is set) — checked before anything is
+        typed, and not overridable, `RejectedFieldValueError` when the field
+        cannot represent `value`, `FormFieldNotFillableError` when this
+        operation doesn't apply to the field's kind (a `FILE` field — use
+        `attach_file`) or the element refused to accept input, and
+        `StaleFormFieldError` when `handle` no longer identifies the same
+        field.
         """
 
     @abstractmethod
@@ -198,6 +254,10 @@ class BrowserSessionPort(ABC):
         filesystem path. `filename` is what the portal will record;
         implementations reduce it to a bare filename, since it crosses
         into a multipart upload.
+
+        Refuses a human-only field (`HumanOnlyFieldError`) on the same terms
+        as `fill` — an upload slot asking for a signed copy of something is
+        no more automatable than a signature box.
         """
 
     @abstractmethod

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { DocumentReviewPanel } from './DocumentReviewPanel';
+import { PortalHandoffPanel } from './PortalHandoffPanel';
 import { GapQuestionLoop } from './GapQuestionLoop';
 import type { GapOutcome } from './GapQuestionLoop';
 import type { RankedJob } from '../types';
@@ -23,6 +24,13 @@ interface Props {
  * done, but "Skip to documents" is always there. A candidate with nothing
  * to add to any gap should not have to click through every question to
  * reach the thing they came for.
+ *
+ * Step three is the portal itself, and it comes last because it is the step
+ * that can hand the whole thing back: ApplyFlow reads the application form
+ * before touching it, and stops outright at a CAPTCHA, a signature, or a
+ * sign-in wall (see `PortalHandoffPanel`). It is not gated behind the
+ * documents — a candidate who wants to know up front whether this portal is
+ * one they will have to finish by hand should be able to find out first.
  */
 export function TailoringReview({ job, onClose }: Props) {
   const [outcomes, setOutcomes] = useState<GapOutcome[]>([]);
@@ -93,6 +101,11 @@ export function TailoringReview({ job, onClose }: Props) {
           the documents can draw on.
         </p>
       )}
+
+      <h3>
+        <span className="step-number">3</span> Check the portal
+      </h3>
+      <PortalHandoffPanel jobPostingId={job.job_posting.id} />
     </section>
   );
 }

@@ -465,3 +465,74 @@ button.secondary {
 .coverage-list .uncovered {
   color: #777;
 }
+
+/* ---- Portal hand-off ---------------------------------------------------- */
+
+.handoff-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.handoff-header h3 {
+  margin: 0;
+}
+
+.handoff-header .quiet {
+  margin: 0.25rem 0 0;
+  max-width: 46ch;
+}
+
+/* Each boundary gets its own block with a warm left rule: this is the app
+   declining to do something, not an error it hit. */
+.handoff-boundary {
+  border-left: 3px solid #f59e0b;
+  padding: 0.25rem 0 0.25rem 0.85rem;
+  margin: 0.85rem 0;
+}
+
+.handoff-boundary h4 {
+  margin: 0 0 0.35rem;
+  font-size: 0.98rem;
+}
+
+.handoff-boundary p {
+  margin: 0.25rem 0;
+  font-size: 0.92rem;
+}
+
+.handoff-boundary details {
+  margin-top: 0.4rem;
+  font-size: 0.88rem;
+}
+
+.handoff-boundary details ul {
+  margin: 0.35rem 0 0;
+  padding-left: 1.2rem;
+  color: #4b5563;
+}
+
+.handoff-actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-top: 0.5rem;
+}
+
+.portal-fields {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  columns: 2;
+  font-size: 0.9rem;
+}
+
+.portal-fields li {
+  margin: 0.2rem 0;
+  break-inside: avoid;
+}
+
+.portal-fields .pill {
+  margin-left: 0.4rem;
+}

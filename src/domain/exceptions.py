@@ -119,6 +119,18 @@ class DocumentSnapshotIntegrityError(DomainError):
         self.actual_digest = actual_digest
 
 
+class PortalHandoffNotFoundError(DomainError):
+    """Raised when a hand-off to the candidate cannot be located by id.
+
+    Carries only the id — never the resolution note, which is candidate free
+    text (see `PortalHandoff`) — so it is safe to log and to return.
+    """
+
+    def __init__(self, handoff_id: str) -> None:
+        super().__init__(f"Portal hand-off '{handoff_id}' was not found.")
+        self.handoff_id = handoff_id
+
+
 class ProfileNotFoundError(DomainError):
     """Raised when a candidate profile cannot be located."""
 

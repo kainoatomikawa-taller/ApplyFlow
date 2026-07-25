@@ -8,6 +8,9 @@ import type {
   HealthStatus,
   JobApplication,
   JobMatchFeedback,
+  PortalHandoff,
+  PortalHandoffList,
+  PortalInspection,
   RankedJob,
   ResolvedGapAnswer,
   TailoredResume,
@@ -130,6 +133,45 @@ export const applyFlowApi = {
   generateCoverLetter(jobPostingId: string): Promise<GuardedDocument> {
     return request<GuardedDocument>(`/api/job-postings/${jobPostingId}/cover-letter`, {
       method: 'POST',
+    });
+  },
+
+  /**
+   * Open the posting's application portal and report what it presents. A
+   * portal with a hard boundary comes back with `is_handed_off: true` and no
+   * fields — that is a normal 200, not a failure: ApplyFlow stopped where it
+   * should.
+   */
+  inspectPortal(jobPostingId: string): Promise<PortalInspection> {
+    return request<PortalInspection>('/api/portal/inspections', {
+      method: 'POST',
+      body: JSON.stringify({ job_posting_id: jobPostingId }),
+    });
+  },
+
+  listPortalHandoffs(openOnly = false, limit = 100): Promise<PortalHandoffList> {
+    return request<PortalHandoffList>(
+      `/api/portal/handoffs?open_only=${openOnly}&limit=${limit}`,
+    );
+  },
+
+  /**
+   * Tell ApplyFlow the human-only step is done. This records the candidate's
+   * word for it — the next inspection is what re-reads the portal, and raises
+   * a fresh hand-off if the boundary is still there.
+   */
+  resumePortalHandoff(handoffId: string, note = ''): Promise<PortalHandoff> {
+    return request<PortalHandoff>(`/api/portal/handoffs/${handoffId}/resume`, {
+      method: 'POST',
+      body: JSON.stringify({ note }),
+    });
+  },
+
+  /** The candidate is finishing this application themselves. */
+  abandonPortalHandoff(handoffId: string, note = ''): Promise<PortalHandoff> {
+    return request<PortalHandoff>(`/api/portal/handoffs/${handoffId}/abandon`, {
+      method: 'POST',
+      body: JSON.stringify({ note }),
     });
   },
 

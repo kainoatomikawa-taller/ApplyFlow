@@ -56,6 +56,14 @@ before any feature UI loads.
    document mentions (and which it does not), which gap answers it drew on,
    and which of the candidate's own data the surviving content traces to.
 
+3. **Portal check / hand-off** (`PortalHandoffPanel`) — "Check the portal"
+   reads the posting's application form *without touching it*. A clean portal
+   reports its questions; a portal with a hard boundary reports the hand-off
+   instead: which boundary, why ApplyFlow refuses to do it, what the candidate
+   has to do, the evidence it matched on the portal's own page, and a link to
+   the exact URL automation stopped on. Two exits, both real — "I've done it —
+   continue" and "I'll finish this one myself".
+
 Every route the flow touches is authenticated, so the shell carries an access
 token field (`AccessTokenField`) that stores a Supabase token in
 `localStorage` — the placeholder until a real password sign-in screen lands.
@@ -628,6 +636,10 @@ chromium`, included in `make install`); the harness says so explicitly
 rather than failing with a driver error. Timeouts, viewport, retries and
 launch flags are all in `Settings` (`BROWSER_*`).
 
+**Two things a session will not do.** `read_page_signals()` reads what kind of
+page it is on before anything is touched, and any field the domain marks as
+human-only is refused (`HumanOnlyFieldError`) — see the next section.
+
 **Not yet in the container images.** The `Dockerfile` installs the
 Playwright wheel with the rest of `requirements.txt` but not the browser
 itself, since nothing invokes the harness in a container yet — there is no
@@ -636,6 +648,114 @@ composition root. Whoever builds the first autofill capability adds
 `playwright install --with-deps chromium` to the image that runs it
 (the worker, most likely) and sets `BROWSER_LAUNCH_ARGS=["--no-sandbox"]`,
 since a container generally cannot use Chromium's sandbox.
+
+---
+
+## Hard stops & human hand-off
+
+**ApplyFlow never solves CAPTCHAs, never creates accounts, and never types
+passwords or signatures.** Not "not yet" — each of those is a step where the
+act itself is the point: a CAPTCHA exists to establish that a human is
+present, a signature is a legal attestation by a named person, a credential is
+that person's identity. Software doing any of them is not automating a chore,
+it is impersonating the candidate. So automation stops and the candidate takes
+over.
+
+Three boundaries are modeled (`HardStopKind`), and the enum is closed:
+`CAPTCHA`, `ELECTRONIC_SIGNATURE`, `ACCOUNT_WALL`. Portal quirks that merely
+need work (custom combobox widgets, multi-page wizards) are missing
+capabilities, not boundaries, and are not modeled here at all.
+
+### Detected on two levels, because they fail differently
+
+**Page level**, before anything is touched. `read_page_signals()` reduces the
+live page — main document *and* frames — to a `PortalPageSignals` reading:
+the landed URL, the visible text, the scripts and iframes it loads, the markup
+names of anything that can host a widget, its field labels, and how many
+password fields it presents. `HardStopDetector` (pure domain, rules not a
+model — a portal's own text is untrusted input, and a safety gate has to be
+deterministic and auditable) reads that and returns a `HardStop` per boundary
+found, each carrying the evidence for saying so.
+
+**Field level**, on every single write. `HumanOnlyFieldPolicy` tags each
+discovered field with `human_only_boundary`, and `fill`/`attach_file` refuse a
+tagged one outright (`HumanOnlyFieldError`). That is what makes the guarantee a
+property of the system rather than a promise about its callers: the refusal
+lives in the layer that actually types, so no use case — and no model driving
+one — can route around it. It also catches what the page check cannot: a
+signature block revealed on page two of a wizard, a session that expires
+mid-fill, and a credential box masked as `type="text"` (recognized from its
+name and `autocomplete` hint).
+
+Both levels read one shared vocabulary (`hard_stop_vocabulary`), so they cannot
+drift into disagreeing about what a boundary is. The lists lean toward
+stopping, deliberately: a false hand-off costs one look at a page the candidate
+was going to see anyway, a missed one costs the thing this whole module
+prevents. What is *not* a boundary: an "I certify the above is true" checkbox,
+an "I agree" checkbox, a "Sign in" link in a page header. Those are ordinary
+ATS furniture, and handing off on them would fire so often candidates would
+learn to click past hand-offs without reading them.
+
+### The pause withholds the form
+
+`InspectApplicationPortal` is the gate every autofill capability sits behind:
+
+```python
+output = await inspect_application_portal.execute(
+    InspectApplicationPortalInput(user_id=user.subject, job_posting_id=posting.id)
+)
+if output.is_handed_off:
+    output.handoff          # what was hit, where, why, and what the user must do
+    output.fields           # always empty — there is nothing to fill
+else:
+    output.fields           # the questions the portal asks
+```
+
+It reads signals first and only reads the form if nothing was found. A flow
+that read the fields and *then* decided would already be holding a path to a
+login page's password box; withholding them means a paused portal cannot be
+filled by accident, by anyone. Handing off is a normal `200`, not an error —
+nothing failed, ApplyFlow did exactly what it should.
+
+### Hand-off state is clear and resumable
+
+A hand-off is stored (`PortalHandoff`, `portal_handoffs`), because a pause that
+only exists in one response is not resumable: the candidate leaves to do the
+step in another tab and has to be able to come back to it. It records the
+posting, the apply URL, **the URL automation actually stopped on** (often a
+redirect target — that is where the candidate should go), every boundary with
+its evidence, and its own lifecycle:
+
+```
+AWAITING_USER ──► RESUMED     "I did the step — continue"
+              └─► ABANDONED   "I'm finishing this one myself"
+```
+
+- **At most one open hand-off per candidate and posting**, enforced by a
+  partial unique index. Re-inspecting a portal the candidate has not dealt with
+  yet refreshes that one hand-off (new evidence, new paused URL, same id) rather
+  than stacking near-duplicates.
+- **Resuming records an assertion, not a verification.** The candidate solves
+  the CAPTCHA in *their* browser; ApplyFlow's next session shares none of that
+  state, so a "verified" resume would be either impossible to satisfy or a lie.
+  The next inspection re-reads the portal and raises a *fresh* hand-off if the
+  boundary is still there.
+- **Abandoning is a real ending.** A portal that requires an account will
+  require one next time too; without this, hand-offs with no possible resolution
+  would pile up forever.
+- **The one case ApplyFlow closes a hand-off itself**: an inspection that finds
+  no boundary while one is open. The wall is gone, which is stronger evidence
+  than anyone's word, so it resolves with a note saying exactly that and reports
+  the id in `cleared_handoff_id`.
+- Resolving twice is a `409` (`HandoffStatus` refuses the second transition), so
+  a double-clicked "continue" is a rejected request rather than a rewritten
+  record. Someone else's hand-off is a `404`, never a `403`, which would confirm
+  the id exists.
+
+Evidence lines describe the *portal's* page and carry nothing about the
+candidate, so they are safe to log and display. The resolution note is the
+candidate's own free text and is treated as sensitive: flagged on the column,
+returned only to its owner, never logged.
 
 ---
 
@@ -745,6 +865,10 @@ All `/api/applications*` and `/api/resumes*` routes require
 | GET    | `/api/job-postings/{id}/documents/{kind}/latest` | The resume/cover letter this application went out with | Yes |
 | GET    | `/api/application-documents`        | The current user's stored documents across every job (tracker feed) | Yes |
 | GET    | `/api/application-documents/{id}`   | One stored snapshot, with its exact text | Yes |
+| POST   | `/api/portal/inspections`           | Read a posting's application portal; returns its questions, or the hand-off that stopped ApplyFlow (still a 200) | Yes |
+| GET    | `/api/portal/handoffs?open_only=`   | Hand-offs waiting on the candidate, plus recent resolved ones | Yes |
+| POST   | `/api/portal/handoffs/{id}/resume`  | "I did the human-only step" — ApplyFlow may work this portal again | Yes |
+| POST   | `/api/portal/handoffs/{id}/abandon` | "I'm finishing this application myself" — ApplyFlow stops waiting | Yes |
 
 ---
 

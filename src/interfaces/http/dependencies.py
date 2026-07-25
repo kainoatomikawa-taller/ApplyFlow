@@ -22,6 +22,7 @@ from src.application.services.application_document_archive import (
 )
 from src.application.services.provenance_fact_assembler import ProvenanceFactAssembler
 from src.application.services.relevant_answer_selector import RelevantAnswerSelector
+from src.application.use_cases.abandon_portal_handoff import AbandonPortalHandoff
 from src.application.use_cases.analyze_job_application import (
     AnalyzeJobApplication,
 )
@@ -44,6 +45,9 @@ from src.application.use_cases.get_latest_application_document import (
     GetLatestApplicationDocument,
 )
 from src.application.use_cases.get_resume import GetResume
+from src.application.use_cases.inspect_application_portal import (
+    InspectApplicationPortal,
+)
 from src.application.use_cases.list_application_documents import (
     ListApplicationDocuments,
 )
@@ -53,12 +57,14 @@ from src.application.use_cases.list_candidate_applications import (
 from src.application.use_cases.list_job_match_feedback import (
     ListJobMatchFeedback,
 )
+from src.application.use_cases.list_portal_handoffs import ListPortalHandoffs
 from src.application.use_cases.list_resumes import ListResumes
 from src.application.use_cases.parse_resume import ParseResume
 from src.application.use_cases.rank_matched_job_postings import (
     RankMatchedJobPostings,
 )
 from src.application.use_cases.resolve_gap_answer import ResolveGapAnswer
+from src.application.use_cases.resume_portal_handoff import ResumePortalHandoff
 from src.application.use_cases.revise_generated_document import (
     ReviseGeneratedDocument,
 )
@@ -73,6 +79,9 @@ from src.domain.services.application_ranking_service import (
     ApplicationRankingService,
 )
 from src.infrastructure.auth.supabase_jwt_verifier import SupabaseJwtVerifier
+from src.infrastructure.browser_automation.playwright_browser_automation import (
+    PlaywrightBrowserAutomation,
+)
 from src.infrastructure.config import get_settings
 from src.infrastructure.documents.ats_safe_pdf_renderer import AtsSafePdfRenderer
 from src.infrastructure.llm.anthropic_client import AnthropicLlmClient
@@ -109,6 +118,9 @@ from src.infrastructure.persistence.job_match_feedback_repository_impl import (
 )
 from src.infrastructure.persistence.job_posting_repository_impl import (
     SqlAlchemyJobPostingRepository,
+)
+from src.infrastructure.persistence.portal_handoff_repository_impl import (
+    SqlAlchemyPortalHandoffRepository,
 )
 from src.infrastructure.persistence.profile_repository_impl import (
     SqlAlchemyProfileRepository,
@@ -440,6 +452,76 @@ def get_analyze_scoring_feedback_use_case(
     ),
 ) -> AnalyzeScoringFeedback:
     return AnalyzeScoringFeedback(repository=repository)
+
+
+def _portal_handoff_repository(
+    session: AsyncSession = Depends(get_session),
+) -> SqlAlchemyPortalHandoffRepository:
+    return SqlAlchemyPortalHandoffRepository(session)
+
+
+#: The one deliberately process-wide adapter here. A browser launch costs a
+#: process and hundreds of milliseconds, and the harness is built to own one
+#: browser across many sessions (each request still gets its own isolated
+#: `BrowserContext`), so creating a harness per request would launch and tear
+#: down a Chromium per inspection. Closed by `shutdown_browser_automation` on
+#: application shutdown — see `lifespan` in app.py — which is what keeps a
+#: browser process from outliving the API.
+_browser_automation_instance: PlaywrightBrowserAutomation | None = None
+
+
+def _browser_automation() -> PlaywrightBrowserAutomation:
+    global _browser_automation_instance
+    if _browser_automation_instance is None:
+        _browser_automation_instance = PlaywrightBrowserAutomation(get_settings())
+    return _browser_automation_instance
+
+
+async def shutdown_browser_automation() -> None:
+    """Release the shared browser, if one was ever launched. Idempotent."""
+    global _browser_automation_instance
+    harness, _browser_automation_instance = _browser_automation_instance, None
+    if harness is not None:
+        await harness.shutdown()
+
+
+def get_inspect_application_portal_use_case(
+    job_posting_repository: SqlAlchemyJobPostingRepository = Depends(
+        _job_posting_repository
+    ),
+    handoff_repository: SqlAlchemyPortalHandoffRepository = Depends(
+        _portal_handoff_repository
+    ),
+    browser_automation: PlaywrightBrowserAutomation = Depends(_browser_automation),
+) -> InspectApplicationPortal:
+    """The detector is not injected: it is a pure default the use case builds
+    itself, exactly like the provenance guard on the generation use cases. No
+    wiring mistake here can produce an inspection that skipped the
+    hard-boundary check."""
+    return InspectApplicationPortal(
+        job_posting_repository=job_posting_repository,
+        handoff_repository=handoff_repository,
+        browser_automation=browser_automation,
+        id_generator=UuidIdGenerator(),
+    )
+
+
+def get_list_portal_handoffs_use_case(
+    repository: SqlAlchemyPortalHandoffRepository = Depends(_portal_handoff_repository),
+) -> ListPortalHandoffs:
+    return ListPortalHandoffs(repository=repository)
+
+
+def get_resume_portal_handoff_use_case(
+    repository: SqlAlchemyPortalHandoffRepository = Depends(_portal_handoff_repository),
+) -> ResumePortalHandoff:
+    return ResumePortalHandoff(repository=repository)
+
+
+def get_abandon_portal_handoff_use_case(
+    repository: SqlAlchemyPortalHandoffRepository = Depends(_portal_handoff_repository),
+) -> AbandonPortalHandoff:
+    return AbandonPortalHandoff(repository=repository)
 
 
 def _auth_verifier() -> AuthVerifierPort:

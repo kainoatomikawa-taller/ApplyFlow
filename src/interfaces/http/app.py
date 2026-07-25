@@ -22,9 +22,11 @@ from src.interfaces.http.controllers import (
     health_controller,
     job_match_feedback_controller,
     job_posting_controller,
+    portal_handoff_controller,
     resume_controller,
     tailored_resume_controller,
 )
+from src.interfaces.http.dependencies import shutdown_browser_automation
 
 
 @asynccontextmanager
@@ -33,6 +35,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Release every pooled DB connection on shutdown instead of leaking
     # them until the process exits.
     await dispose_engine()
+    # And the shared Chromium, if any inspection ever launched one. A browser
+    # process that outlives the API is what takes a host down over a restart
+    # loop, so this is the backstop even though every session closes itself.
+    await shutdown_browser_automation()
 
 
 def create_app() -> FastAPI:
@@ -61,6 +67,7 @@ def create_app() -> FastAPI:
     app.include_router(cover_letter_controller.router)
     app.include_router(document_revision_controller.router)
     app.include_router(application_document_controller.router)
+    app.include_router(portal_handoff_controller.router)
     return app
 
 

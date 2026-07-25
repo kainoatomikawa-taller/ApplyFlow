@@ -19,6 +19,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -329,6 +330,97 @@ class ApplicationDocumentModel(Base):
         JSON, comment=_PROVENANCE_COMMENT
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class PortalHandoffModel(Base):
+    """One application portal where automation stopped at a hard boundary and
+    handed control to the candidate — see `PortalHandoff`.
+
+    This row is what makes the pause resumable. The candidate leaves to solve
+    a CAPTCHA, sign a form, or log in somewhere else entirely; without a
+    stored hand-off they would come back to a reloaded page with no idea what
+    they were in the middle of, and nothing downstream could tell a portal
+    that is waiting on a human from one nobody has looked at.
+
+    The partial unique index is the important constraint here: at most one
+    *open* hand-off per (candidate, posting). Two concurrent inspections of
+    the same portal would otherwise each open one and the candidate would be
+    asked to do the same thing twice. Resolved rows are exempt, because a
+    portal that puts up a wall, gets resolved, and puts up another one is a
+    sequence of real events and each one keeps its own evidence and timestamps.
+    (Partial indexes are a Postgres feature. On a backend that ignores the
+    `WHERE` clause the constraint becomes "one hand-off per posting, ever",
+    which would reject that second event — this store is Postgres.)
+
+    The foreign key is `ON DELETE CASCADE`, unlike `application_documents`'
+    RESTRICT, and the difference is deliberate: a document snapshot records
+    what was sent to an employer and must outlive the posting, while a
+    hand-off is an in-flight interaction with a portal. Once the posting is
+    gone there is no application to resume, so the row's whole purpose has
+    already expired.
+
+    SENSITIVE: `resolution_note` is free text the candidate wrote about how
+    they handled the boundary, which can carry anything they thought was
+    relevant — an address they registered with, a reference number, a reason.
+    Never log it; log `id` and `status`. The `hard_stops` evidence is the
+    opposite: it describes the portal's own page and carries nothing about the
+    candidate, so it is safe to log and display.
+    """
+
+    __tablename__ = "portal_handoffs"
+    __table_args__ = (
+        Index(
+            "uq_portal_handoffs_open_per_job",
+            "user_id",
+            "job_posting_id",
+            unique=True,
+            postgresql_where=text("status = 'awaiting_user'"),
+        ),
+        # "What is waiting on me?", newest first — the panel's only query.
+        Index("ix_portal_handoffs_user_id_created_at", "user_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64))
+    job_posting_id: Mapped[str] = mapped_column(
+        ForeignKey("job_postings.id", ondelete="CASCADE"), index=True
+    )
+    #: The apply URL automation was asked to work on.
+    apply_url: Mapped[str] = mapped_column(Text)
+    #: Where it actually stopped — frequently a redirect target, and the URL
+    #: the candidate is pointed at to finish the step.
+    paused_url: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(
+        String(32),
+        comment=(
+            "Hand-off lifecycle: awaiting_user | resumed | abandoned. "
+            "See src/domain/value_objects/handoff_status.py."
+        ),
+    )
+    #: The boundaries found, as `[{"kind": ..., "evidence": [...]}]`. JSON
+    #: because a page can present more than one at once (a login wall *and* a
+    #: CAPTCHA), and because the evidence is a list of lines whose only reader
+    #: is the candidate.
+    hard_stops: Mapped[list[dict[str, object]]] = mapped_column(
+        JSON,
+        comment=(
+            "Detected hard boundaries: kind + evidence lines about the "
+            "portal's page. See src/domain/value_objects/hard_stop.py."
+        ),
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    #: When the boundary was last seen. Equal to `created_at` until an
+    #: inspection re-reads the same unresolved hand-off.
+    last_detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    resolution_note: Mapped[str] = mapped_column(
+        Text,
+        default="",
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
+    )
 
 
 class WorkHistoryModel(Base):

@@ -304,3 +304,76 @@ class ScoreBucketAgreementResponse(BaseModel):
 
 class ScoringFeedbackSummaryResponse(BaseModel):
     buckets: list[ScoreBucketAgreementResponse]
+
+
+class InspectPortalRequest(BaseModel):
+    job_posting_id: str = Field(min_length=1)
+
+
+class HardStopResponse(BaseModel):
+    """One boundary found on an application portal, with the case for
+    stopping. `evidence` describes the portal's page and carries nothing
+    about the candidate, so it is safe to show and to log."""
+
+    kind: str
+    refusal_reason: str
+    human_action: str
+    evidence: list[str] = Field(default_factory=list)
+
+
+class PortalHandoffResponse(BaseModel):
+    """A hand-off's full state — what ApplyFlow hit, where it stopped, and
+    how it stands. `paused_url` is the URL the candidate should open to do
+    the step themselves; it is frequently not the apply URL."""
+
+    id: str
+    job_posting_id: str
+    apply_url: str
+    paused_url: str
+    status: str
+    is_open: bool
+    created_at: datetime
+    last_detected_at: datetime
+    resolved_at: datetime | None = None
+    resolution_note: str = ""
+    hard_stops: list[HardStopResponse] = Field(default_factory=list)
+
+
+class PortalFieldResponse(BaseModel):
+    """One question the portal asks. Carries no field handle: a handle only
+    means anything inside the live browser session that minted it, and that
+    session is closed before this response is sent."""
+
+    label: str
+    kind: str
+    name: str = ""
+    required: bool = False
+    human_only_boundary: str | None = None
+
+
+class InspectPortalResponse(BaseModel):
+    """The result of inspecting a portal. Branch on `is_handed_off`: when it
+    is true, `handoff` is set and `fields` is empty — the form is withheld
+    rather than merely flagged, so nothing downstream can fill a portal
+    ApplyFlow stopped on (see `InspectApplicationPortalOutput`)."""
+
+    job_posting_id: str
+    apply_url: str
+    landed_url: str
+    is_handed_off: bool
+    handoff: PortalHandoffResponse | None = None
+    fields: list[PortalFieldResponse] = Field(default_factory=list)
+    cleared_handoff_id: str | None = None
+
+
+class ResolvePortalHandoffRequest(BaseModel):
+    # Free text, and optional: "I signed in" is useful context, but nothing
+    # downstream requires it. Capped at the entity's own limit
+    # (`PortalHandoff.MAX_NOTE_LENGTH`) so an over-long note is a 422 here
+    # rather than a domain error deeper in.
+    note: str = Field(default="", max_length=1000)
+
+
+class PortalHandoffListResponse(BaseModel):
+    handoffs: list[PortalHandoffResponse] = Field(default_factory=list)
+    open_count: int = 0
