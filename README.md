@@ -418,6 +418,61 @@ the "PhD role vs sophomore" over/under-filtering case.
 
 ---
 
+## Tailoring engine (Epic 04)
+
+Turns a chosen job plus a candidate's record into an honest, tailored
+resume and cover letter — and never into a claim the candidate cannot
+back.
+
+1. **Gap detection** (`DetectJobRequirementGaps`,
+   `GET /api/job-postings/{id}/gaps`) checks every classified requirement,
+   hard and soft alike, against the candidate's profile facts *and* their
+   remembered answers, and flags each one nothing backs. Unlike fit
+   scoring, silence counts as a gap here: this list answers "what haven't
+   you established yet", not "does this disqualify you".
+2. **The question loop** (`GenerateGapResolutionQuestions`,
+   `POST /api/gap-resolution/questions`) phrases one deliberately neutral
+   question per gap — never worded so that claiming the experience is the
+   easier answer — *except* for gaps a remembered answer already covers,
+   which come back as `already_answered` instead of being asked twice.
+   Matching is semantic (`AnswerSimilarityMatcher` over embeddings), so an
+   answer given once carries across applications that word the same
+   requirement differently.
+3. **Answer capture, or a clean decline** (`ResolveGapAnswer`,
+   `POST /api/gap-resolution/answers`) stores a real answer as an
+   `AnswerMemory` tagged `ProvenanceSource.ANSWER` — from then on it is a
+   fact the engine may assert. A decline (`GapAnswerPolicy`) persists
+   nothing at all: the gap is omitted rather than turned into a coerced
+   "yes".
+4. **Provenance-guarded generation** (`GenerateTailoredResume`,
+   `GenerateCoverLetter`) assembles the candidate's full fact corpus
+   (`ProvenanceFactAssembler`), generates on the strong tier, then runs
+   `ProvenanceGuard` over the draft and drops every line the facts don't
+   support. The posting's requirements reach the generator but never the
+   guard — a requirement is what the employer wants, never evidence about
+   the candidate — so a skill the posting demands cannot become
+   self-justifying. If nothing attested survives, the request fails with
+   `422` rather than returning a husk of headings.
+5. **ATS-safe output** (`AtsSafeTextFormatter`, `AtsSafetyValidator`,
+   `ResumeStructureParser`, `AtsSafePdfRenderer`) flattens the draft to
+   plain text *before* guarding, so the text that ships is the text that
+   was validated, then re-checks it and reports (never silently re-fixes)
+   anything that got through. The plain-text, structured, and PDF exports
+   are all derived from that one guarded string, so they cannot disagree.
+6. **Snapshot of what was sent** (`ApplicationDocumentArchive`) stores that
+   exact text as an immutable, per-job version before anything is returned
+   — see "Sent-document snapshots" below.
+
+See [`docs/epic-04-acceptance-check.md`](docs/epic-04-acceptance-check.md)
+for Epic 04's Definition of Done and the end-to-end acceptance test that
+proves it (`tests/acceptance/test_epic04_tailoring_pipeline.py`), including
+the "asked for both, has only one" fabrication case — one posting that
+demands both a skill the candidate volunteers in the question loop and one
+they decline, where the first may appear in the output and the second must
+not appear anywhere.
+
+---
+
 ## Sent-document snapshots
 
 Generating a tailored resume (`POST /api/job-postings/{id}/tailored-resume`)
@@ -560,6 +615,9 @@ All `/api/applications*` and `/api/resumes*` routes require
 | POST   | `/api/job-postings/{id}/feedback`   | Submit thumbs-up/down feedback on a match | Yes      |
 | GET    | `/api/job-postings/feedback`        | List the current user's feedback history | Yes       |
 | GET    | `/api/job-postings/feedback/analysis` | Bucketed feedback agreement-rate summary (tuning signal) | Yes |
+| GET    | `/api/job-postings/{id}/gaps`       | Requirements this candidate's record doesn't yet back | Yes |
+| POST   | `/api/gap-resolution/questions`     | One neutral question per gap, minus the ones already answered | Yes |
+| POST   | `/api/gap-resolution/answers`       | Capture an answer to a gap question (a decline stores nothing) | Yes |
 | POST   | `/api/job-postings/{id}/tailored-resume` | Generate a provenance-guarded tailored resume; stores the exact text sent | Yes |
 | POST   | `/api/job-postings/{id}/cover-letter` | Generate a provenance-guarded cover letter; stores the exact text sent | Yes |
 | GET    | `/api/job-postings/{id}/documents`  | List every document stored for one job (both kinds, all versions) | Yes |
@@ -577,11 +635,27 @@ the domain and application layers are decoupled from infrastructure:
 ```
 tests/domain/        # entities & value objects (no I/O)
 tests/application/   # use cases with fake repos/ports
+tests/acceptance/    # per-epic Definition-of-Done flows (opt-in, real infra)
 ```
 
 ```bash
 pytest
 ```
+
+`tests/acceptance/` is the exception to the fakes rule: each file is one
+epic's Definition-of-Done flow run against a real database, real API keys,
+and the real HTTP app with real auth. Every one is skipped unless its own
+`RUN_EPIC**_ACCEPTANCE_TEST=1` is set, so a plain `pytest` never touches a
+real database or spends money:
+
+```bash
+RUN_EPIC03_ACCEPTANCE_TEST=1 pytest tests/acceptance/test_epic03_matching_pipeline.py -v -s
+RUN_EPIC04_ACCEPTANCE_TEST=1 pytest tests/acceptance/test_epic04_tailoring_pipeline.py -v -s
+```
+
+See `docs/epic-03-acceptance-check.md` and
+`docs/epic-04-acceptance-check.md` for what each one proves and which env
+vars it needs.
 
 ---
 
