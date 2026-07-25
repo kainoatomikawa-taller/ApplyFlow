@@ -162,6 +162,53 @@ class Settings(BaseSettings):
     # stale-posting sweep above.
     job_requirements_sweep_batch_size: int = 200
 
+    # Browser automation for application portals (Epic 05 —
+    # src/infrastructure/browser_automation/). Drives a real Chromium over
+    # a posting's apply_url to read and fill its form. Unlike every other
+    # integration above there is no API and no credential — the "endpoint"
+    # is whatever HTML the portal serves — so what's tunable here is the
+    # browser itself and how long it's given.
+    #
+    # Requires the Chromium build Playwright expects to be present on the
+    # host (`playwright install chromium`); the harness says so explicitly
+    # if it isn't, rather than failing at launch with a driver error.
+    browser_headless: bool = True
+    # How long one navigation attempt gets. Portals are slower than APIs:
+    # an ATS form is typically several redirects plus a JS app boot.
+    browser_navigation_timeout_seconds: float = 30.0
+    # How long any single field interaction gets (locating the element,
+    # writing the value).
+    browser_action_timeout_seconds: float = 10.0
+    # After load, how long to wait for in-flight requests to go quiet so a
+    # JS-rendered form has actually painted its fields. Best-effort —
+    # expiring here is normal on pages that poll, and never an error.
+    browser_settle_timeout_seconds: float = 5.0
+    # How long read_fields() keeps re-checking a page that has presented
+    # no fillable field yet, before accepting that it has none. Covers a
+    # form that mounts after first paint.
+    browser_field_wait_timeout_seconds: float = 5.0
+    # Retry/backoff for navigation only, same shape as the HTTP
+    # integrations above (total attempts = max_retries + 1). A browser
+    # page load has many more transient failure modes than an API call, so
+    # unlike HttpApplyUrlChecker one retry is worth it here; 4xx responses
+    # other than 429 are never retried, since the portal answered.
+    browser_navigation_max_retries: int = 1
+    browser_navigation_retry_base_delay_seconds: float = 1.0
+    browser_navigation_retry_max_delay_seconds: float = 8.0
+    # Presented viewport. Some portals render a different (or no) form
+    # below a mobile breakpoint, so this stays comfortably desktop-sized.
+    browser_viewport_width: int = 1280
+    browser_viewport_height: int = 900
+    # Overrides the browser's own user agent when non-empty. Left empty by
+    # default: Playwright's real Chromium UA is accurate, and claiming to
+    # be something else is how you end up debugging a portal that served a
+    # different page than the one you tested against.
+    browser_user_agent: str = ""
+    # Extra Chromium launch flags. Needed in containers, which typically
+    # cannot use Chromium's sandbox (`["--no-sandbox"]`); set via JSON in
+    # the environment, e.g. BROWSER_LAUNCH_ARGS=["--no-sandbox"].
+    browser_launch_args: tuple[str, ...] = ()
+
     @model_validator(mode="after")
     def _require_secrets_outside_development(self) -> Settings:
         if self.environment == "development":

@@ -16,6 +16,7 @@ Celery + Redis, and data is persisted in PostgreSQL.
 | Database     | PostgreSQL (SQLAlchemy async + Alembic)      |
 | AI           | LangChain + OpenAI                           |
 | Async jobs   | Celery + Redis                               |
+| Portal automation | Playwright (headless Chromium)          |
 | Packaging    | Docker, docker-compose                       |
 
 ---
@@ -554,6 +555,90 @@ text, so they cannot disagree). Byte-exact PDF archival would go through
 
 ---
 
+## Browser automation harness (Epic 05)
+
+The base layer every autofill capability sits on: put a real browser on a
+posting's `apply_url` (the one Epic 02 resolved), read what the form is
+asking, and write values back. `BrowserAutomationPort` /
+`BrowserSessionPort` define it; `PlaywrightBrowserAutomation` drives a
+headless Chromium behind them, and nothing above infrastructure ever sees a
+browser, page, or selector.
+
+```python
+harness = PlaywrightBrowserAutomation(settings)     # wired in the composition root
+try:
+    async with await harness.open(posting.apply_url) as session:
+        for field in await session.read_fields():
+            ...                                      # decide a value per field
+        await session.fill(handle, "Ada Lovelace")
+        await session.attach_file(resume_handle, filename="resume.pdf", content=pdf)
+        review_image = await session.screenshot()
+finally:
+    await harness.shutdown()
+```
+
+**Fields are addressed by opaque handles, never selectors.** `read_fields()`
+mints a handle per field it discovered and hands back a `FormField` (kind,
+label, `required`, options, `maxlength`, current value). A caller can only
+touch fields the harness chose to expose, which is what keeps the surface
+controlled:
+
+- Hidden, disabled, read-only, invisible, and submit controls are never
+  discovered — **nothing this harness returns can submit an application.**
+- A caller cannot pass a raw CSS/XPath expression, so it cannot reach an
+  element that wasn't offered, and cannot smuggle a selector engine
+  expression in where a field name is expected.
+- Every write re-derives the element's signature and compares it against
+  the snapshot first. A handle from an older snapshot, or one whose page
+  shifted underneath it, raises `StaleFormFieldError` instead of writing
+  into whatever field drifted into that position — the silent, unrecoverable
+  failure mode on a real application, seen only by a human reviewer at the
+  company.
+
+**Values are matched exactly or refused.** A select accepts an option named
+by its exact label or submitted value (normalized for case/whitespace, never
+fuzzy); a checkbox/radio accepts a yes/no form or its own label. Anything
+else raises `RejectedFieldValueError` carrying the values that *would* have
+worked, so a caller can choose again. Picking the nearest option would
+submit an answer the candidate never gave.
+
+**Sessions are isolated and always cleaned up.** One harness owns one
+browser; each session owns its own `BrowserContext`, so cookies and logins
+never cross between applications. Sessions are async context managers,
+`close()` is idempotent, and `shutdown()` is the backstop that closes
+anything still open plus the browser itself — a browser process outliving
+its owner is what takes a worker down. A navigation that fails cleans up
+before the exception leaves `open()`.
+
+**Failures are typed, not generic.** `BrowserNavigationError` (timeout, DNS
+or connection failure, error status — retried once for 5xx/429/timeouts,
+never for other 4xx), `StaleFormFieldError` (re-read the form),
+`FormFieldNotFillableError` (wrong operation for the kind, or the element
+refused input), `RejectedFieldValueError` (pick a different value),
+`BrowserSessionClosedError`. No `playwright.*` type escapes infrastructure.
+
+Frames are included — ATS forms are routinely embedded in an iframe.
+Custom widgets are not: platforms that hide the native `<select>` and paint
+their own combobox leave nothing Playwright would interact with, so
+supporting them is its own capability rather than a special case inside
+field discovery.
+
+Requires the Chromium build Playwright expects (`playwright install
+chromium`, included in `make install`); the harness says so explicitly
+rather than failing with a driver error. Timeouts, viewport, retries and
+launch flags are all in `Settings` (`BROWSER_*`).
+
+**Not yet in the container images.** The `Dockerfile` installs the
+Playwright wheel with the rest of `requirements.txt` but not the browser
+itself, since nothing invokes the harness in a container yet — there is no
+use case or Celery task on top of it, and it isn't wired into the
+composition root. Whoever builds the first autofill capability adds
+`playwright install --with-deps chromium` to the image that runs it
+(the worker, most likely) and sets `BROWSER_LAUNCH_ARGS=["--no-sandbox"]`,
+since a container generally cannot use Chromium's sandbox.
+
+---
+
 ## Getting Started
 
 ### Option A — Docker (recommended)
@@ -582,6 +667,7 @@ Backend:
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
+playwright install chromium   # browser used by the portal automation harness
 cp .env.example .env          # then edit values
 # start Postgres + Redis (e.g. via docker compose up db redis)
 alembic upgrade head
@@ -692,6 +778,13 @@ See `docs/epic-03-acceptance-check.md` and
 `docs/epic-04-acceptance-check.md` for what each one proves and which env
 vars it needs.
 
+`tests/infrastructure/test_playwright_browser_automation.py` is the other
+exception: it drives a real headless Chromium against a real local HTTP
+server on 127.0.0.1 (no network, no keys, no cost), because page lifecycle
+timing and navigation failures are exactly what a fake page object would
+not reproduce. It skips itself if `playwright install chromium` hasn't been
+run, so a plain `pytest` still passes without it.
+
 ---
 
 ## Project Structure
@@ -701,7 +794,7 @@ vars it needs.
 ├── src/
 │   ├── domain/           # entities, value objects, repo interfaces, domain services
 │   ├── application/      # use cases, DTOs, ports, mappers
-│   ├── infrastructure/   # DB, LLM, Celery, config (implements interfaces)
+│   ├── infrastructure/   # DB, LLM, Celery, browser, config (implements interfaces)
 │   └── interfaces/       # FastAPI controllers, CLI, composition root
 ├── frontend/             # React + TypeScript (Vite)
 ├── migrations/           # Alembic migrations

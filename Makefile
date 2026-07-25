@@ -3,7 +3,7 @@
 
 help:
 	@echo "ApplyFlow — available targets:"
-	@echo "  install            Install Python dev dependencies"
+	@echo "  install            Install Python dev dependencies + Chromium"
 	@echo "  up                 Start the full stack via docker-compose"
 	@echo "  down               Stop the stack"
 	@echo "  dev                Run the API locally with reload"
@@ -20,6 +20,7 @@ help:
 
 install:
 	pip install -r requirements-dev.txt
+	playwright install chromium
 
 up:
 	docker compose up --build
