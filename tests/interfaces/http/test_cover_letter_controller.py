@@ -15,6 +15,7 @@ from src.application.dtos.generation_dtos import (
     ProvenanceViolationOutput,
 )
 from src.application.exceptions import (
+    DocumentVersionConflictError,
     ExternalServiceError,
     UnattestedGenerationError,
 )
@@ -47,9 +48,11 @@ class _FakeUseCase:
 
 def _output(**overrides) -> GuardedDocumentOutput:
     defaults = {
+        "document_id": "doc-1",
         "job_posting_id": "job-1",
         "document_kind": "cover_letter",
         "content": _LETTER,
+        "version": 1,
         "backing_sources": ["answer"],
         "violations": [],
     }
@@ -166,3 +169,17 @@ def test_the_resume_route_is_untouched_by_the_letter_route():
 
     assert "/api/job-postings/{job_posting_id}/cover-letter" in paths
     assert "/api/job-postings/{job_posting_id}/tailored-resume" in paths
+
+
+def test_a_concurrent_generation_claiming_the_same_snapshot_version_is_a_409():
+    """Retrying is the resolution; silently overwriting a letter that was
+    already produced is not."""
+    client, app = _client(
+        _FakeUseCase(
+            error=DocumentVersionConflictError(
+                document_kind="cover_letter", job_posting_id="job-1", version=2
+            )
+        )
+    )
+
+    assert client.post(_URL).status_code == 409

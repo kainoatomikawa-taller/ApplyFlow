@@ -25,6 +25,7 @@ from src.application.dtos.generation_dtos import (
 )
 from src.application.exceptions import (
     DocumentRenderError,
+    DocumentVersionConflictError,
     ExternalServiceError,
     UnattestedGenerationError,
 )
@@ -69,6 +70,11 @@ async def generate_tailored_resume(
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     except UnattestedGenerationError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    except DocumentVersionConflictError as exc:
+        # A concurrent generation for this job claimed the same snapshot
+        # version. Retrying is the resolution; overwriting is not, because
+        # the existing snapshot records a document that was already produced.
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     except DocumentRenderError as exc:
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(exc)) from exc
     except ExternalServiceError as exc:

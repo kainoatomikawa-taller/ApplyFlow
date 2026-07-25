@@ -14,6 +14,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -251,6 +252,82 @@ class AnswerMemoryModel(Base):
         JSON, info=_SENSITIVE_COLUMN_INFO, comment=_SENSITIVE_COMMENT
     )
     source: Mapped[str] = mapped_column(String(16), comment=_PROVENANCE_COMMENT)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ApplicationDocumentModel(Base):
+    """The exact resume or cover letter produced for one job posting, kept
+    verbatim so the tracker (Epic 06) and interview prep read what was sent
+    instead of regenerating something like it.
+
+    Write-once: nothing updates a row here. Regeneration inserts the next
+    `version` for the same (`user_id`, `job_posting_id`, `document_kind`) —
+    the unique constraint below is what makes two rows claiming to be the
+    same version a database error rather than an ambiguity the tracker has
+    to guess about. See `ApplicationDocument` for the full contract.
+
+    `content_sha256` is the digest of `content` as written. It is verified on
+    read (`SqlAlchemyApplicationDocumentRepository`), so content altered by a
+    migration, a manual `UPDATE`, or a mapping bug surfaces instead of being
+    served as the authentic sent document.
+
+    The foreign key is `ON DELETE RESTRICT`, not `CASCADE`: a snapshot states
+    what was actually sent to an employer, so it must not disappear as a side
+    effect of pruning job postings. Removing these rows has to be a
+    deliberate act against this table.
+
+    SENSITIVE: `content` is a full tailored resume (contact details, complete
+    work history) or a cover letter written from the candidate's remembered
+    answers — and `AnswerMemoryModel` is flagged sensitive precisely because
+    an answer may concern salary, an accommodation, or visa status. A
+    document derived from those inputs inherits their classification rather
+    than a milder one. Never log `content`; log `id` and `content_sha256`.
+    """
+
+    __tablename__ = "application_documents"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "job_posting_id",
+            "document_kind",
+            "version",
+            name="uq_application_documents_version",
+        ),
+        # The tracker's feed: a candidate's snapshots across every job,
+        # newest first. The unique constraint above already serves the
+        # per-job and per-job-and-kind lookups.
+        Index(
+            "ix_application_documents_user_id_created_at",
+            "user_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64))
+    job_posting_id: Mapped[str] = mapped_column(
+        ForeignKey("job_postings.id", ondelete="RESTRICT"), index=True
+    )
+    document_kind: Mapped[str] = mapped_column(
+        String(32),
+        comment=(
+            "Generated document kind: tailored_resume | cover_letter. "
+            "See src/domain/value_objects/generated_document_kind.py."
+        ),
+    )
+    content: Mapped[str] = mapped_column(
+        Text, info=_SENSITIVE_COLUMN_INFO, comment=_SENSITIVE_COMMENT
+    )
+    #: Hex sha256 of `content` — integrity, not identity. Not sensitive: a
+    #: digest reveals nothing about the document it describes.
+    content_sha256: Mapped[str] = mapped_column(String(64))
+    version: Mapped[int] = mapped_column(Integer)
+    #: The provenance the content traces to, mirroring the domain's
+    #: `ProvenanceSource` — a JSON array because a document is normally
+    #: backed by several sources at once, unlike a single stored fact.
+    backing_sources: Mapped[list[str]] = mapped_column(
+        JSON, comment=_PROVENANCE_COMMENT
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 

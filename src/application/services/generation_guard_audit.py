@@ -26,8 +26,8 @@ from __future__ import annotations
 
 import logging
 
-from src.application.dtos.generation_dtos import GeneratedDocumentKind
 from src.domain.services.provenance_guard import GuardedContent
+from src.domain.value_objects.generated_document_kind import GeneratedDocumentKind
 
 logger = logging.getLogger(__name__)
 

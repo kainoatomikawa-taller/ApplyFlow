@@ -71,6 +71,54 @@ class AnswerMemoryNotFoundError(DomainError):
         self.answer_memory_id = answer_memory_id
 
 
+class ApplicationDocumentNotFoundError(DomainError):
+    """Raised when a stored resume/cover-letter snapshot cannot be located
+    by id. Carries only the id — never any of the document's content, which
+    is sensitive (see `ApplicationDocument`)."""
+
+    def __init__(self, document_id: str) -> None:
+        super().__init__(f"Application document '{document_id}' was not found.")
+        self.document_id = document_id
+
+
+class NoStoredApplicationDocumentError(DomainError):
+    """Raised when no snapshot of a given kind has ever been stored for a
+    job posting — i.e. nothing was produced for it yet, so there is nothing
+    to reuse. Distinct from `ApplicationDocumentNotFoundError`, which means
+    a specific id does not resolve."""
+
+    def __init__(self, job_posting_id: str, document_kind: str) -> None:
+        super().__init__(
+            f"No {document_kind} has been stored for job posting "
+            f"'{job_posting_id}'."
+        )
+        self.job_posting_id = job_posting_id
+        self.document_kind = document_kind
+
+
+class DocumentSnapshotIntegrityError(DomainError):
+    """Raised when a stored document's content no longer hashes to the
+    digest recorded when it was written.
+
+    A snapshot exists to state what was actually sent, so content that
+    changed underneath it is a corrupted record, not a stale one: it is
+    refused rather than returned as authentic. Carries only digests and the
+    id — never the content — so it is safe to log.
+    """
+
+    def __init__(
+        self, document_id: str, expected_digest: str, actual_digest: str
+    ) -> None:
+        super().__init__(
+            f"Stored application document '{document_id}' does not match its "
+            f"recorded content digest (expected {expected_digest}, "
+            f"content hashes to {actual_digest})."
+        )
+        self.document_id = document_id
+        self.expected_digest = expected_digest
+        self.actual_digest = actual_digest
+
+
 class ProfileNotFoundError(DomainError):
     """Raised when a candidate profile cannot be located."""
 

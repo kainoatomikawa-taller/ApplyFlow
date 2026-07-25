@@ -11,13 +11,19 @@ import pytest
 
 from src.application.dtos.generation_dtos import GenerateCoverLetterInput
 from src.application.exceptions import UnattestedGenerationError
+from src.application.services.application_document_archive import (
+    ApplicationDocumentArchive,
+)
 from src.application.services.provenance_fact_assembler import ProvenanceFactAssembler
 from src.application.use_cases.generate_cover_letter import GenerateCoverLetter
 from src.domain.exceptions import JobPostingNotFoundError, ProfileNotFoundError
+from src.domain.value_objects.generated_document_kind import GeneratedDocumentKind
 from src.domain.value_objects.provenance_backed_fact import ProvenanceBackedFact
 from src.domain.value_objects.provenance_source import ProvenanceSource
 from tests.application.conftest import (
+    InMemoryApplicationDocumentRepository,
     RecordingGenerator,
+    SequentialIdGenerator,
     StubAnswerMemoryRepository,
     StubJobPostingRepository,
     StubProfileRepository,
@@ -26,11 +32,16 @@ from tests.application.conftest import (
 _INPUT = GenerateCoverLetterInput(user_id="user-1", job_posting_id="job-posting-1")
 
 
-def _use_case(posting, fact_assembler, generator) -> GenerateCoverLetter:
+def _use_case(posting, fact_assembler, generator, archive=None) -> GenerateCoverLetter:
     return GenerateCoverLetter(
         job_posting_repository=StubJobPostingRepository(posting),
         fact_assembler=fact_assembler,
         generator=generator,
+        archive=archive
+        or ApplicationDocumentArchive(
+            repository=InMemoryApplicationDocumentRepository(),
+            id_generator=SequentialIdGenerator(),
+        ),
     )
 
 
@@ -223,6 +234,10 @@ def _use_case_with_selector(posting, fact_assembler, generator, selector):
         job_posting_repository=StubJobPostingRepository(posting),
         fact_assembler=fact_assembler,
         generator=generator,
+        archive=ApplicationDocumentArchive(
+            repository=InMemoryApplicationDocumentRepository(),
+            id_generator=SequentialIdGenerator(),
+        ),
         answer_selector=selector,
     )
 
@@ -345,3 +360,110 @@ async def test_typographic_punctuation_in_a_letter_becomes_ascii(
 
     assert "—" not in result.content
     assert "Python - in Austin, TX." in result.content
+
+
+# ---- the sent letter is archived exactly as produced ------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_letter_that_was_returned_is_the_one_that_was_stored(
+    posting, fact_assembler, document_repository, archive
+):
+    """The wording matters more here than anywhere: this is the text a
+    candidate will be asked about in an interview."""
+    generator = RecordingGenerator(
+        "Dear Hiring Manager,\n"
+        "I built payment services in Python.\n"
+        "I am a seasoned architect.\n"
+        "Sincerely,"
+    )
+
+    result = await _use_case(
+        posting, fact_assembler, generator, archive=archive
+    ).execute(_INPUT)
+
+    stored = document_repository.documents[0]
+    assert stored.content == result.content
+    assert stored.document_kind is GeneratedDocumentKind.COVER_LETTER
+    assert stored.user_id == "user-1"
+    assert stored.job_posting_id == "job-posting-1"
+    # Guarded text, not the draft: the unearned praise is gone from the
+    # archive as well as from the response.
+    assert "seasoned" not in stored.content
+
+
+@pytest.mark.asyncio
+async def test_the_caller_is_told_which_snapshot_holds_the_letter(
+    posting, fact_assembler, document_repository, archive
+):
+    generator = RecordingGenerator("I built payment services in Python.")
+
+    result = await _use_case(
+        posting, fact_assembler, generator, archive=archive
+    ).execute(_INPUT)
+
+    assert result.document_id == document_repository.documents[0].id
+    assert result.version == 1
+
+
+@pytest.mark.asyncio
+async def test_rewriting_the_letter_for_the_same_job_stores_a_new_version(
+    posting, fact_assembler, document_repository, archive
+):
+    await _use_case(
+        posting,
+        fact_assembler,
+        RecordingGenerator("I built payment services in Python."),
+        archive=archive,
+    ).execute(_INPUT)
+    second = await _use_case(
+        posting,
+        fact_assembler,
+        RecordingGenerator("I worked as a Backend Engineer at Acme Corp."),
+        archive=archive,
+    ).execute(_INPUT)
+
+    assert [d.version for d in document_repository.documents] == [1, 2]
+    assert second.version == 2
+    assert document_repository.documents[0].content == (
+        "I built payment services in Python."
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_resume_and_a_letter_for_one_job_version_independently(
+    posting, fact_assembler, document_repository, archive
+):
+    """Kinds are numbered separately, so a second letter is letter v2 rather
+    than inheriting the resume's count."""
+    await archive.store(
+        user_id="user-1",
+        job_posting_id="job-posting-1",
+        document_kind=GeneratedDocumentKind.TAILORED_RESUME,
+        content="Skills: Python",
+        backing_sources=(ProvenanceSource.PARSED_RESUME,),
+    )
+    generator = RecordingGenerator("I built payment services in Python.")
+
+    result = await _use_case(
+        posting, fact_assembler, generator, archive=archive
+    ).execute(_INPUT)
+
+    assert result.version == 1
+    assert len(document_repository.documents) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_letter_is_never_archived(
+    posting, fact_assembler, document_repository, archive
+):
+    generator = RecordingGenerator(
+        "Dear Hiring Manager,\nI am excited to apply.\nSincerely,"
+    )
+
+    with pytest.raises(UnattestedGenerationError):
+        await _use_case(posting, fact_assembler, generator, archive=archive).execute(
+            _INPUT
+        )
+
+    assert document_repository.documents == []

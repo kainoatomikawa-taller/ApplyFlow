@@ -12,17 +12,26 @@ from datetime import date, datetime
 
 import pytest
 
+from src.application.ports.id_generator_port import IdGeneratorPort
 from src.application.ports.resume_pdf_renderer_port import ResumePdfRendererPort
+from src.application.services.application_document_archive import (
+    ApplicationDocumentArchive,
+)
 from src.application.services.provenance_fact_assembler import ProvenanceFactAssembler
 from src.domain.entities.answer_memory import AnswerMemory
+from src.domain.entities.application_document import ApplicationDocument
 from src.domain.entities.job_posting import JobPosting
 from src.domain.entities.skill import Skill
 from src.domain.entities.user_profile import UserProfile
 from src.domain.entities.work_history_entry import WorkHistoryEntry
 from src.domain.repositories.answer_memory_repository import AnswerMemoryRepository
+from src.domain.repositories.application_document_repository import (
+    ApplicationDocumentRepository,
+)
 from src.domain.repositories.job_posting_repository import JobPostingRepository
 from src.domain.repositories.profile_repository import ProfileRepository
 from src.domain.value_objects.email_address import EmailAddress
+from src.domain.value_objects.generated_document_kind import GeneratedDocumentKind
 from src.domain.value_objects.job_requirements import JobRequirements
 from src.domain.value_objects.provenance_source import ProvenanceSource
 
@@ -153,6 +162,102 @@ class RecordingPdfRenderer(ResumePdfRendererPort):
         self.title = title
         self.calls += 1
         return self._pdf
+
+
+class InMemoryApplicationDocumentRepository(ApplicationDocumentRepository):
+    """An in-memory snapshot store that keeps the interface's write-once
+    shape: `add` only appends, and there is no method that could rewrite
+    what is already stored."""
+
+    def __init__(self, documents: list[ApplicationDocument] | None = None) -> None:
+        self.documents: list[ApplicationDocument] = list(documents or [])
+
+    async def add(self, document: ApplicationDocument) -> None:
+        self.documents.append(document)
+
+    async def get_by_id(self, document_id: str) -> ApplicationDocument | None:
+        return next((d for d in self.documents if d.id == document_id), None)
+
+    async def count_versions(
+        self,
+        *,
+        user_id: str,
+        job_posting_id: str,
+        document_kind: GeneratedDocumentKind,
+    ) -> int:
+        return len(
+            [
+                d
+                for d in self.documents
+                if d.user_id == user_id
+                and d.job_posting_id == job_posting_id
+                and d.document_kind is document_kind
+            ]
+        )
+
+    async def get_latest(
+        self,
+        *,
+        user_id: str,
+        job_posting_id: str,
+        document_kind: GeneratedDocumentKind,
+    ) -> ApplicationDocument | None:
+        matches = [
+            d
+            for d in self.documents
+            if d.user_id == user_id
+            and d.job_posting_id == job_posting_id
+            and d.document_kind is document_kind
+        ]
+        return max(matches, key=lambda d: d.version, default=None)
+
+    async def list_for_job(
+        self, *, user_id: str, job_posting_id: str, limit: int = 100
+    ) -> list[ApplicationDocument]:
+        matches = [
+            d
+            for d in self.documents
+            if d.user_id == user_id and d.job_posting_id == job_posting_id
+        ]
+        return self._newest_first(matches)[:limit]
+
+    async def list_by_user_id(
+        self, user_id: str, *, limit: int = 100
+    ) -> list[ApplicationDocument]:
+        matches = [d for d in self.documents if d.user_id == user_id]
+        return self._newest_first(matches)[:limit]
+
+    @staticmethod
+    def _newest_first(
+        documents: list[ApplicationDocument],
+    ) -> list[ApplicationDocument]:
+        return sorted(documents, key=lambda d: (d.created_at, d.version), reverse=True)
+
+
+class SequentialIdGenerator(IdGeneratorPort):
+    """Predictable ids, so a test can name the snapshot it expects."""
+
+    def __init__(self, prefix: str = "doc") -> None:
+        self._prefix = prefix
+        self.issued = 0
+
+    def new_id(self) -> str:
+        self.issued += 1
+        return f"{self._prefix}-{self.issued}"
+
+
+@pytest.fixture
+def document_repository() -> InMemoryApplicationDocumentRepository:
+    return InMemoryApplicationDocumentRepository()
+
+
+@pytest.fixture
+def archive(
+    document_repository: InMemoryApplicationDocumentRepository,
+) -> ApplicationDocumentArchive:
+    return ApplicationDocumentArchive(
+        repository=document_repository, id_generator=SequentialIdGenerator()
+    )
 
 
 @pytest.fixture

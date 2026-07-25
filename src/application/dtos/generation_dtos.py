@@ -1,19 +1,17 @@
 """DTOs — input/output contracts for provenance-guarded document
-generation (tailored resumes and cover letters)."""
+generation (tailored resumes and cover letters).
+
+`document_kind` is carried as a plain string on the way out, while the
+generation flows work with `GeneratedDocumentKind`
+(`src/domain/value_objects/`). The enum lives in the domain layer rather than
+here because stored snapshots are labeled with it — see
+`ApplicationDocument` — and serializing it as a string keeps this boundary
+from making a caller import a domain type to read a response.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import StrEnum
-
-
-class GeneratedDocumentKind(StrEnum):
-    """Which document a guarded generation run produced. Used to label
-    audit-log entries so a violation can be traced to the flow that
-    produced it."""
-
-    TAILORED_RESUME = "tailored_resume"
-    COVER_LETTER = "cover_letter"
 
 
 @dataclass(frozen=True)
@@ -47,11 +45,19 @@ class GuardedDocumentOutput:
     traces to, and `violations` is what was taken out; an empty
     `violations` list means the model asserted nothing it couldn't
     support.
+
+    `document_id`/`version` identify the immutable snapshot this exact
+    content was stored as (see `ApplicationDocument`). They are not optional
+    extras: the content in this DTO is already archived by the time a caller
+    sees it, so the caller can hand the id to the tracker or interview prep
+    instead of holding the text or asking for it to be generated again.
     """
 
+    document_id: str
     job_posting_id: str
     document_kind: str
     content: str
+    version: int
     backing_sources: list[str] = field(default_factory=list)
     violations: list[ProvenanceViolationOutput] = field(default_factory=list)
 

@@ -151,11 +151,42 @@ class GuardedDocumentResponse(BaseModel):
     its own: the document that came back is still made only of attested
     claims."""
 
+    document_id: str
     job_posting_id: str
     document_kind: str
     content: str
+    version: int
     backing_sources: list[str] = Field(default_factory=list)
     violations: list[ProvenanceViolationResponse] = Field(default_factory=list)
+
+
+class ApplicationDocumentSummaryResponse(BaseModel):
+    """One stored sent-document snapshot, without its text. `content_sha256`
+    identifies the exact content so a client can tell versions apart, or
+    confirm a document it already holds, without downloading it again."""
+
+    id: str
+    job_posting_id: str
+    document_kind: str
+    version: int
+    content_sha256: str
+    created_at: datetime
+    backing_sources: list[str] = Field(default_factory=list)
+
+
+class ApplicationDocumentResponse(BaseModel):
+    """One stored snapshot including the exact text that was produced —
+    what the tracker and interview prep read instead of regenerating a
+    document (see `ApplicationDocument`)."""
+
+    id: str
+    job_posting_id: str
+    document_kind: str
+    version: int
+    content: str
+    content_sha256: str
+    created_at: datetime
+    backing_sources: list[str] = Field(default_factory=list)
 
 
 class ResumeSectionResponse(BaseModel):

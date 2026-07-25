@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import logging
 
-from src.application.dtos.generation_dtos import GeneratedDocumentKind
 from src.application.services.generation_guard_audit import GenerationGuardAudit
 from src.domain.services.provenance_guard import (
     GuardedContent,
     ProvenanceViolation,
     SupportedLine,
 )
+from src.domain.value_objects.generated_document_kind import GeneratedDocumentKind
 from src.domain.value_objects.provenance_source import ProvenanceSource
 
 

@@ -11,13 +11,23 @@ import logging
 import pytest
 
 from src.application.dtos.generation_dtos import GenerateTailoredResumeInput
-from src.application.exceptions import UnattestedGenerationError
+from src.application.exceptions import (
+    DocumentRenderError,
+    UnattestedGenerationError,
+)
+from src.application.services.application_document_archive import (
+    ApplicationDocumentArchive,
+)
 from src.application.services.provenance_fact_assembler import ProvenanceFactAssembler
 from src.application.use_cases.generate_tailored_resume import GenerateTailoredResume
 from src.domain.exceptions import JobPostingNotFoundError, ProfileNotFoundError
+from src.domain.value_objects.generated_document_kind import GeneratedDocumentKind
+from src.domain.value_objects.provenance_source import ProvenanceSource
 from tests.application.conftest import (
+    InMemoryApplicationDocumentRepository,
     RecordingGenerator,
     RecordingPdfRenderer,
+    SequentialIdGenerator,
     StubAnswerMemoryRepository,
     StubJobPostingRepository,
     StubProfileRepository,
@@ -27,13 +37,18 @@ _INPUT = GenerateTailoredResumeInput(user_id="user-1", job_posting_id="job-posti
 
 
 def _use_case(
-    posting, fact_assembler, generator, renderer=None
+    posting, fact_assembler, generator, renderer=None, archive=None
 ) -> GenerateTailoredResume:
     return GenerateTailoredResume(
         job_posting_repository=StubJobPostingRepository(posting),
         fact_assembler=fact_assembler,
         generator=generator,
         pdf_renderer=renderer or RecordingPdfRenderer(),
+        archive=archive
+        or ApplicationDocumentArchive(
+            repository=InMemoryApplicationDocumentRepository(),
+            id_generator=SequentialIdGenerator(),
+        ),
     )
 
 
@@ -467,6 +482,10 @@ async def test_an_ats_violation_is_reported_and_logged_as_a_pipeline_defect(
         fact_assembler=fact_assembler,
         generator=RecordingGenerator("Built payment services in Python."),
         pdf_renderer=RecordingPdfRenderer(),
+        archive=ApplicationDocumentArchive(
+            repository=InMemoryApplicationDocumentRepository(),
+            id_generator=SequentialIdGenerator(),
+        ),
         ats_validator=_StubValidator(),
     )
 
@@ -490,3 +509,135 @@ async def test_nothing_is_rendered_when_the_resume_is_rejected(posting, fact_ass
         await _use_case(posting, fact_assembler, generator, renderer).execute(_INPUT)
 
     assert renderer.calls == 0
+
+
+# ---- the sent resume is archived exactly as produced ------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_resume_that_was_returned_is_the_one_that_was_stored(
+    posting, fact_assembler, document_repository, archive
+):
+    """Not "a resume was stored" but "the stored bytes are the returned
+    bytes" — anything looser and the tracker shows something the candidate
+    never sent."""
+    generator = RecordingGenerator(
+        "EXPERIENCE\nBuilt payment services in Python.\n"
+        "Staff Engineer at Initech (2016-2019)"
+    )
+
+    result = await _use_case(
+        posting, fact_assembler, generator, archive=archive
+    ).execute(_INPUT)
+
+    stored = document_repository.documents[0]
+    assert stored.content == result.document.content
+    assert stored.content == result.exports.text
+    # The fabrication the guard removed is absent from the archive too: the
+    # archive is fed post-guard text, never the draft.
+    assert "Initech" not in stored.content
+
+
+@pytest.mark.asyncio
+async def test_the_snapshot_is_labeled_with_the_job_the_user_and_the_kind(
+    posting, fact_assembler, document_repository, archive
+):
+    generator = RecordingGenerator("Skills: Python")
+
+    await _use_case(posting, fact_assembler, generator, archive=archive).execute(_INPUT)
+
+    stored = document_repository.documents[0]
+    assert stored.user_id == "user-1"
+    assert stored.job_posting_id == "job-posting-1"
+    assert stored.document_kind is GeneratedDocumentKind.TAILORED_RESUME
+    assert stored.backing_sources == (ProvenanceSource.PARSED_RESUME,)
+
+
+@pytest.mark.asyncio
+async def test_the_caller_is_told_which_snapshot_holds_what_it_just_received(
+    posting, fact_assembler, document_repository, archive
+):
+    generator = RecordingGenerator("Skills: Python")
+
+    result = await _use_case(
+        posting, fact_assembler, generator, archive=archive
+    ).execute(_INPUT)
+
+    assert result.document.document_id == document_repository.documents[0].id
+    assert result.document.version == 1
+
+
+@pytest.mark.asyncio
+async def test_regenerating_for_the_same_job_adds_a_version_and_keeps_the_old_one(
+    posting, fact_assembler, document_repository, archive
+):
+    """The earlier resume may already have been sent, so it stays readable."""
+    first = await _use_case(
+        posting, fact_assembler, RecordingGenerator("Skills: Python"), archive=archive
+    ).execute(_INPUT)
+    second = await _use_case(
+        posting,
+        fact_assembler,
+        RecordingGenerator("EXPERIENCE\nBuilt payment services in Python."),
+        archive=archive,
+    ).execute(_INPUT)
+
+    assert [d.version for d in document_repository.documents] == [1, 2]
+    assert first.document.version == 1
+    assert second.document.version == 2
+    assert document_repository.documents[0].content == "Skills: Python"
+    assert first.document.document_id != second.document.document_id
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_resume_is_never_archived(
+    posting, fact_assembler, document_repository, archive
+):
+    """Nothing attested survived, so there is no document to record — a
+    snapshot of a refused draft would misrepresent it as sent."""
+    generator = RecordingGenerator("Staff Engineer at Initech (2016-2019)")
+
+    with pytest.raises(UnattestedGenerationError):
+        await _use_case(posting, fact_assembler, generator, archive=archive).execute(
+            _INPUT
+        )
+
+    assert document_repository.documents == []
+
+
+@pytest.mark.asyncio
+async def test_nothing_is_archived_when_the_posting_does_not_exist(
+    fact_assembler, document_repository, archive
+):
+    generator = RecordingGenerator("Skills: Python")
+    use_case = _use_case(None, fact_assembler, generator, archive=archive)
+
+    with pytest.raises(JobPostingNotFoundError):
+        await use_case.execute(_INPUT)
+
+    assert document_repository.documents == []
+
+
+@pytest.mark.asyncio
+async def test_a_resume_whose_pdf_fails_to_render_is_never_archived(
+    posting, fact_assembler, document_repository, archive
+):
+    """It was never handed to the candidate, so recording it as sent would be
+    a false statement."""
+
+    class _FailingRenderer(RecordingPdfRenderer):
+        def render(self, content, *, title):
+            raise DocumentRenderError("no font available")
+
+    use_case = _use_case(
+        posting,
+        fact_assembler,
+        RecordingGenerator("Skills: Python"),
+        _FailingRenderer(),
+        archive,
+    )
+
+    with pytest.raises(DocumentRenderError):
+        await use_case.execute(_INPUT)
+
+    assert document_repository.documents == []

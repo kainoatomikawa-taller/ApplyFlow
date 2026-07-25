@@ -16,7 +16,7 @@ what the employer asked for; treating it as evidence would let the model
 claim every requirement as the candidate's own experience (see
 `ProvenanceGuard`).
 
-The full pipeline is normalize -> guard -> tidy -> attest -> export:
+The full pipeline is normalize -> guard -> tidy -> attest -> export -> archive:
 
 1. `AtsSafeTextFormatter.normalize_plain_text` flattens the draft to
    ATS-parseable plain text first, so the text the guard validates is the
@@ -30,6 +30,8 @@ The full pipeline is normalize -> guard -> tidy -> attest -> export:
    a finished resume.
 5. `AtsSafetyValidator` checks the finished text and `ResumeStructureParser`
    reads it back as sections, then `ResumePdfRendererPort` renders the file.
+6. `ApplicationDocumentArchive` stores that finished text verbatim as an
+   immutable snapshot, before anything is returned.
 
 Steps 1 and 3 only delete or transliterate characters, so neither can
 introduce a claim the guard rejected or never saw.
@@ -44,6 +46,25 @@ would mean a file asserting something unvalidated. It also means there is no
 route that renders a PDF from caller-supplied text: a "just export this
 string" endpoint would hand anyone a way around the guard entirely.
 
+The stored snapshot is that same text again
+-------------------------------------------
+Archiving happens here, in the flow that produced the document, rather than
+in a "save this resume" use case a caller invokes afterwards. That is the
+same argument as the exports: text that arrives from a caller has not been
+through the guard, so a store that accepted it would be a way around the
+guard *and* a way to misrepresent what was sent. Because the archive is fed
+the identical `content` value the exports are built from, the stored
+snapshot cannot drift from what the candidate received. It is also not
+optional — the use case cannot be constructed without an archive — so no
+wiring mistake can produce a resume that was handed out but never recorded
+(see `ApplicationDocument` for why anything downstream needs the sent text
+rather than a regenerated one).
+
+It is the last step for the symmetric reason: a resume whose PDF failed to
+render was never handed to the candidate, and a snapshot of it would claim
+otherwise. Nothing incomplete gets recorded, and nothing recorded is
+incomplete.
+
 The ATS check is reported, not re-fixed. `AtsSafeTextFormatter` has already
 enforced the same rules, so a violation here means enforcement has a gap.
 Quietly correcting it a second time would hide that gap forever, so it is
@@ -56,7 +77,6 @@ import logging
 
 from src.application.dtos.generation_dtos import (
     AtsSafetyViolationOutput,
-    GeneratedDocumentKind,
     GenerateTailoredResumeInput,
     GuardedDocumentOutput,
     ProvenanceViolationOutput,
@@ -69,6 +89,9 @@ from src.application.ports.resume_pdf_renderer_port import ResumePdfRendererPort
 from src.application.ports.tailored_resume_generator_port import (
     TailoredResumeGeneratorPort,
 )
+from src.application.services.application_document_archive import (
+    ApplicationDocumentArchive,
+)
 from src.application.services.generation_guard_audit import GenerationGuardAudit
 from src.application.services.provenance_fact_assembler import ProvenanceFactAssembler
 from src.domain.exceptions import JobPostingNotFoundError
@@ -78,6 +101,7 @@ from src.domain.services.ats_safety_validator import AtsSafetyReport, AtsSafetyV
 from src.domain.services.provenance_guard import ProvenanceGuard
 from src.domain.services.requirement_classifier import RequirementClassifier
 from src.domain.services.resume_structure_parser import ResumeStructureParser
+from src.domain.value_objects.generated_document_kind import GeneratedDocumentKind
 from src.domain.value_objects.job_requirements import JobRequirements
 
 logger = logging.getLogger(__name__)
@@ -90,6 +114,7 @@ class GenerateTailoredResume:
         fact_assembler: ProvenanceFactAssembler,
         generator: TailoredResumeGeneratorPort,
         pdf_renderer: ResumePdfRendererPort,
+        archive: ApplicationDocumentArchive,
         guard: ProvenanceGuard | None = None,
         classifier: RequirementClassifier | None = None,
         audit: GenerationGuardAudit | None = None,
@@ -101,6 +126,7 @@ class GenerateTailoredResume:
         self._fact_assembler = fact_assembler
         self._generator = generator
         self._pdf_renderer = pdf_renderer
+        self._archive = archive
         self._guard = guard or ProvenanceGuard()
         self._classifier = classifier or RequirementClassifier()
         self._audit = audit or GenerationGuardAudit()
@@ -151,30 +177,43 @@ class GenerateTailoredResume:
             )
 
         content = self._formatter.drop_empty_sections(guarded.content)
-        document = GuardedDocumentOutput(
-            job_posting_id=posting.id,
-            document_kind=GeneratedDocumentKind.TAILORED_RESUME.value,
-            content=content,
-            backing_sources=[source.value for source in guarded.backing_sources],
-            violations=[
-                ProvenanceViolationOutput(
-                    line=violation.line,
-                    unsupported_terms=list(violation.unsupported_terms),
-                )
-                for violation in guarded.violations
-            ],
-        )
 
         ats_report = self._ats_validator.validate(content)
         self._log_ats_findings(
             report=ats_report, user_id=dto.user_id, job_posting_id=posting.id
         )
+        # Exports first, archive second: a resume whose PDF could not be
+        # rendered was never handed to the candidate, and a snapshot of it
+        # would claim otherwise. Since every export derives from `content`,
+        # archiving that same value after the fact stores the identical text.
+        exports = self._build_exports(
+            content, title=f"Resume - {posting.title} - {posting.company}"
+        )
+        snapshot = await self._archive.store(
+            user_id=dto.user_id,
+            job_posting_id=posting.id,
+            document_kind=GeneratedDocumentKind.TAILORED_RESUME,
+            content=content,
+            backing_sources=guarded.backing_sources,
+        )
 
         return TailoredResumeOutput(
-            document=document,
-            exports=self._build_exports(
-                content, title=f"Resume - {posting.title} - {posting.company}"
+            document=GuardedDocumentOutput(
+                document_id=snapshot.id,
+                job_posting_id=posting.id,
+                document_kind=GeneratedDocumentKind.TAILORED_RESUME.value,
+                content=content,
+                version=snapshot.version,
+                backing_sources=[source.value for source in guarded.backing_sources],
+                violations=[
+                    ProvenanceViolationOutput(
+                        line=violation.line,
+                        unsupported_terms=list(violation.unsupported_terms),
+                    )
+                    for violation in guarded.violations
+                ],
             ),
+            exports=exports,
             ats_safety_violations=[
                 AtsSafetyViolationOutput(
                     rule=violation.rule,

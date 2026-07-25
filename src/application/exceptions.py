@@ -32,6 +32,30 @@ class DocumentRenderError(ApplicationError):
     format (see `ResumePdfRendererPort`)."""
 
 
+class DocumentVersionConflictError(ApplicationError):
+    """Raised when a sent-document snapshot could not be stored because
+    another one already claims that version for the same job and kind.
+
+    Snapshots are numbered from the count already stored (see
+    `ApplicationDocumentArchive`), so a collision means two generations for
+    the same job ran concurrently and both read the same count. Retrying
+    the generation is the resolution; overwriting the existing snapshot is
+    not, since it records a document that was already produced.
+    """
+
+    def __init__(
+        self, document_kind: str, job_posting_id: str, version: int
+    ) -> None:
+        self.document_kind = document_kind
+        self.job_posting_id = job_posting_id
+        self.version = version
+        super().__init__(
+            f"Version {version} of the {document_kind} for job posting "
+            f"'{job_posting_id}' is already stored; a concurrent generation "
+            "claimed it first."
+        )
+
+
 class UnattestedGenerationError(ApplicationError):
     """Raised when nothing a generator produced survived the provenance
     guard as an attested claim (see `GuardedContent.has_attested_content`).

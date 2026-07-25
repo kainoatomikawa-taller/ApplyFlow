@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.infrastructure.persistence.database import dispose_engine
 from src.interfaces.http.controllers import (
     application_controller,
+    application_document_controller,
     cover_letter_controller,
     gap_resolution_controller,
     health_controller,
@@ -57,6 +58,7 @@ def create_app() -> FastAPI:
     app.include_router(gap_resolution_controller.router)
     app.include_router(tailored_resume_controller.router)
     app.include_router(cover_letter_controller.router)
+    app.include_router(application_document_controller.router)
     return app
 
 

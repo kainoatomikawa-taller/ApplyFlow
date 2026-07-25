@@ -20,6 +20,7 @@ from src.application.dtos.generation_dtos import (
 )
 from src.application.exceptions import (
     DocumentRenderError,
+    DocumentVersionConflictError,
     ExternalServiceError,
     UnattestedGenerationError,
 )
@@ -55,9 +56,11 @@ def _output(**overrides) -> TailoredResumeOutput:
     """A successful tailored resume: the guarded document plus its three
     exports. Overrides target the document unless named otherwise."""
     document_defaults = {
+        "document_id": "doc-1",
         "job_posting_id": "job-1",
         "document_kind": "tailored_resume",
         "content": _CONTENT,
+        "version": 1,
         "backing_sources": ["parsed_resume"],
         "violations": [],
     }
@@ -261,3 +264,17 @@ def test_a_failed_pdf_render_is_a_500_not_a_partial_resume():
 
     assert client.post(_URL).status_code == 500
     app.dependency_overrides.clear()
+
+
+def test_a_concurrent_generation_claiming_the_same_snapshot_version_is_a_409():
+    """The existing snapshot records a resume that was already produced, so
+    the caller retries rather than overwriting it."""
+    client, app = _client(
+        _FakeUseCase(
+            error=DocumentVersionConflictError(
+                document_kind="tailored_resume", job_posting_id="job-1", version=3
+            )
+        )
+    )
+
+    assert client.post(_URL).status_code == 409

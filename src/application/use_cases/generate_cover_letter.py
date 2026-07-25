@@ -19,6 +19,12 @@ in a different shape. It shares `normalize_plain_text` as well, so stray
 markdown never reaches a reader — but not `drop_empty_sections`, since a
 letter has no section headings to hollow out.
 
+Archiving is shared too, through `ApplicationDocumentArchive` and for the
+same reason: what actually went out has to be readable later without
+regenerating it (see `ApplicationDocument`). A letter is arguably the more
+important of the two to keep — it is the document whose exact wording a
+candidate will be asked about in an interview.
+
 Where it diverges from the resume flow is answer reuse. Both documents are
 validated against the candidate's remembered answers, but only the letter is
 *built* from them: `RelevantAnswerSelector` picks the few this job actually
@@ -34,12 +40,14 @@ from __future__ import annotations
 
 from src.application.dtos.generation_dtos import (
     GenerateCoverLetterInput,
-    GeneratedDocumentKind,
     GuardedDocumentOutput,
     ProvenanceViolationOutput,
 )
 from src.application.exceptions import UnattestedGenerationError
 from src.application.ports.cover_letter_generator_port import CoverLetterGeneratorPort
+from src.application.services.application_document_archive import (
+    ApplicationDocumentArchive,
+)
 from src.application.services.generation_guard_audit import GenerationGuardAudit
 from src.application.services.provenance_fact_assembler import ProvenanceFactAssembler
 from src.application.services.relevant_answer_selector import RelevantAnswerSelector
@@ -48,6 +56,7 @@ from src.domain.repositories.job_posting_repository import JobPostingRepository
 from src.domain.services.ats_safe_text_formatter import AtsSafeTextFormatter
 from src.domain.services.provenance_guard import ProvenanceGuard
 from src.domain.services.requirement_classifier import RequirementClassifier
+from src.domain.value_objects.generated_document_kind import GeneratedDocumentKind
 from src.domain.value_objects.job_requirements import JobRequirements
 
 
@@ -57,6 +66,7 @@ class GenerateCoverLetter:
         job_posting_repository: JobPostingRepository,
         fact_assembler: ProvenanceFactAssembler,
         generator: CoverLetterGeneratorPort,
+        archive: ApplicationDocumentArchive,
         answer_selector: RelevantAnswerSelector | None = None,
         guard: ProvenanceGuard | None = None,
         classifier: RequirementClassifier | None = None,
@@ -66,6 +76,7 @@ class GenerateCoverLetter:
         self._job_posting_repository = job_posting_repository
         self._fact_assembler = fact_assembler
         self._generator = generator
+        self._archive = archive
         # Optional: answer highlighting needs an embedding provider, and a
         # letter is still writable without it — the full fact corpus is
         # always there. Absent a selector, nothing is foregrounded and the
@@ -125,10 +136,20 @@ class GenerateCoverLetter:
                 unsupported_terms=guarded.unsupported_terms,
             )
 
+        snapshot = await self._archive.store(
+            user_id=dto.user_id,
+            job_posting_id=posting.id,
+            document_kind=GeneratedDocumentKind.COVER_LETTER,
+            content=guarded.content,
+            backing_sources=guarded.backing_sources,
+        )
+
         return GuardedDocumentOutput(
+            document_id=snapshot.id,
             job_posting_id=posting.id,
             document_kind=GeneratedDocumentKind.COVER_LETTER.value,
             content=guarded.content,
+            version=snapshot.version,
             backing_sources=[source.value for source in guarded.backing_sources],
             violations=[
                 ProvenanceViolationOutput(

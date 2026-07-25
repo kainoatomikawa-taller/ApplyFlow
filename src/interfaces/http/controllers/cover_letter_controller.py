@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from src.application.dtos.auth_dtos import AuthenticatedUserDTO
 from src.application.dtos.generation_dtos import GenerateCoverLetterInput
 from src.application.exceptions import (
+    DocumentVersionConflictError,
     ExternalServiceError,
     UnattestedGenerationError,
 )
@@ -58,6 +59,11 @@ async def generate_cover_letter(
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     except UnattestedGenerationError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    except DocumentVersionConflictError as exc:
+        # Same as the resume route: a concurrent generation claimed this
+        # snapshot version, and the fix is to retry rather than overwrite a
+        # letter that was already produced.
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     except ExternalServiceError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
     return GuardedDocumentResponse(**asdict(output))

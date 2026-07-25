@@ -17,6 +17,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.application.dtos.auth_dtos import AuthenticatedUserDTO
 from src.application.exceptions import AuthenticationError
 from src.application.ports.auth_verifier_port import AuthVerifierPort
+from src.application.services.application_document_archive import (
+    ApplicationDocumentArchive,
+)
 from src.application.services.provenance_fact_assembler import ProvenanceFactAssembler
 from src.application.services.relevant_answer_selector import RelevantAnswerSelector
 from src.application.use_cases.analyze_job_application import (
@@ -36,7 +39,14 @@ from src.application.use_cases.generate_gap_resolution_questions import (
     GenerateGapResolutionQuestions,
 )
 from src.application.use_cases.generate_tailored_resume import GenerateTailoredResume
+from src.application.use_cases.get_application_document import GetApplicationDocument
+from src.application.use_cases.get_latest_application_document import (
+    GetLatestApplicationDocument,
+)
 from src.application.use_cases.get_resume import GetResume
+from src.application.use_cases.list_application_documents import (
+    ListApplicationDocuments,
+)
 from src.application.use_cases.list_candidate_applications import (
     ListCandidateApplications,
 )
@@ -83,6 +93,9 @@ from src.infrastructure.llm.llm_tailored_resume_generator import (
 from src.infrastructure.llm.openai_embedding_client import OpenAiEmbeddingClient
 from src.infrastructure.persistence.answer_memory_repository_impl import (
     SqlAlchemyAnswerMemoryRepository,
+)
+from src.infrastructure.persistence.application_document_repository_impl import (
+    SqlAlchemyApplicationDocumentRepository,
 )
 from src.infrastructure.persistence.database import get_session
 from src.infrastructure.persistence.job_application_repository_impl import (
@@ -275,22 +288,41 @@ def _provenance_fact_assembler(
     )
 
 
+def _application_document_repository(
+    session: AsyncSession = Depends(get_session),
+) -> SqlAlchemyApplicationDocumentRepository:
+    return SqlAlchemyApplicationDocumentRepository(session)
+
+
+def _application_document_archive(
+    repository: SqlAlchemyApplicationDocumentRepository = Depends(
+        _application_document_repository
+    ),
+) -> ApplicationDocumentArchive:
+    return ApplicationDocumentArchive(
+        repository=repository, id_generator=UuidIdGenerator()
+    )
+
+
 def get_generate_tailored_resume_use_case(
     job_posting_repository: SqlAlchemyJobPostingRepository = Depends(
         _job_posting_repository
     ),
     fact_assembler: ProvenanceFactAssembler = Depends(_provenance_fact_assembler),
+    archive: ApplicationDocumentArchive = Depends(_application_document_archive),
 ) -> GenerateTailoredResume:
-    """The generator and the PDF renderer are the only injected
-    collaborators; the guard, the ATS formatter, the ATS validator, the
-    structure parser, and the audit recorder are pure defaults the use case
-    builds itself, so no wiring mistake here can produce an unguarded or
-    unvalidated resume."""
+    """The generator, the PDF renderer, and the snapshot archive are the only
+    injected collaborators; the guard, the ATS formatter, the ATS validator,
+    the structure parser, and the audit recorder are pure defaults the use
+    case builds itself, so no wiring mistake here can produce an unguarded or
+    unvalidated resume. The archive is required rather than optional for the
+    same reason: a resume cannot be handed out without being recorded."""
     return GenerateTailoredResume(
         job_posting_repository=job_posting_repository,
         fact_assembler=fact_assembler,
         generator=LlmTailoredResumeGenerator(AnthropicLlmClient(get_settings())),
         pdf_renderer=AtsSafePdfRenderer(),
+        archive=archive,
     )
 
 
@@ -311,18 +343,44 @@ def get_generate_cover_letter_use_case(
     ),
     fact_assembler: ProvenanceFactAssembler = Depends(_provenance_fact_assembler),
     answer_selector: RelevantAnswerSelector = Depends(_relevant_answer_selector),
+    archive: ApplicationDocumentArchive = Depends(_application_document_archive),
 ) -> GenerateCoverLetter:
-    """Same shape as the resume factory: the generator and the answer
-    selector are the only collaborators that reach outside, while the guard,
-    the formatter, and the audit recorder are pure defaults the use case
-    builds itself — so no wiring mistake here can produce an unguarded
-    letter."""
+    """Same shape as the resume factory: the generator, the answer selector,
+    and the snapshot archive are the only collaborators that reach outside,
+    while the guard, the formatter, and the audit recorder are pure defaults
+    the use case builds itself — so no wiring mistake here can produce an
+    unguarded or unrecorded letter."""
     return GenerateCoverLetter(
         job_posting_repository=job_posting_repository,
         fact_assembler=fact_assembler,
         generator=LlmCoverLetterGenerator(AnthropicLlmClient(get_settings())),
         answer_selector=answer_selector,
+        archive=archive,
     )
+
+
+def get_application_document_use_case(
+    repository: SqlAlchemyApplicationDocumentRepository = Depends(
+        _application_document_repository
+    ),
+) -> GetApplicationDocument:
+    return GetApplicationDocument(repository=repository)
+
+
+def get_latest_application_document_use_case(
+    repository: SqlAlchemyApplicationDocumentRepository = Depends(
+        _application_document_repository
+    ),
+) -> GetLatestApplicationDocument:
+    return GetLatestApplicationDocument(repository=repository)
+
+
+def get_list_application_documents_use_case(
+    repository: SqlAlchemyApplicationDocumentRepository = Depends(
+        _application_document_repository
+    ),
+) -> ListApplicationDocuments:
+    return ListApplicationDocuments(repository=repository)
 
 
 def _job_match_feedback_repository(

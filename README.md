@@ -418,6 +418,53 @@ the "PhD role vs sophomore" over/under-filtering case.
 
 ---
 
+## Sent-document snapshots
+
+Generating a tailored resume (`POST /api/job-postings/{id}/tailored-resume`)
+or a cover letter (`POST /api/job-postings/{id}/cover-letter`) stores the
+exact text that was produced, in the same use case that produced it, before
+anything is returned. The tracker and interview prep read that snapshot
+instead of regenerating a document: a fresh generation reads today's profile
+through today's model, so it can quietly produce something the employer never
+saw — and then prep a candidate for claims they never made.
+
+- **Immutable.** `ApplicationDocument` is a frozen entity and
+  `ApplicationDocumentRepository` has no `update` and no `delete`, so there
+  is neither an in-process way to alter a snapshot nor a persistence method
+  that would carry an alteration to the database. `content_sha256` is written
+  alongside the content and verified on every read, so a row changed out of
+  band (a migration, a manual `UPDATE`) is refused rather than served as
+  authentic. The `job_postings` foreign key is `ON DELETE RESTRICT`: a record
+  of what was sent must not vanish when a posting is pruned.
+- **Versioned per job, not globally.** Regenerating for the same posting
+  inserts the next version for that (user, job, kind) rather than
+  overwriting, and a duplicate version is a unique-constraint error rather
+  than an ambiguity the tracker has to guess about. The newest version is
+  what the most recent submission carried; earlier ones stay readable.
+- **Write path is the generation flow only.** There is no route that accepts
+  document text — that would store content the provenance guard never saw and
+  label it as sent. `ApplicationDocument` also refuses a snapshot with no
+  backing provenance, so an unattested draft has nothing to be stored under
+  (see `ProvenanceGuard` and `UnattestedGenerationError`).
+- **PII.** `application_documents.content` is flagged sensitive at both the
+  domain (`ApplicationDocument.SENSITIVE`) and schema level: a tailored resume
+  carries full contact details and work history, and a cover letter is built
+  from remembered answers (`answer_memories`, sensitive for the same reason),
+  so a snapshot inherits the strictest classification of its inputs. Never
+  logged — the archive logs the snapshot id and digest instead. List responses
+  carry summaries without document text; the text is fetched one document at
+  a time.
+
+The tracker (Epic 06) joins on (`user_id`, `job_posting_id`) — the same pair
+the generation flows write — so neither side has to backfill a link.
+
+Only the resume's plain text is stored, and the PDF/structured exports are
+re-derived from it on demand (all three already come from that one guarded
+text, so they cannot disagree). Byte-exact PDF archival would go through
+`FileStoragePort` and is not part of this store.
+
+---
+
 ## Getting Started
 
 ### Option A — Docker (recommended)
@@ -513,6 +560,12 @@ All `/api/applications*` and `/api/resumes*` routes require
 | POST   | `/api/job-postings/{id}/feedback`   | Submit thumbs-up/down feedback on a match | Yes      |
 | GET    | `/api/job-postings/feedback`        | List the current user's feedback history | Yes       |
 | GET    | `/api/job-postings/feedback/analysis` | Bucketed feedback agreement-rate summary (tuning signal) | Yes |
+| POST   | `/api/job-postings/{id}/tailored-resume` | Generate a provenance-guarded tailored resume; stores the exact text sent | Yes |
+| POST   | `/api/job-postings/{id}/cover-letter` | Generate a provenance-guarded cover letter; stores the exact text sent | Yes |
+| GET    | `/api/job-postings/{id}/documents`  | List every document stored for one job (both kinds, all versions) | Yes |
+| GET    | `/api/job-postings/{id}/documents/{kind}/latest` | The resume/cover letter this application went out with | Yes |
+| GET    | `/api/application-documents`        | The current user's stored documents across every job (tracker feed) | Yes |
+| GET    | `/api/application-documents/{id}`   | One stored snapshot, with its exact text | Yes |
 
 ---
 
