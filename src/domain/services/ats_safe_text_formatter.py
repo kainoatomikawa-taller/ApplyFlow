@@ -1,25 +1,30 @@
-"""AtsSafeResumeFormatter — a pure domain service that keeps a generated
-resume parseable by applicant tracking systems, and coherent after the
-provenance guard has removed whatever it couldn't back.
+"""AtsSafeTextFormatter — a pure domain service that keeps generated
+documents plain enough for an applicant tracking system to parse, and
+coherent after the provenance guard has removed whatever it couldn't back.
 
 ATS parsers read plain text. Markdown syntax, box-drawing tables, decorative
 bullet glyphs, smart quotes, and non-breaking spaces all survive a copy-paste
 into an ATS form and then turn a candidate's experience into garbled tokens
 or drop it entirely — a resume that reads beautifully and parses badly costs
 the candidate the application. Models produce all of it unprompted, so the
-prompt asks for plain text (see `LlmTailoredResumeGenerator`) and this
-service enforces it regardless of what came back.
+prompts ask for plain text (see `LlmTailoredResumeGenerator` /
+`LlmCoverLetterGenerator`) and this service enforces it regardless of what
+came back.
 
 Two steps, either side of the guard
 -----------------------------------
 `normalize_plain_text` runs *before* `ProvenanceGuard`, so the text the
 guard validates is the text that ships — the guard never has to reason about
-`**bold**` markers, and the lines it clears need no further rewriting.
+`**bold**` markers, and the lines it clears need no further rewriting. Both
+generated documents get this pass: a cover letter is read by a person rather
+than parsed for fields, but stray `**` markers in one still read as a
+malfunction, and the hygiene is identical either way.
 
 `drop_empty_sections` runs *after*, because a section can only become empty
 once guarding has removed its contents: an "EXPERIENCE" heading over nothing
 is exactly what a stripped fabrication leaves behind, and a resume with
-hollow headings reads as broken rather than honest.
+hollow headings reads as broken rather than honest. This step is resume-only
+— a cover letter has no section headings to hollow out.
 
 Both steps only ever delete or transliterate characters. Neither can
 introduce a word, so neither can smuggle in a claim the guard rejected or
@@ -107,7 +112,7 @@ _STANDARD_SECTION_HEADINGS = frozenset(
 )
 
 
-class AtsSafeResumeFormatter:
+class AtsSafeTextFormatter:
     """Flattens a generated resume to ATS-parseable plain text, and clears
     away sections the provenance guard emptied."""
 

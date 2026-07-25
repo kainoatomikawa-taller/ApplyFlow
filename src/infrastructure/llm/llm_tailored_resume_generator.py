@@ -17,7 +17,7 @@ It asks for ATS-safe structure for the same reason: standard section
 headings a parser recognizes, one column, plain "- " bullets, no tables or
 glyphs, dates in a single readable format. A resume that parses badly is
 rejected before a human ever reads it, so this is a correctness requirement
-rather than a stylistic one — and `AtsSafeResumeFormatter` enforces the
+rather than a stylistic one — and `AtsSafeTextFormatter` enforces the
 mechanical half of it afterward, whatever the model returns.
 
 Tailoring is keyword-aware but never keyword-stuffed: the prompt directs

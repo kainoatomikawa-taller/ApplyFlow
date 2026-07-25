@@ -14,6 +14,19 @@ The similarity threshold is a business rule (how close is "close enough"
 to reuse an answer), so `DEFAULT_THRESHOLD` lives here — but it is
 explicitly tunable per call via the `threshold` parameter, since the right
 cutoff may need adjusting without a code change.
+
+Two thresholds, because there are two questions
+-----------------------------------------------
+"Is this the same question, reworded?" and "is this answer relevant to what
+the job asked about?" are different bars, and one cutoff cannot serve both.
+Suppressing a re-ask demands near-equivalence (`DEFAULT_THRESHOLD`): asking
+again is only wrong if the candidate has genuinely already answered *this*.
+Picking which remembered answers a cover letter should draw on only needs
+topical relatedness (`DEFAULT_RELEVANCE_THRESHOLD`) — "Have you led a team?"
+is worth surfacing against a "Leadership experience" requirement while
+scoring nowhere near an exact match. Holding the strict bar there would
+surface nothing; holding the loose bar in the re-ask check would silently
+skip questions the candidate never answered.
 """
 
 from __future__ import annotations
@@ -36,10 +49,17 @@ class AnswerMatch:
 
 
 class AnswerSimilarityMatcher:
-    """Finds the best-matching remembered answer for a new question by
-    cosine similarity between question embeddings."""
+    """Finds remembered answers matching a query by cosine similarity
+    between embeddings."""
 
+    #: "Same question, reworded" — the bar for treating a gap as already
+    #: answered and not asking again.
     DEFAULT_THRESHOLD: ClassVar[float] = 0.85
+
+    #: "Related to what this job asked about" — the bar for surfacing a
+    #: remembered answer as material worth drawing on. Deliberately looser;
+    #: see the module docstring.
+    DEFAULT_RELEVANCE_THRESHOLD: ClassVar[float] = 0.6
 
     def find_best_match(
         self,
@@ -61,6 +81,51 @@ class AnswerSimilarityMatcher:
             if best is None or score > best.similarity_score:
                 best = AnswerMatch(answer_memory=candidate, similarity_score=score)
         return best
+
+    def find_matches(
+        self,
+        query_embedding: list[float],
+        candidates: list[AnswerMemory],
+        threshold: float | None = None,
+        limit: int | None = None,
+    ) -> tuple[AnswerMatch, ...]:
+        """Return every candidate at or above `threshold`, most similar
+        first, capped at `limit` when given.
+
+        The plural of `find_best_match`, for callers that want the several
+        most relevant remembered answers rather than the single closest
+        one — a cover letter drawing on a candidate's own words has room
+        for a few, and which few depends on what the job asked about (see
+        `RelevantAnswerSelector`).
+
+        `limit` bounds a prompt rather than a result set: an unbounded list
+        of answers would crowd out the profile facts it sits beside. A
+        `limit` of 0 or less selects nothing, which is a caller asking for
+        no highlighting rather than an error.
+        """
+        effective_threshold = self.DEFAULT_THRESHOLD if threshold is None else threshold
+        if limit is not None and limit <= 0:
+            return ()
+
+        matches = [
+            AnswerMatch(
+                answer_memory=candidate,
+                similarity_score=self.cosine_similarity(
+                    query_embedding, candidate.embedding
+                ),
+            )
+            for candidate in candidates
+        ]
+        ranked = sorted(
+            (
+                match
+                for match in matches
+                if match.similarity_score >= effective_threshold
+            ),
+            key=lambda match: match.similarity_score,
+            reverse=True,
+        )
+        return tuple(ranked if limit is None else ranked[:limit])
 
     @staticmethod
     def cosine_similarity(a: list[float], b: list[float]) -> float:

@@ -18,11 +18,11 @@ claim every requirement as the candidate's own experience (see
 
 The full pipeline is normalize -> guard -> tidy -> attest:
 
-1. `AtsSafeResumeFormatter.normalize_plain_text` flattens the draft to
+1. `AtsSafeTextFormatter.normalize_plain_text` flattens the draft to
    ATS-parseable plain text first, so the text the guard validates is the
    text that ships and no post-guard rewriting is needed.
 2. `ProvenanceGuard` removes every line the candidate's facts don't back.
-3. `AtsSafeResumeFormatter.drop_empty_sections` clears headings left
+3. `AtsSafeTextFormatter.drop_empty_sections` clears headings left
    standing over nothing — the shape a stripped fabrication leaves, and the
    difference between a shorter resume and a broken-looking one.
 4. If no surviving line traces to a candidate fact, this raises
@@ -49,7 +49,7 @@ from src.application.services.generation_guard_audit import GenerationGuardAudit
 from src.application.services.provenance_fact_assembler import ProvenanceFactAssembler
 from src.domain.exceptions import JobPostingNotFoundError
 from src.domain.repositories.job_posting_repository import JobPostingRepository
-from src.domain.services.ats_safe_resume_formatter import AtsSafeResumeFormatter
+from src.domain.services.ats_safe_text_formatter import AtsSafeTextFormatter
 from src.domain.services.provenance_guard import ProvenanceGuard
 from src.domain.services.requirement_classifier import RequirementClassifier
 from src.domain.value_objects.job_requirements import JobRequirements
@@ -64,7 +64,7 @@ class GenerateTailoredResume:
         guard: ProvenanceGuard | None = None,
         classifier: RequirementClassifier | None = None,
         audit: GenerationGuardAudit | None = None,
-        formatter: AtsSafeResumeFormatter | None = None,
+        formatter: AtsSafeTextFormatter | None = None,
     ) -> None:
         self._job_posting_repository = job_posting_repository
         self._fact_assembler = fact_assembler
@@ -72,7 +72,7 @@ class GenerateTailoredResume:
         self._guard = guard or ProvenanceGuard()
         self._classifier = classifier or RequirementClassifier()
         self._audit = audit or GenerationGuardAudit()
-        self._formatter = formatter or AtsSafeResumeFormatter()
+        self._formatter = formatter or AtsSafeTextFormatter()
 
     async def execute(self, dto: GenerateTailoredResumeInput) -> GuardedDocumentOutput:
         posting = await self._job_posting_repository.get_by_id(dto.job_posting_id)

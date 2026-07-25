@@ -94,3 +94,87 @@ class TestFindBestMatch:
         still_far = _answer_memory(embedding=[0.1, 0.9])
 
         assert matcher.find_best_match([1.0, 0.0], [still_far], threshold=0.5) is None
+
+
+def _memory(memory_id: str, embedding: list[float]) -> AnswerMemory:
+    """A remembered answer identified by id, with a chosen embedding — the
+    two things `find_matches` ranking assertions care about."""
+    return _answer_memory(id=memory_id, embedding=embedding)
+
+
+# ---- find_matches: the several most relevant, not the single closest -------
+
+
+def test_find_matches_returns_every_clearing_candidate_most_similar_first():
+    matcher = AnswerSimilarityMatcher()
+    exact = _memory("exact", [1.0, 0.0])
+    close = _memory("close", [0.9, 0.1])
+    unrelated = _memory("unrelated", [0.0, 1.0])
+
+    matches = matcher.find_matches([1.0, 0.0], [unrelated, close, exact], threshold=0.5)
+
+    assert [m.answer_memory.id for m in matches] == ["exact", "close"]
+    assert matches[0].similarity_score >= matches[1].similarity_score
+
+
+def test_find_matches_caps_the_result_at_the_limit():
+    matcher = AnswerSimilarityMatcher()
+    candidates = [
+        _memory("a", [1.0, 0.0]),
+        _memory("b", [0.95, 0.05]),
+        _memory("c", [0.9, 0.1]),
+    ]
+
+    matches = matcher.find_matches([1.0, 0.0], candidates, threshold=0.5, limit=2)
+
+    assert [m.answer_memory.id for m in matches] == ["a", "b"]
+
+
+def test_find_matches_excludes_anything_below_the_threshold():
+    matcher = AnswerSimilarityMatcher()
+    candidates = [_memory("related", [1.0, 0.0]), _memory("not", [0.0, 1.0])]
+
+    matches = matcher.find_matches([1.0, 0.0], candidates, threshold=0.5)
+
+    assert [m.answer_memory.id for m in matches] == ["related"]
+
+
+def test_find_matches_on_no_candidates_is_empty():
+    assert AnswerSimilarityMatcher().find_matches([1.0, 0.0], []) == ()
+
+
+def test_a_zero_or_negative_limit_selects_nothing():
+    matcher = AnswerSimilarityMatcher()
+    candidates = [_memory("a", [1.0, 0.0])]
+
+    assert matcher.find_matches([1.0, 0.0], candidates, limit=0) == ()
+    assert matcher.find_matches([1.0, 0.0], candidates, limit=-1) == ()
+
+
+def test_find_matches_defaults_to_the_strict_equivalence_threshold():
+    """Callers wanting the looser relevance bar have to say so — the
+    default stays the conservative one."""
+    matcher = AnswerSimilarityMatcher()
+    # cosine 0.707: related, but nowhere near "the same question reworded".
+    candidates = [_memory("related", [1.0, 1.0])]
+
+    assert matcher.find_matches([1.0, 0.0], candidates) == ()
+    assert (
+        len(
+            matcher.find_matches(
+                [1.0, 0.0],
+                candidates,
+                threshold=AnswerSimilarityMatcher.DEFAULT_RELEVANCE_THRESHOLD,
+            )
+        )
+        == 1
+    )
+
+
+def test_the_relevance_bar_is_looser_than_the_re_ask_bar():
+    """They answer different questions; collapsing them would either
+    surface nothing or suppress questions never asked."""
+    assert (
+        AnswerSimilarityMatcher.DEFAULT_RELEVANCE_THRESHOLD
+        < AnswerSimilarityMatcher.DEFAULT_THRESHOLD
+    )

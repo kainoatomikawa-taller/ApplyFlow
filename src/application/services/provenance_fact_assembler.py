@@ -55,11 +55,7 @@ class ProvenanceFactAssembler:
 
         answer_memories = await self._answer_memory_repository.list_by_user_id(user_id)
         answer_facts = tuple(
-            ProvenanceBackedFact(
-                text=f"Asked '{memory.question_text}', answered: {memory.answer_text}",
-                source=memory.source,
-            )
-            for memory in answer_memories
+            memory.as_provenance_backed_fact() for memory in answer_memories
         )
 
         return facts + answer_facts

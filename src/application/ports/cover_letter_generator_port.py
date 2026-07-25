@@ -26,6 +26,7 @@ class CoverLetterGeneratorPort(ABC):
         company: str,
         requirements: tuple[str, ...],
         facts: tuple[str, ...],
+        relevant_answers: tuple[str, ...] = (),
     ) -> str:
         """Return a plain-text cover letter drawn only from `facts` (the
         candidate's provenance-backed facts, already flattened to
@@ -35,7 +36,18 @@ class CoverLetterGeneratorPort(ABC):
         drops whole lines. `requirements` guides which of the candidate's
         real facts to foreground — never what to claim: a requirement
         `facts` doesn't cover must go unmentioned, not be asserted or
-        hedged into an implication. Raises
-        `src.application.exceptions.ExternalServiceError` if the call
+        hedged into an implication.
+
+        `relevant_answers` is the subset of `facts` that came from what the
+        candidate said in their own words and that this job asked about (see
+        `RelevantAnswerSelector`) — the material most worth building the
+        letter around, since it is specific and already phrased the way the
+        candidate would phrase it. It is a *subset*, never a substitute:
+        everything in it is also in `facts`, so an implementation that
+        ignores it still writes only attested claims, and one that leans on
+        it gains no license to assert anything more. Empty means nothing on
+        file was especially relevant, which is normal.
+
+        Raises `src.application.exceptions.ExternalServiceError` if the call
         fails or returns an empty response.
         """

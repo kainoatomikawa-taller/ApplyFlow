@@ -15,8 +15,19 @@ It shares the resume flow's attestation rule too (`UnattestedGenerationError`
 when no surviving line traces to a candidate fact): a letter of pure
 salutation and enthusiasm passes the guard while saying nothing about the
 candidate, and handing that back as finished work would be the same failure
-in a different shape. ATS-safe formatting is not shared — that is a resume
-concern, since a cover letter is not what a parser reads for fields.
+in a different shape. It shares `normalize_plain_text` as well, so stray
+markdown never reaches a reader — but not `drop_empty_sections`, since a
+letter has no section headings to hollow out.
+
+Where it diverges from the resume flow is answer reuse. Both documents are
+validated against the candidate's remembered answers, but only the letter is
+*built* from them: `RelevantAnswerSelector` picks the few this job actually
+asked about and they are handed to the generator as the material to work
+from. That is the difference between a letter of dated job entries and one
+that says something specific in the candidate's own voice. The selection
+narrows the prompt only — the guard still validates against every attested
+fact, so an answer being judged off-topic can never make a true claim
+unsupportable.
 """
 
 from __future__ import annotations
@@ -31,8 +42,10 @@ from src.application.exceptions import UnattestedGenerationError
 from src.application.ports.cover_letter_generator_port import CoverLetterGeneratorPort
 from src.application.services.generation_guard_audit import GenerationGuardAudit
 from src.application.services.provenance_fact_assembler import ProvenanceFactAssembler
+from src.application.services.relevant_answer_selector import RelevantAnswerSelector
 from src.domain.exceptions import JobPostingNotFoundError
 from src.domain.repositories.job_posting_repository import JobPostingRepository
+from src.domain.services.ats_safe_text_formatter import AtsSafeTextFormatter
 from src.domain.services.provenance_guard import ProvenanceGuard
 from src.domain.services.requirement_classifier import RequirementClassifier
 from src.domain.value_objects.job_requirements import JobRequirements
@@ -44,16 +57,24 @@ class GenerateCoverLetter:
         job_posting_repository: JobPostingRepository,
         fact_assembler: ProvenanceFactAssembler,
         generator: CoverLetterGeneratorPort,
+        answer_selector: RelevantAnswerSelector | None = None,
         guard: ProvenanceGuard | None = None,
         classifier: RequirementClassifier | None = None,
         audit: GenerationGuardAudit | None = None,
+        formatter: AtsSafeTextFormatter | None = None,
     ) -> None:
         self._job_posting_repository = job_posting_repository
         self._fact_assembler = fact_assembler
         self._generator = generator
+        # Optional: answer highlighting needs an embedding provider, and a
+        # letter is still writable without it — the full fact corpus is
+        # always there. Absent a selector, nothing is foregrounded and the
+        # generator is told so explicitly.
+        self._answer_selector = answer_selector
         self._guard = guard or ProvenanceGuard()
         self._classifier = classifier or RequirementClassifier()
         self._audit = audit or GenerationGuardAudit()
+        self._formatter = formatter or AtsSafeTextFormatter()
 
     async def execute(self, dto: GenerateCoverLetterInput) -> GuardedDocumentOutput:
         posting = await self._job_posting_repository.get_by_id(dto.job_posting_id)
@@ -69,15 +90,22 @@ class GenerateCoverLetter:
             item.description for item in (*classification.hard, *classification.soft)
         )
 
+        relevant_answers = await self._select_relevant_answers(
+            user_id=dto.user_id,
+            job_title=posting.title,
+            requirements=requirements,
+        )
+
         draft = await self._generator.generate(
             job_title=posting.title,
             company=posting.company,
             requirements=requirements,
             facts=tuple(fact.text for fact in facts),
+            relevant_answers=relevant_answers,
         )
 
         guarded = self._guard.enforce(
-            draft,
+            self._formatter.normalize_plain_text(draft),
             facts=facts,
             context_terms=tuple(
                 term
@@ -110,3 +138,24 @@ class GenerateCoverLetter:
                 for violation in guarded.violations
             ],
         )
+
+    async def _select_relevant_answers(
+        self, *, user_id: str, job_title: str, requirements: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        """The remembered answers this job asked about, as plain strings for
+        the generator.
+
+        The relevance query is the job's own words — its title plus the
+        requirements it lists — because that is what the letter has to speak
+        to. Note this is the posting's text used as a *search query*, not as
+        evidence: it selects among the candidate's real answers and never
+        becomes one (see `ProvenanceGuard` on why requirement text is kept
+        out of the guard's corpus).
+        """
+        if self._answer_selector is None:
+            return ()
+        selected = await self._answer_selector.select(
+            user_id=user_id,
+            query=" ".join((job_title, *requirements)),
+        )
+        return tuple(fact.text for fact in selected)

@@ -18,6 +18,7 @@ from src.application.dtos.auth_dtos import AuthenticatedUserDTO
 from src.application.exceptions import AuthenticationError
 from src.application.ports.auth_verifier_port import AuthVerifierPort
 from src.application.services.provenance_fact_assembler import ProvenanceFactAssembler
+from src.application.services.relevant_answer_selector import RelevantAnswerSelector
 from src.application.use_cases.analyze_job_application import (
     AnalyzeJobApplication,
 )
@@ -30,6 +31,7 @@ from src.application.use_cases.create_job_application import (
 from src.application.use_cases.detect_job_requirement_gaps import (
     DetectJobRequirementGaps,
 )
+from src.application.use_cases.generate_cover_letter import GenerateCoverLetter
 from src.application.use_cases.generate_gap_resolution_questions import (
     GenerateGapResolutionQuestions,
 )
@@ -63,6 +65,7 @@ from src.infrastructure.llm.anthropic_client import AnthropicLlmClient
 from src.infrastructure.llm.langchain_resume_analyzer import (
     LangChainResumeAnalyzer,
 )
+from src.infrastructure.llm.llm_cover_letter_generator import LlmCoverLetterGenerator
 from src.infrastructure.llm.llm_gap_resolution_question_generator import (
     LlmGapResolutionQuestionGenerator,
 )
@@ -285,6 +288,37 @@ def get_generate_tailored_resume_use_case(
         job_posting_repository=job_posting_repository,
         fact_assembler=fact_assembler,
         generator=LlmTailoredResumeGenerator(AnthropicLlmClient(get_settings())),
+    )
+
+
+def _relevant_answer_selector(
+    answer_memory_repository: SqlAlchemyAnswerMemoryRepository = Depends(
+        _answer_memory_repository
+    ),
+) -> RelevantAnswerSelector:
+    return RelevantAnswerSelector(
+        answer_memory_repository=answer_memory_repository,
+        embedding_client=OpenAiEmbeddingClient(get_settings()),
+    )
+
+
+def get_generate_cover_letter_use_case(
+    job_posting_repository: SqlAlchemyJobPostingRepository = Depends(
+        _job_posting_repository
+    ),
+    fact_assembler: ProvenanceFactAssembler = Depends(_provenance_fact_assembler),
+    answer_selector: RelevantAnswerSelector = Depends(_relevant_answer_selector),
+) -> GenerateCoverLetter:
+    """Same shape as the resume factory: the generator and the answer
+    selector are the only collaborators that reach outside, while the guard,
+    the formatter, and the audit recorder are pure defaults the use case
+    builds itself — so no wiring mistake here can produce an unguarded
+    letter."""
+    return GenerateCoverLetter(
+        job_posting_repository=job_posting_repository,
+        fact_assembler=fact_assembler,
+        generator=LlmCoverLetterGenerator(AnthropicLlmClient(get_settings())),
+        answer_selector=answer_selector,
     )
 
 

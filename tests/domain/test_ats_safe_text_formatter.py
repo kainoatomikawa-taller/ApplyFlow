@@ -1,4 +1,4 @@
-"""Tests for AtsSafeResumeFormatter — the two formatting passes that keep a
+"""Tests for AtsSafeTextFormatter — the two formatting passes that keep a
 generated resume parseable and, after guarding, coherent.
 
 Split by pass: what `normalize_plain_text` has to flatten before the guard
@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import pytest
 
-from src.domain.services.ats_safe_resume_formatter import AtsSafeResumeFormatter
+from src.domain.services.ats_safe_text_formatter import AtsSafeTextFormatter
 
 
 @pytest.fixture
-def formatter() -> AtsSafeResumeFormatter:
-    return AtsSafeResumeFormatter()
+def formatter() -> AtsSafeTextFormatter:
+    return AtsSafeTextFormatter()
 
 
 # ---- normalize_plain_text ---------------------------------------------------

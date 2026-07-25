@@ -256,3 +256,133 @@ async def test_the_resume_prompt_asks_for_role_relevant_ordering():
     await _generate(LlmTailoredResumeGenerator(client))
 
     assert "Lead with what this posting asks for" in (client.calls[0][2] or "")
+
+
+# ---- cover letter: strong tier, answer reuse, tone --------------------------
+
+
+@pytest.mark.asyncio
+async def test_cover_letter_generation_reaches_the_configured_strong_model():
+    """The whole path, not just the tier table: the adapter picks
+    COVER_LETTER_WRITING, TASK_TYPE_TIERS maps that to STRONG, and the client
+    resolves STRONG to ANTHROPIC_MODEL_STRONG."""
+    client = _anthropic_client(
+        anthropic_model_cheap="cheap-test-model",
+        anthropic_model_strong="strong-test-model",
+    )
+    mock_create = _mock_sdk(client, text="Dear Hiring Manager,")
+
+    await _generate(LlmCoverLetterGenerator(client))
+
+    _, kwargs = mock_create.await_args
+    assert kwargs["model"] == "strong-test-model"
+
+
+@pytest.mark.asyncio
+async def test_cover_letter_generation_uses_sonnet_by_default():
+    client = _anthropic_client()
+    mock_create = _mock_sdk(client, text="Dear Hiring Manager,")
+
+    await _generate(LlmCoverLetterGenerator(client))
+
+    _, kwargs = mock_create.await_args
+    assert kwargs["model"] == "claude-sonnet-5"
+
+
+@pytest.mark.asyncio
+async def test_the_cover_letter_tier_mapping_is_the_strong_one():
+    assert TASK_TYPE_TIERS[LlmTaskType.COVER_LETTER_WRITING] is LlmModelTier.STRONG
+
+
+@pytest.mark.asyncio
+async def test_relevant_answers_reach_the_prompt_as_their_own_labeled_block():
+    client = FakeLlmClient("draft")
+
+    await LlmCoverLetterGenerator(client).generate(
+        job_title="Senior Platform Engineer",
+        company="Globex",
+        requirements=_REQUIREMENTS,
+        facts=_FACTS,
+        relevant_answers=("Asked 'Have you led a team?', answered: I led five.",),
+    )
+
+    prompt = client.calls[0][0]
+    assert "THE CANDIDATE'S OWN ANSWERS" in prompt
+    assert "Asked 'Have you led a team?', answered: I led five." in prompt
+
+
+@pytest.mark.asyncio
+async def test_the_answers_block_says_they_are_already_among_the_facts():
+    """The block is emphasis, not extra permission — the prompt says so, so
+    a model cannot read it as a second, looser source."""
+    client = FakeLlmClient("draft")
+
+    await LlmCoverLetterGenerator(client).generate(
+        job_title="Senior Platform Engineer",
+        company="Globex",
+        requirements=(),
+        facts=_FACTS,
+        relevant_answers=("Asked 'Q', answered: A",),
+    )
+
+    assert "already included in the facts above" in client.calls[0][0]
+
+
+@pytest.mark.asyncio
+async def test_with_no_relevant_answers_the_prompt_says_so_explicitly():
+    """An absent section would invite the model to supply the specificity
+    the answers would have carried."""
+    client = FakeLlmClient("draft")
+
+    await _generate(LlmCoverLetterGenerator(client))
+
+    prompt = client.calls[0][0]
+    assert "THE CANDIDATE'S OWN ANSWERS" in prompt
+    assert "none especially relevant; write from the facts alone" in prompt
+
+
+@pytest.mark.asyncio
+async def test_the_letter_prompt_forbids_inventing_an_anecdote_in_place_of_answers():
+    client = FakeLlmClient("draft")
+
+    await _generate(LlmCoverLetterGenerator(client))
+
+    system = " ".join((client.calls[0][2] or "").split())
+    assert "Never invent the kind of specific anecdote an answer would have" in system
+
+
+@pytest.mark.asyncio
+async def test_the_letter_prompt_requires_keeping_an_answers_wording_and_scope():
+    client = FakeLlmClient("draft")
+
+    await _generate(LlmCoverLetterGenerator(client))
+
+    system = " ".join((client.calls[0][2] or "").split())
+    assert "Keep their wording and their scope" in system
+    assert "do not upgrade it" in system
+
+
+@pytest.mark.asyncio
+async def test_the_letter_prompt_demands_a_professional_role_specific_tone():
+    client = FakeLlmClient("draft")
+
+    await _generate(LlmCoverLetterGenerator(client))
+
+    system = " ".join((client.calls[0][2] or "").split())
+    assert "Address the role by title and the company by name" in system
+    assert "could be sent to any employer is worthless" in system
+    assert "No gushing, no superlatives, no buzzwords" in system
+    assert "keen interest" in system  # named as a phrase to avoid
+    assert "do not discuss salary" in system
+
+
+@pytest.mark.asyncio
+async def test_the_letter_prompt_asks_for_plain_text_with_a_standard_open_and_close():
+    client = FakeLlmClient("draft")
+
+    await _generate(LlmCoverLetterGenerator(client))
+
+    system = " ".join((client.calls[0][2] or "").split())
+    assert "Dear Hiring Manager," in system
+    assert "Sincerely," in system
+    assert "No markdown" in system

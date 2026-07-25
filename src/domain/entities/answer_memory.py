@@ -26,6 +26,7 @@ from datetime import UTC, datetime
 from typing import ClassVar
 
 from src.domain.exceptions import InvalidValueError
+from src.domain.value_objects.provenance_backed_fact import ProvenanceBackedFact
 from src.domain.value_objects.provenance_source import ProvenanceSource
 
 
@@ -68,3 +69,22 @@ class AnswerMemory:
                 "AnswerMemory must be tagged with ProvenanceSource.ANSWER — "
                 f"got '{self.source}'."
             )
+
+    # ---- Behaviors -----------------------------------------------------------
+
+    def as_provenance_backed_fact(self) -> ProvenanceBackedFact:
+        """Render this answer as a fact generated output may be checked
+        against (see `ProvenanceGuard`).
+
+        The wording lives here rather than at each call site because a
+        remembered answer reaches generation by two routes — the full
+        corpus (`ProvenanceFactAssembler`) and the per-job relevance
+        selection (`RelevantAnswerSelector`) — and the same answer must read
+        the same way down both. Keeping the question alongside the answer
+        matters: "five engineers" is only interpretable next to what was
+        asked.
+        """
+        return ProvenanceBackedFact(
+            text=f"Asked '{self.question_text}', answered: {self.answer_text}",
+            source=self.source,
+        )

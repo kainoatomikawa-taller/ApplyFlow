@@ -114,6 +114,9 @@ class RecordingGenerator:
         self.company: str | None = None
         self.requirements: tuple[str, ...] = ()
         self.facts: tuple[str, ...] = ()
+        # Only the cover-letter port takes highlighted answers; the resume
+        # port never passes them, so this stays empty in that flow.
+        self.relevant_answers: tuple[str, ...] = ()
 
     async def generate(
         self,
@@ -122,11 +125,13 @@ class RecordingGenerator:
         company: str,
         requirements: tuple[str, ...],
         facts: tuple[str, ...],
+        relevant_answers: tuple[str, ...] = (),
     ) -> str:
         self.job_title = job_title
         self.company = company
         self.requirements = requirements
         self.facts = facts
+        self.relevant_answers = relevant_answers
         return self._draft
 
 
