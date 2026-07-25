@@ -1,5 +1,5 @@
 """CandidateFactExtractor — a pure domain service that turns a
-`UserProfile` into a flat list of plain-language fact strings.
+`UserProfile` into plain-language fact statements.
 
 This is the profile-side half of the fact base `DetectJobRequirementGaps`
 checks a job's requirements against (the other half is a candidate's
@@ -11,15 +11,42 @@ placeholder. That keeps every fact handed to the LLM-driven gap detector
 traceable to something the candidate's data actually says, per the
 "never fabricate a fact" contract `ProvenanceSource` documents for
 downstream generation.
+
+Two views of that same profile data
+-----------------------------------
+`extract` answers "what is true about this candidate", as plain strings,
+for judging fit. `extract_provenance_backed` answers "what may we
+*assert* about this candidate, and on whose authority", as
+`ProvenanceBackedFact`s, for `ProvenanceGuard` to validate generated
+output against. They differ in two deliberate ways:
+
+- The provenance-backed view includes contact details, address, links,
+  and education, because a tailored resume has to be able to state them
+  and the guard would otherwise strip its own header. Fit judging doesn't
+  need them, so `extract` leaves them out as noise.
+- It excludes what carries no provenance to cite. `highest_degree` and
+  `clearance_level` are scalar fields with no `*_source` tag of their own
+  in the data model (unlike `work_authorization`, education, and skills),
+  so nothing can honestly vouch for them — a resume's degree claim has to
+  come from a real `EducationEntry` instead. It also excludes the derived
+  "N years of professional work experience" total: it is computed here,
+  not stated by any resume, form, or answer, so tagging it with one of
+  the three sources would be a small fabrication of exactly the kind this
+  module exists to prevent.
 """
 
 from __future__ import annotations
 
 from datetime import date
 
+from src.domain.entities.education_entry import EducationEntry
+from src.domain.entities.skill import Skill
 from src.domain.entities.user_profile import UserProfile
+from src.domain.entities.work_history_entry import WorkHistoryEntry
 from src.domain.value_objects.clearance_level import ClearanceLevel
 from src.domain.value_objects.degree_level import DegreeLevel
+from src.domain.value_objects.provenance_backed_fact import ProvenanceBackedFact
+from src.domain.value_objects.provenance_source import ProvenanceSource
 from src.domain.value_objects.work_authorization_status import (
     WorkAuthorizationStatus,
 )
@@ -65,6 +92,29 @@ def _total_experience_years(profile: UserProfile, *, as_of: date) -> int | None:
     return total_days // 365
 
 
+def _work_history_text(entry: WorkHistoryEntry) -> str:
+    end = "present" if entry.end_date is None else entry.end_date.isoformat()
+    span = f"{entry.start_date.isoformat()} to {end}"
+    return f"Worked as {entry.job_title} at {entry.company_name} ({span})"
+
+
+def _skill_text(skill: Skill) -> str:
+    detail = skill.name
+    if skill.years_of_experience is not None:
+        detail += f" ({skill.years_of_experience} years)"
+    return f"Skill: {detail}"
+
+
+def _education_text(entry: EducationEntry) -> str:
+    text = f"Studied {entry.degree}"
+    if entry.field_of_study:
+        text += f" in {entry.field_of_study}"
+    text += f" at {entry.institution_name}"
+    if entry.end_date is not None:
+        text += f" (completed {entry.end_date.isoformat()})"
+    return text
+
+
 class CandidateFactExtractor:
     """Extracts every stated fact on a `UserProfile` as a plain-language
     string, suitable for handing to an LLM as ground truth about a
@@ -90,20 +140,103 @@ class CandidateFactExtractor:
         if total_years is not None:
             facts.append(f"Has {total_years} years of professional work experience")
 
-        for entry in profile.work_history:
-            end = "present" if entry.end_date is None else entry.end_date.isoformat()
-            span = f"{entry.start_date.isoformat()} to {end}"
-            facts.append(
-                f"Worked as {entry.job_title} at {entry.company_name} ({span})"
-            )
-
-        for skill in profile.skills:
-            detail = skill.name
-            if skill.years_of_experience is not None:
-                detail += f" ({skill.years_of_experience} years)"
-            facts.append(f"Skill: {detail}")
+        facts.extend(_work_history_text(entry) for entry in profile.work_history)
+        facts.extend(_skill_text(skill) for skill in profile.skills)
 
         if profile.address.country:
             facts.append(f"Located in {profile.address.country}")
+
+        return tuple(facts)
+
+    def extract_provenance_backed(
+        self, profile: UserProfile
+    ) -> tuple[ProvenanceBackedFact, ...]:
+        """Every fact on `profile` that carries a `ProvenanceSource`,
+        tagged with it — the ground truth `ProvenanceGuard` checks
+        generated output against.
+
+        Each fact is attributed to the source the data model actually
+        records for it: the contact bundle's `contact_source`, the
+        address/links groups' own tags, and the per-row `source` on work
+        history, education, skills, and work authorization. Nothing is
+        attributed by assumption, and anything the model can't attribute
+        is left out entirely (see the module docstring).
+
+        No `as_of` parameter, deliberately: a provenance-backed fact is
+        something the candidate stated, so none of it depends on today's
+        date.
+        """
+        facts: list[ProvenanceBackedFact] = []
+
+        def add(text: str, source: ProvenanceSource) -> None:
+            facts.append(ProvenanceBackedFact(text=text, source=source))
+
+        contact = profile.contact_source
+        add(f"Name: {profile.full_name}", contact)
+        add(f"Email: {profile.email}", contact)
+        if profile.phone:
+            add(f"Phone: {profile.phone}", contact)
+        if profile.headline:
+            add(f"Headline: {profile.headline}", contact)
+        if profile.location:
+            add(f"Location: {profile.location}", contact)
+
+        if profile.address_source is not None:
+            address_parts = [
+                part
+                for part in (
+                    profile.address.street_address,
+                    profile.address.city,
+                    profile.address.state_or_region,
+                    profile.address.postal_code,
+                    profile.address.country,
+                )
+                if part
+            ]
+            if address_parts:
+                add(f"Address: {', '.join(address_parts)}", profile.address_source)
+
+        if profile.links_source is not None:
+            for label, url in (
+                ("Portfolio", profile.links.portfolio_url),
+                ("LinkedIn", profile.links.linkedin_url),
+                ("GitHub", profile.links.github_url),
+            ):
+                if url:
+                    add(f"{label}: {url}", profile.links_source)
+
+        if profile.work_authorization is not None:
+            status_label = _WORK_AUTHORIZATION_LABELS[profile.work_authorization.status]
+            add(
+                f"Work authorization: {status_label}",
+                profile.work_authorization.source,
+            )
+
+        for entry in profile.work_history:
+            add(_work_history_text(entry), entry.source)
+            if entry.location:
+                add(
+                    f"{entry.job_title} at {entry.company_name} "
+                    f"was based in {entry.location}",
+                    entry.source,
+                )
+            if entry.description:
+                add(
+                    f"{entry.job_title} at {entry.company_name}: "
+                    f"{entry.description}",
+                    entry.source,
+                )
+
+        for education in profile.education:
+            add(_education_text(education), education.source)
+            if education.description:
+                add(
+                    f"{education.degree} at {education.institution_name}: "
+                    f"{education.description}",
+                    education.source,
+                )
+
+        for skill in profile.skills:
+            add(_skill_text(skill), skill.source)
 
         return tuple(facts)
