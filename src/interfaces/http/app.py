@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.infrastructure.persistence.database import dispose_engine
 from src.interfaces.http.controllers import (
+    application_autofill_controller,
     application_controller,
     application_document_controller,
     cover_letter_controller,
@@ -25,11 +26,17 @@ from src.interfaces.http.controllers import (
     resume_controller,
     tailored_resume_controller,
 )
+from src.interfaces.http.dependencies import shutdown_portal_automation
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
+    # Close the portal automation first: a parked review holds a browser
+    # context, and a browser process outliving the API is what takes a host
+    # down. It needs no database, so ordering it before the pool teardown
+    # costs nothing.
+    await shutdown_portal_automation()
     # Release every pooled DB connection on shutdown instead of leaking
     # them until the process exits.
     await dispose_engine()
@@ -61,6 +68,10 @@ def create_app() -> FastAPI:
     app.include_router(cover_letter_controller.router)
     app.include_router(document_revision_controller.router)
     app.include_router(application_document_controller.router)
+    # Two routers from one controller: the autofill lives under the posting it
+    # is for, while a parked review is its own resource with its own lifetime.
+    app.include_router(application_autofill_controller.autofill_router)
+    app.include_router(application_autofill_controller.review_router)
     return app
 
 

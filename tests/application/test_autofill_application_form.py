@@ -7,7 +7,6 @@ branches.
 """
 
 from datetime import date
-from types import TracebackType
 
 import pytest
 
@@ -23,11 +22,12 @@ from src.application.exceptions import (
     UnsupportedAtsFormError,
 )
 from src.application.ports.browser_automation_port import (
-    BrowserAutomationPort,
-    BrowserSessionPort,
     FormField,
     FormFieldKind,
     FormFieldOption,
+)
+from src.application.services.application_review_sessions import (
+    ApplicationReviewSessions,
 )
 from src.application.services.ats_form_field_planner import SurfaceReason
 from src.application.use_cases.autofill_application_form import AutofillApplicationForm
@@ -42,13 +42,17 @@ from src.domain.value_objects.eeo_categories import GenderIdentity
 from src.domain.value_objects.eeo_self_identification import EeoSelfIdentification
 from src.domain.value_objects.email_address import EmailAddress
 from src.domain.value_objects.generated_document_kind import GeneratedDocumentKind
+from src.domain.value_objects.page_signals import PageSignals
 from src.domain.value_objects.profile_links import ProfileLinks
 from src.domain.value_objects.provenance_source import ProvenanceSource
 from src.domain.value_objects.work_authorization import WorkAuthorization
 from src.domain.value_objects.work_authorization_status import WorkAuthorizationStatus
 from tests.application.conftest import (
+    FakeBrowser,
+    FakeBrowserSession,
     InMemoryApplicationDocumentRepository,
     RecordingPdfRenderer,
+    SequentialIdGenerator,
     StubJobPostingRepository,
     StubProfileRepository,
 )
@@ -63,97 +67,6 @@ ASHBY_URL = "https://jobs.ashbyhq.com/globex/1a2b3c4d"
 # ---- Fakes -------------------------------------------------------------------
 
 
-class FakeBrowserSession(BrowserSessionPort):
-    """Records every write instead of performing one, and can be told to
-    fail a specific handle so per-field error handling is exercised without
-    a real portal."""
-
-    def __init__(
-        self,
-        fields: tuple[FormField, ...],
-        *,
-        current_url: str,
-        failures: dict[str, Exception] | None = None,
-        screenshot_error: Exception | None = None,
-    ) -> None:
-        self._fields = fields
-        self._current_url = current_url
-        self._failures = failures or {}
-        self._screenshot_error = screenshot_error
-        self.filled: list[tuple[str, str]] = []
-        self.attached: list[tuple[str, str, bytes]] = []
-        self.read_count = 0
-        self.screenshots = 0
-        self.closed = False
-
-    @property
-    def current_url(self) -> str:
-        return self._current_url
-
-    async def read_fields(self) -> tuple[FormField, ...]:
-        self.read_count += 1
-        return self._fields
-
-    async def fill(self, handle: str, value: str) -> None:
-        failure = self._failures.get(handle)
-        if failure is not None:
-            raise failure
-        self.filled.append((handle, value))
-
-    async def attach_file(self, handle: str, *, filename: str, content: bytes) -> None:
-        failure = self._failures.get(handle)
-        if failure is not None:
-            raise failure
-        self.attached.append((handle, filename, content))
-
-    async def screenshot(self) -> bytes:
-        if self._screenshot_error is not None:
-            raise self._screenshot_error
-        self.screenshots += 1
-        return b"\x89PNG fake"
-
-    async def close(self) -> None:
-        self.closed = True
-
-    async def __aenter__(self) -> "FakeBrowserSession":
-        return self
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None:
-        await self.close()
-
-    # Convenience for assertions.
-    def value_for(self, handle: str) -> str | None:
-        return next((v for h, v in self.filled if h == handle), None)
-
-
-class FakeBrowser(BrowserAutomationPort):
-    def __init__(
-        self,
-        session: FakeBrowserSession | None = None,
-        *,
-        open_error: Exception | None = None,
-    ) -> None:
-        self.session = session
-        self._open_error = open_error
-        self.opened: list[str] = []
-        self.shutdowns = 0
-
-    async def open(self, url: str) -> BrowserSessionPort:
-        self.opened.append(url)
-        if self._open_error is not None:
-            raise self._open_error
-        assert self.session is not None
-        return self.session
-
-    async def shutdown(self) -> None:
-        self.shutdowns += 1
-
-
 def build_use_case(
     *,
     session: FakeBrowserSession | None = None,
@@ -161,6 +74,7 @@ def build_use_case(
     profile: UserProfile | None = None,
     documents: list[ApplicationDocument] | None = None,
     browser: FakeBrowser | None = None,
+    review_sessions: ApplicationReviewSessions | None = None,
 ) -> tuple[AutofillApplicationForm, FakeBrowser, RecordingPdfRenderer]:
     resolved_browser = browser or FakeBrowser(session)
     renderer = RecordingPdfRenderer()
@@ -170,6 +84,7 @@ def build_use_case(
         InMemoryApplicationDocumentRepository(documents),
         resolved_browser,
         renderer,
+        review_sessions or ApplicationReviewSessions(SequentialIdGenerator("review")),
     )
     return use_case, resolved_browser, renderer
 
@@ -469,13 +384,19 @@ async def test_a_cover_letter_textarea_receives_the_stored_text(
     assert session.value_for("f-cover") == "Dear Globex team,\n..."
 
 
-async def test_the_form_is_read_once_and_the_session_is_closed(
+async def test_the_form_is_read_once_and_the_session_is_parked_for_review(
     profile, posting, documents
 ):
-    _, session, _ = await run_greenhouse(profile, posting, documents)
+    """The filled form stays open. The candidate is about to look at it and
+    then submit through it, and re-opening the portal to send what was
+    already typed would mean filling a real application twice."""
+    output, session, _ = await run_greenhouse(profile, posting, documents)
 
     assert session.read_count == 1
-    assert session.closed is True
+    assert session.closed is False
+    assert output.review_session_id is not None
+    assert output.review_expires_at is not None
+    assert output.can_be_submitted_here is True
 
 
 async def test_derived_values_are_flagged_in_the_report(profile, posting, documents):
@@ -1079,8 +1000,13 @@ async def test_a_missing_profile_is_refused_before_a_browser_opens(posting):
 async def test_a_form_that_presented_no_fields_is_an_empty_report(
     profile, posting, documents
 ):
-    """A login wall or an interstitial — not an error (see
-    `read_fields`), and nothing to fill."""
+    """A dead posting or an interstitial — not an error (see `read_fields`),
+    and nothing to fill.
+
+    Nothing to review either, so no browser is left parked: there is no
+    field to answer and nothing to submit, and holding a session open for
+    fifteen minutes on the candidate's behalf would buy them nothing.
+    """
     session = FakeBrowserSession((), current_url=GREENHOUSE_URL)
     use_case, _, _ = build_use_case(
         session=session, posting=posting, profile=profile, documents=documents
@@ -1092,6 +1018,8 @@ async def test_a_form_that_presented_no_fields_is_an_empty_report(
 
     assert output.fields == []
     assert output.fields_needing_review == []
+    assert output.review_session_id is None
+    assert output.can_be_submitted_here is False
     assert session.closed is True
 
 
@@ -1281,3 +1209,198 @@ async def test_a_candidate_who_needs_sponsorship_gets_the_truthful_answers(
     )
 
     assert dict(session.filled) == {"f-auth": "No", "f-sponsorship": "Yes"}
+
+
+# ---- Hard boundaries and hand-off --------------------------------------------
+
+
+LOGIN_WALL_SIGNALS = PageSignals(
+    url=GREENHOUSE_URL,
+    visible_text="Please sign in to continue to the application.",
+)
+
+CAPTCHA_SIGNALS = PageSignals(
+    url=GREENHOUSE_URL,
+    visible_text="Apply for Senior Platform Engineer",
+    frame_urls=("https://www.google.com/recaptcha/api2/anchor?k=6Lc",),
+)
+
+SIGNATURE_SIGNALS = PageSignals(
+    url=GREENHOUSE_URL,
+    visible_text="Apply for Senior Platform Engineer",
+    element_markers=("application-form", "signature-pad"),
+)
+
+
+async def run_with_signals(profile, posting, documents, signals: PageSignals):
+    session = FakeBrowserSession(
+        greenhouse_form(), current_url=GREENHOUSE_URL, signals=signals
+    )
+    use_case, _, _ = build_use_case(
+        session=session, posting=posting, profile=profile, documents=documents
+    )
+    output = await use_case.execute(
+        AutofillApplicationFormInput(user_id="user-1", job_posting_id="job-posting-1")
+    )
+    return output, session
+
+
+async def test_a_login_wall_stops_the_pass_before_anything_is_typed(
+    profile, posting, documents
+):
+    """The page behind a sign-in prompt is not the application form. Filling
+    it would type the candidate's real details into a login box for an
+    account that may not exist."""
+    output, session = await run_with_signals(
+        profile, posting, documents, LOGIN_WALL_SIGNALS
+    )
+
+    assert session.filled == []
+    assert session.attached == []
+    assert output.fields == []
+    assert [boundary.kind for boundary in output.boundaries] == ["login"]
+    assert output.boundaries[0].stopped_autofill is True
+    assert "sign in" in output.boundaries[0].evidence
+
+
+async def test_a_login_wall_hands_off_with_an_instruction_and_no_session(
+    profile, posting, documents
+):
+    """Nothing to review and nothing to submit, so no browser is parked —
+    and the candidate is told what to do rather than shown an error."""
+    output, session = await run_with_signals(
+        profile, posting, documents, LOGIN_WALL_SIGNALS
+    )
+
+    assert output.review_session_id is None
+    assert output.requires_handoff is True
+    assert output.can_be_submitted_here is False
+    assert "sign in" in output.boundaries[0].instruction.casefold()
+    assert session.closed is True
+    # The candidate still gets to see what ApplyFlow saw.
+    assert output.screenshot_png is not None
+
+
+async def test_a_captcha_does_not_stop_the_form_being_filled(
+    profile, posting, documents
+):
+    """The form around a CAPTCHA is real and filling it is most of what the
+    candidate came for. What the CAPTCHA costs them is the in-app submit."""
+    output, session = await run_with_signals(
+        profile, posting, documents, CAPTCHA_SIGNALS
+    )
+
+    assert outcome_for(output, "First Name *").value == "Dana"
+    assert session.filled != []
+    assert [boundary.kind for boundary in output.boundaries] == ["captcha"]
+    assert output.boundaries[0].stopped_autofill is False
+
+
+async def test_a_captcha_leaves_the_review_open_but_blocks_submitting_here(
+    profile, posting, documents
+):
+    output, session = await run_with_signals(
+        profile, posting, documents, CAPTCHA_SIGNALS
+    )
+
+    # There is a filled form to review...
+    assert output.review_session_id is not None
+    assert session.closed is False
+    # ...and it is not going out through ApplyFlow.
+    assert output.can_be_submitted_here is False
+    assert output.boundaries[0].blocks_submission is True
+
+
+async def test_a_signature_request_is_reported_on_a_filled_form(
+    profile, posting, documents
+):
+    output, _ = await run_with_signals(
+        profile, posting, documents, SIGNATURE_SIGNALS
+    )
+
+    assert output.applied_fields != []
+    assert [boundary.kind for boundary in output.boundaries] == ["signature"]
+    assert output.can_be_submitted_here is False
+    assert "signature" in output.boundaries[0].instruction.casefold()
+
+
+async def test_an_ordinary_form_reports_no_boundary_at_all(
+    profile, posting, documents
+):
+    output, _, _ = await run_greenhouse(profile, posting, documents)
+
+    assert output.boundaries == []
+    assert output.requires_handoff is False
+    assert output.can_be_submitted_here is True
+
+
+# ---- A signature field is never filled ---------------------------------------
+
+
+def signature_form() -> tuple[FormField, ...]:
+    """The shape a signature actually takes on an ATS form: an ordinary text
+    input whose label names the candidate's own name."""
+    return (
+        form_field(
+            "First Name *",
+            handle="f-first",
+            name="job_application[first_name]",
+            required=True,
+        ),
+        form_field(
+            "Signature (type your full name)",
+            handle="f-signature",
+            name="job_application[custom][signature]",
+            required=True,
+        ),
+    )
+
+
+async def test_a_signature_field_is_surfaced_even_though_it_names_the_candidate(
+    profile, posting, documents
+):
+    """The failure this guard exists to prevent: the label reads as a request
+    for the candidate's full name, which ApplyFlow has on file and would
+    happily type — and typing someone's name into a signature box is signing
+    for them."""
+    session = FakeBrowserSession(
+        signature_form(), current_url=GREENHOUSE_URL, signals=SIGNATURE_SIGNALS
+    )
+    use_case, _, _ = build_use_case(
+        session=session, posting=posting, profile=profile, documents=documents
+    )
+
+    output = await use_case.execute(
+        AutofillApplicationFormInput(user_id="user-1", job_posting_id="job-posting-1")
+    )
+
+    signature = outcome_for(output, "Signature (type your full name)")
+    assert signature.outcome == FieldAutofillOutcome.SURFACED.value
+    assert signature.reason == SurfaceReason.REQUIRES_CANDIDATE_SIGNATURE.value
+    assert signature.value is None
+    assert session.value_for("f-signature") is None
+    # The rest of the form is still filled — a signature request is not a
+    # reason to abandon the application.
+    assert session.value_for("f-first") == "Dana"
+
+
+async def test_a_signature_field_blocks_submitting_and_stays_the_candidates_job(
+    profile, posting, documents
+):
+    session = FakeBrowserSession(
+        signature_form(), current_url=GREENHOUSE_URL, signals=SIGNATURE_SIGNALS
+    )
+    use_case, _, _ = build_use_case(
+        session=session, posting=posting, profile=profile, documents=documents
+    )
+
+    output = await use_case.execute(
+        AutofillApplicationFormInput(user_id="user-1", job_posting_id="job-posting-1")
+    )
+
+    # Required and unanswered, so the submit gate refuses it too — two
+    # independent reasons this application cannot go out unattended.
+    assert [item.label for item in output.unanswered_required_fields] == [
+        "Signature (type your full name)"
+    ]
+    assert output.can_be_submitted_here is False

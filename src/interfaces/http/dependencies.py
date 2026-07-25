@@ -9,6 +9,7 @@ application-layer types — never on infrastructure directly.
 
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 
 from fastapi import Depends, Header, HTTPException, status
@@ -17,8 +18,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.application.dtos.auth_dtos import AuthenticatedUserDTO
 from src.application.exceptions import AuthenticationError
 from src.application.ports.auth_verifier_port import AuthVerifierPort
+from src.application.ports.browser_automation_port import BrowserAutomationPort
 from src.application.services.application_document_archive import (
     ApplicationDocumentArchive,
+)
+from src.application.services.application_review_sessions import (
+    ApplicationReviewSessions,
 )
 from src.application.services.provenance_fact_assembler import ProvenanceFactAssembler
 from src.application.services.relevant_answer_selector import RelevantAnswerSelector
@@ -28,11 +33,16 @@ from src.application.use_cases.analyze_job_application import (
 from src.application.use_cases.analyze_scoring_feedback import (
     AnalyzeScoringFeedback,
 )
+from src.application.use_cases.answer_application_field import AnswerApplicationField
+from src.application.use_cases.autofill_application_form import AutofillApplicationForm
 from src.application.use_cases.create_job_application import (
     CreateJobApplication,
 )
 from src.application.use_cases.detect_job_requirement_gaps import (
     DetectJobRequirementGaps,
+)
+from src.application.use_cases.discard_application_review import (
+    DiscardApplicationReview,
 )
 from src.application.use_cases.generate_cover_letter import GenerateCoverLetter
 from src.application.use_cases.generate_gap_resolution_questions import (
@@ -62,6 +72,7 @@ from src.application.use_cases.resolve_gap_answer import ResolveGapAnswer
 from src.application.use_cases.revise_generated_document import (
     ReviseGeneratedDocument,
 )
+from src.application.use_cases.submit_application_form import SubmitApplicationForm
 from src.application.use_cases.submit_job_application import (
     SubmitJobApplication,
 )
@@ -73,6 +84,9 @@ from src.domain.services.application_ranking_service import (
     ApplicationRankingService,
 )
 from src.infrastructure.auth.supabase_jwt_verifier import SupabaseJwtVerifier
+from src.infrastructure.browser_automation.playwright_browser_automation import (
+    PlaywrightBrowserAutomation,
+)
 from src.infrastructure.config import get_settings
 from src.infrastructure.documents.ats_safe_pdf_renderer import AtsSafePdfRenderer
 from src.infrastructure.llm.anthropic_client import AnthropicLlmClient
@@ -440,6 +454,81 @@ def get_analyze_scoring_feedback_use_case(
     ),
 ) -> AnalyzeScoringFeedback:
     return AnalyzeScoringFeedback(repository=repository)
+
+
+# -- Portal autofill, review, and submit (Epic 05) ---------------------------
+#
+# The only two process-wide singletons in this module, and both have to be:
+# the harness owns one browser process shared by every session, and the
+# review registry holds the filled forms candidates are currently looking at.
+# A per-request instance of either would launch a browser per request and
+# lose every parked review the moment the response was sent.
+#
+# `@lru_cache` rather than a module global so the instance is still created
+# lazily — importing this module must not start a browser, which is what
+# would happen to every CLI command and every test that touches it.
+
+
+@lru_cache(maxsize=1)
+def get_browser_automation() -> BrowserAutomationPort:
+    """The one Chromium this process drives portals with."""
+    return PlaywrightBrowserAutomation(get_settings())
+
+
+@lru_cache(maxsize=1)
+def get_review_sessions() -> ApplicationReviewSessions:
+    """The filled application forms this process is holding open."""
+    settings = get_settings()
+    return ApplicationReviewSessions(
+        UuidIdGenerator(),
+        ttl_seconds=settings.autofill_review_ttl_seconds,
+        max_parked=settings.autofill_max_parked_reviews,
+    )
+
+
+async def shutdown_portal_automation() -> None:
+    """Close every parked review and the browser itself.
+
+    Called from the app's lifespan. Ordered deliberately: reviews first, so
+    their contexts are disposed while the browser is still alive, then the
+    browser, which is the backstop for anything that escaped.
+    """
+    await get_review_sessions().close_all()
+    await get_browser_automation().shutdown()
+
+
+def get_autofill_application_form_use_case(
+    job_posting_repository: SqlAlchemyJobPostingRepository = Depends(
+        _job_posting_repository
+    ),
+    profile_repository: SqlAlchemyProfileRepository = Depends(_profile_repository),
+    document_repository: SqlAlchemyApplicationDocumentRepository = Depends(
+        _application_document_repository
+    ),
+) -> AutofillApplicationForm:
+    """The field planner is a pure default the use case builds itself, so no
+    wiring mistake here can put a different set of mapping rules — or a
+    different sensitive-field policy — in front of a real form."""
+    return AutofillApplicationForm(
+        job_posting_repository,
+        profile_repository,
+        document_repository,
+        get_browser_automation(),
+        AtsSafePdfRenderer(),
+        get_review_sessions(),
+    )
+
+
+def get_answer_application_field_use_case() -> AnswerApplicationField:
+    return AnswerApplicationField(get_review_sessions())
+
+
+def get_submit_application_form_use_case() -> SubmitApplicationForm:
+    return SubmitApplicationForm(get_review_sessions())
+
+
+def get_discard_application_review_use_case() -> DiscardApplicationReview:
+    return DiscardApplicationReview(get_review_sessions())
 
 
 def _auth_verifier() -> AuthVerifierPort:

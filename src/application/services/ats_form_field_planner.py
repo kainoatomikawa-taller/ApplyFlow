@@ -31,6 +31,15 @@ this field but your profile is silent", "this one is yours to answer", "your
 data doesn't fit this widget". Collapsing them into one "couldn't fill it"
 would make the review step much harder to act on.
 
+A signature field is refused before anything else
+-------------------------------------------------
+The first check in `_plan_field` is `is_signature_field`, and it comes before
+recognition on purpose. The usual shape of a signature on an ATS form is a
+plain text input labelled "Signature (type your full name)" — a label the
+recognizer reads as a request for the candidate's name, which it can answer.
+Signing for someone is not an autofill decision, so the field never reaches
+the rules that would fill it.
+
 Sensitive fields take their own path
 ------------------------------------
 Work authorization, sponsorship, citizenship, visa, and EEO self-ID are
@@ -55,6 +64,7 @@ from enum import StrEnum
 
 from src.application.ports.browser_automation_port import FormField, FormFieldKind
 from src.domain.entities.user_profile import UserProfile
+from src.domain.services.application_boundary_detector import is_signature_field
 from src.domain.services.ats_field_mapper import recognize_application_field
 from src.domain.services.profile_field_values import resolve_profile_field
 from src.domain.services.sensitive_field_policy import (
@@ -189,6 +199,9 @@ class SurfaceReason(StrEnum):
     #: the field. Reported rather than truncated: a cover letter cut off
     #: mid-sentence still goes out under the candidate's name.
     VALUE_TOO_LONG = "value_too_long"
+    #: The field is where the candidate signs. Never filled, by anything,
+    #: under any circumstances — see `is_signature_field`.
+    REQUIRES_CANDIDATE_SIGNATURE = "requires_candidate_signature"
 
 
 #: The domain's refusal reasons, translated into the review vocabulary.
@@ -283,6 +296,14 @@ class AtsFormFieldPlanner:
     def _plan_field(
         self, field: FormField, *, provider: AtsProvider, profile: UserProfile
     ) -> PlannedField:
+        # Before recognition, and before anything else, because the most
+        # common signature field on an ATS form is a text input labelled
+        # "Signature (type your full name)" — which the recognizer reads as
+        # the candidate's name and would answer with it. Typing a person's
+        # name into a signature box is signing for them.
+        if is_signature_field(field.label):
+            return self._surface(field, SurfaceReason.REQUIRES_CANDIDATE_SIGNATURE)
+
         slot = recognize_application_field(self._as_question(field), provider=provider)
         if slot is None:
             return self._surface(field, SurfaceReason.UNRECOGNIZED)

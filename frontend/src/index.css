@@ -465,3 +465,95 @@ button.secondary {
 .coverage-list .uncovered {
   color: #777;
 }
+
+/* --- Autofill review (Epic 05) ------------------------------------------- */
+
+.autofill-fields {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.autofill-field {
+  border: 1px solid #e4e6ef;
+  border-left: 3px solid #cbd0e0;
+  border-radius: 6px;
+  padding: 0.6rem 0.8rem;
+}
+
+/* A field still waiting on the candidate is the one they must not miss. */
+.autofill-field.surfaced,
+.autofill-field.not_accepted,
+.autofill-field.failed {
+  border-left-color: #b45309;
+  background: #fffbf2;
+}
+
+.autofill-field-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.autofill-label {
+  font-weight: 600;
+  margin-right: auto;
+}
+
+.required-mark {
+  color: #b45309;
+}
+
+.autofill-value {
+  margin: 0.4rem 0 0;
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  background: #f7f8fc;
+  border-radius: 4px;
+  padding: 0.4rem 0.5rem;
+  max-height: 9rem;
+  overflow: auto;
+}
+
+.autofill-answer {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  margin-top: 0.5rem;
+}
+
+.autofill-answer textarea {
+  flex: 1;
+}
+
+.autofill-confirm {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  margin-top: 0.5rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.autofill-submit {
+  margin-top: 1rem;
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.autofill-proof {
+  margin-top: 1rem;
+}
+
+.autofill-proof img {
+  max-width: 100%;
+  border: 1px solid #e4e6ef;
+  border-radius: 6px;
+  margin-top: 0.5rem;
+}

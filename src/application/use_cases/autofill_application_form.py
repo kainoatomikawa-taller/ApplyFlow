@@ -7,16 +7,35 @@ The flow
 1. Resolve the posting's `apply_url` to one of the three supported ATS
    platforms with `identify_ats_board`. Anything else is refused here, before
    a browser starts (`UnsupportedAtsFormError`).
-2. Read the form once. Every handle in the plan belongs to that one snapshot.
-3. Plan every field (`AtsFormFieldPlanner`) — pure, no I/O.
-4. Execute the plan field by field, and screenshot the result.
+2. Read the form once, and observe the page alongside it. Every handle in the
+   plan belongs to that one snapshot.
+3. Check for a human-only boundary (`scan_application_boundaries`). A login
+   wall stops the pass here, before anything is typed.
+4. Plan every field (`AtsFormFieldPlanner`) — pure, no I/O.
+5. Execute the plan field by field, and screenshot the result.
+6. Park the filled form for review, and hand back the report plus the id the
+   candidate will submit through.
 
-It cannot submit
-----------------
-Not by policy — by construction. `BrowserSessionPort` discovers no buttons
-and no submit inputs, so there is nothing here to press (see that port). This
-use case leaves a filled form sitting in a browser session and hands back a
-report; a human decides whether it goes.
+It does not submit
+------------------
+Nothing in this pass presses anything: it never asks the session for a
+submit control, so it holds nothing pressable. What it produces is a filled
+form and an honest account of it. Sending is a separate act, in a separate
+use case, that requires the candidate's instruction and their confirmation
+of every sensitive value (`SubmitApplicationForm`).
+
+Where a boundary stops it
+-------------------------
+A **login wall** means the page in the browser is not the application form,
+so filling it would type the candidate's details into a sign-in box. The
+pass ends with an empty field list, the boundary, and a screenshot — and no
+parked session, because there is nothing to review or submit.
+
+A **CAPTCHA** or a **signature request** does not stop the filling. The form
+around them is real and filling it is most of the value the candidate came
+for. They are reported on the pass, and they are what makes
+`can_be_submitted_here` false: the candidate finishes those in their own
+browser.
 
 Why one failed field does not fail the pass
 -------------------------------------------
@@ -36,6 +55,7 @@ the form is the remedy.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 
@@ -56,8 +76,16 @@ from src.application.ports.browser_automation_port import (
     BrowserAutomationPort,
     BrowserSessionPort,
     FormField,
+    FormFieldKind,
 )
 from src.application.ports.resume_pdf_renderer_port import ResumePdfRendererPort
+from src.application.services.application_boundary_scanner import (
+    scan_application_boundaries,
+    to_boundary_output,
+)
+from src.application.services.application_review_sessions import (
+    ApplicationReviewSessions,
+)
 from src.application.services.ats_form_field_planner import (
     AtsFormFieldPlanner,
     FieldDisposition,
@@ -72,8 +100,14 @@ from src.domain.repositories.application_document_repository import (
 )
 from src.domain.repositories.job_posting_repository import JobPostingRepository
 from src.domain.repositories.profile_repository import ProfileRepository
-from src.domain.services.ats_board_locator import identify_ats_board
+from src.domain.services.ats_board_locator import (
+    AtsBoardReference,
+    identify_ats_board,
+)
+from src.domain.value_objects.application_boundary import ApplicationBoundary
 from src.domain.value_objects.generated_document_kind import GeneratedDocumentKind
+
+logger = logging.getLogger(__name__)
 
 _NON_FILENAME_RE = re.compile(r"[^a-z0-9]+")
 
@@ -93,6 +127,7 @@ class AutofillApplicationForm:
         document_repository: ApplicationDocumentRepository,
         browser: BrowserAutomationPort,
         pdf_renderer: ResumePdfRendererPort,
+        review_sessions: ApplicationReviewSessions,
         planner: AtsFormFieldPlanner | None = None,
     ) -> None:
         self._job_posting_repository = job_posting_repository
@@ -100,6 +135,7 @@ class AutofillApplicationForm:
         self._document_repository = document_repository
         self._browser = browser
         self._pdf_renderer = pdf_renderer
+        self._review_sessions = review_sessions
         self._planner = planner or AtsFormFieldPlanner()
 
     async def execute(
@@ -119,8 +155,48 @@ class AutofillApplicationForm:
         if profile is None:
             raise ProfileNotFoundError(dto.user_id)
 
-        async with await self._browser.open(posting.apply_url) as session:
+        session = await self._browser.open(posting.apply_url)
+        # Not `async with`: a pass that fills a form leaves its session open
+        # for the candidate to review and submit through, and only the paths
+        # that produce nothing to review close it here. Every failure path
+        # closes it — a browser context nobody is reviewing is a leak.
+        parked = False
+        try:
             fields = await session.read_fields()
+            boundaries = await scan_application_boundaries(
+                session,
+                field_labels=tuple(item.label for item in fields),
+                has_password_field=any(
+                    item.kind is FormFieldKind.PASSWORD for item in fields
+                ),
+            )
+            blocking = [
+                boundary for boundary in boundaries if boundary.stops_autofill
+            ]
+            if blocking:
+                # Reported, not raised. The candidate asked what ApplyFlow
+                # could do with this form and the answer — "nothing, and here
+                # is why, and here is what you do" — is a result.
+                logger.info(
+                    "Autofill stopped at a %s boundary before filling "
+                    "anything (job_posting_id=%s).",
+                    blocking[0].kind.value,
+                    posting.id,
+                )
+                return await self._nothing_to_review(
+                    session, posting_id=posting.id, board=board, boundaries=boundaries
+                )
+
+            if not fields:
+                # The page presented no fillable field at all (see
+                # `read_fields`): a dead posting or an interstitial. There is
+                # nothing to fill, nothing to review, and nothing to submit —
+                # so no browser is held open waiting for a candidate who has
+                # nothing to do with it.
+                return await self._nothing_to_review(
+                    session, posting_id=posting.id, board=board, boundaries=boundaries
+                )
+
             planned = self._planner.plan(
                 fields, provider=board.provider, profile=profile
             )
@@ -139,13 +215,45 @@ class AutofillApplicationForm:
                 for item in planned
             ]
 
-            return ApplicationAutofillOutput(
+            review = await self._review_sessions.park(
+                user_id=dto.user_id,
                 job_posting_id=posting.id,
                 apply_url=session.current_url,
                 ats_provider=board.provider.value,
+                session=session,
                 fields=results,
                 screenshot_png=await self._capture_screenshot(session),
+                boundaries=[to_boundary_output(boundary) for boundary in boundaries],
             )
+            parked = True
+            return review.to_output()
+        finally:
+            if not parked:
+                await session.close()
+
+    async def _nothing_to_review(
+        self,
+        session: BrowserSessionPort,
+        *,
+        posting_id: str,
+        board: AtsBoardReference,
+        boundaries: tuple[ApplicationBoundary, ...],
+    ) -> ApplicationAutofillOutput:
+        """A report with no review session behind it.
+
+        Used for the two passes that produce nothing a candidate can act on
+        inside ApplyFlow: a login wall, and a page with no form on it. Both
+        still carry the screenshot, because "here is what we saw" is the
+        difference between an explanation and an assertion.
+        """
+        return ApplicationAutofillOutput(
+            job_posting_id=posting_id,
+            apply_url=session.current_url,
+            ats_provider=board.provider.value,
+            fields=[],
+            screenshot_png=await self._capture_screenshot(session),
+            boundaries=[to_boundary_output(boundary) for boundary in boundaries],
+        )
 
     # ---- Executing one planned field ----------------------------------------
 
@@ -299,6 +407,11 @@ class AutofillApplicationForm:
     ) -> AutofilledFieldOutput:
         sensitivity = item.sensitivity
         return AutofilledFieldOutput(
+            # The browser handle doubles as the field's id in the review
+            # step, so answering or confirming a field addresses the same
+            # element the plan did — and stops working the moment that
+            # element does (see `AutofilledFieldOutput.field_id`).
+            field_id=item.field.handle,
             label=item.field.label,
             kind=item.field.kind.value,
             required=item.field.required,

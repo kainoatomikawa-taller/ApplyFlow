@@ -161,3 +161,80 @@ export interface TailoredResume {
   exports: ResumeExports;
   ats_safety_violations: AtsSafetyViolation[];
 }
+
+/**
+ * A check on the application page that only the candidate can pass: a
+ * sign-in wall, a CAPTCHA, or a request for their signature.
+ *
+ * `instruction` is what to show them — it says what to do next, not merely
+ * what went wrong. `evidence` is what the backend actually saw, so a
+ * hand-off is checkable rather than an assertion. The two flags are
+ * different consequences and must not be collapsed: `stopped_autofill`
+ * means nothing was filled at all, while `blocks_submission` means the
+ * form was filled but cannot be sent from here.
+ */
+export interface ApplicationBoundary {
+  kind: 'login' | 'captcha' | 'signature';
+  evidence: string;
+  instruction: string;
+  stopped_autofill: boolean;
+  blocks_submission: boolean;
+}
+
+/**
+ * One field on the application form and what became of it.
+ *
+ * `is_sensitive` / `sensitivity` / `requires_confirmation` are sent by the
+ * backend precisely so this UI never infers sensitivity from a field's
+ * name — an inference that, gone wrong, renders a visa declaration as an
+ * ordinary text box.
+ */
+export interface AutofilledField {
+  field_id: string;
+  label: string;
+  kind: string;
+  required: boolean;
+  outcome: 'filled' | 'attached' | 'surfaced' | 'not_accepted' | 'failed';
+  slot: string | null;
+  value: string | null;
+  is_derived: boolean;
+  reason: string | null;
+  detail: string | null;
+  is_sensitive: boolean;
+  sensitivity: 'legal_attestation' | 'voluntary_self_id' | null;
+  requires_confirmation: boolean;
+  answered_by_candidate: boolean;
+}
+
+/** A filled application form, as the review screen receives it. */
+export interface ApplicationAutofillReport {
+  job_posting_id: string;
+  apply_url: string;
+  ats_provider: string;
+  fields: AutofilledField[];
+  screenshot_png_base64: string | null;
+  boundaries: ApplicationBoundary[];
+  review_session_id: string | null;
+  review_expires_at: string | null;
+  requires_handoff: boolean;
+  can_be_submitted_here: boolean;
+  /** The submission gates, named by the backend rather than re-derived here. */
+  fields_awaiting_confirmation: string[];
+  unanswered_required_fields: string[];
+}
+
+/**
+ * What happened when the application was sent. `is_confirmed_sent` is the
+ * field to trust: the button was pressed either way, and only the absence
+ * of a post-press boundary means the portal took the application.
+ */
+export interface ApplicationSubmissionReceipt {
+  job_posting_id: string;
+  submitted_at: string;
+  pressed_control: string;
+  final_url: string;
+  confirmation_excerpt: string;
+  screenshot_png_base64: string | null;
+  outstanding_boundaries: ApplicationBoundary[];
+  is_confirmed_sent: boolean;
+}

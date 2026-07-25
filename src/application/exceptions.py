@@ -4,6 +4,19 @@ These wrap orchestration failures that are not pure business-rule
 violations (which belong in the domain layer).
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - import for typing only
+    # Imported under TYPE_CHECKING so this module keeps importing nothing at
+    # runtime. `ApplicationHandoffRequiredError` carries the DTO a caller
+    # will render, rather than a domain value object the interface layer
+    # would then have to know how to map.
+    from src.application.dtos.application_autofill_dtos import (
+        ApplicationBoundaryOutput,
+    )
+
 
 class ApplicationError(Exception):
     """Base class for application-layer errors."""
@@ -140,6 +153,24 @@ class RejectedFieldValueError(BrowserAutomationError):
         )
 
 
+class SubmitControlNotPressableError(BrowserAutomationError):
+    """Raised when a form's submit control was located but would not accept
+    the press — obscured by an overlay or a cookie banner, disabled between
+    the snapshot and the press, or detached mid-click.
+
+    Deliberately distinct from a submission the portal *rejected*: nothing
+    was sent here, so the candidate's application is exactly where it was
+    and retrying is safe. A press that went through and came back with
+    validation errors is not this error; it is a page for the candidate to
+    read.
+    """
+
+    def __init__(self, handle: str, reason: str) -> None:
+        self.handle = handle
+        self.reason = reason
+        super().__init__(f"Submit control '{handle}' could not be pressed: {reason}")
+
+
 class UnsupportedAtsFormError(ApplicationError):
     """Raised when a posting's apply URL is not one of the ATS platforms
     field mapping covers (Greenhouse, Lever, Ashby).
@@ -164,6 +195,142 @@ class UnsupportedAtsFormError(ApplicationError):
             "platform. Field mapping covers Greenhouse, Lever, and Ashby; "
             "this posting has to be applied to by hand."
         )
+
+
+class ReviewSessionNotFoundError(ApplicationError):
+    """Raised when a parked review session cannot be produced for a caller —
+    it never existed, it expired and its browser was closed, it was already
+    submitted or discarded, or it belongs to a different candidate.
+
+    One error for all of those on purpose. A caller holding a review session
+    id has exactly one remedy in every case (run the autofill again), and
+    distinguishing "expired" from "not yours" would tell an unauthorized
+    caller that the id is real.
+    """
+
+    def __init__(self, review_session_id: str) -> None:
+        self.review_session_id = review_session_id
+        super().__init__(
+            f"Review session '{review_session_id}' is not available. It may "
+            "have expired, already been submitted, or never existed — run the "
+            "autofill again to get a fresh one."
+        )
+
+
+class ReviewFieldNotFoundError(ApplicationError):
+    """Raised when a field id does not name a field on the parked form."""
+
+    def __init__(self, review_session_id: str, field_id: str) -> None:
+        self.review_session_id = review_session_id
+        self.field_id = field_id
+        super().__init__(
+            f"Field '{field_id}' is not part of review session "
+            f"'{review_session_id}'."
+        )
+
+
+class ApplicationHandoffRequiredError(ApplicationError):
+    """Raised when submitting is refused because the page carries a
+    human-only check (see `ApplicationBoundary`).
+
+    Not a failure of the flow — the point of it. A CAPTCHA or a signature
+    request means the rest of this application is the candidate's to
+    complete, and the exception carries what was found plus what to tell
+    them, so the refusal arrives with an instruction rather than as a dead
+    end.
+    """
+
+    def __init__(
+        self, apply_url: str, boundaries: tuple[ApplicationBoundaryOutput, ...]
+    ) -> None:
+        self.apply_url = apply_url
+        self.boundaries = boundaries
+        super().__init__(
+            "This application cannot be submitted through ApplyFlow: "
+            f"{_describe_boundaries(boundaries)}. Finish it yourself at "
+            f"{apply_url}."
+        )
+
+
+class UnconfirmedSensitiveFieldsError(ApplicationError):
+    """Raised when submission was requested while sensitive values ApplyFlow
+    filled are still unapproved.
+
+    These are legal declarations written from the candidate's stored record
+    — work authorization, sponsorship, visa status — and the candidate is
+    the one accountable for asserting them to this employer. The gate is
+    unconditional: there is no "submit anyway".
+    """
+
+    def __init__(self, labels: tuple[str, ...]) -> None:
+        self.labels = labels
+        listed = ", ".join(f"'{label}'" for label in labels) or "some fields"
+        super().__init__(
+            f"These answers need your confirmation before the application can "
+            f"be sent: {listed}."
+        )
+
+
+class IncompleteApplicationError(ApplicationError):
+    """Raised when submission was requested with required fields still
+    unanswered.
+
+    Refused here rather than sent for the portal to refuse, because a failed
+    submission on some portals burns the application: the page reloads with
+    the uploads dropped and the answers cleared. The fields are named so the
+    candidate can answer them and submit again.
+    """
+
+    def __init__(self, labels: tuple[str, ...]) -> None:
+        self.labels = labels
+        listed = ", ".join(f"'{label}'" for label in labels) or "some fields"
+        super().__init__(
+            f"The form still needs these required answers before it can be "
+            f"sent: {listed}."
+        )
+
+
+class SubmitControlUnavailableError(ApplicationError):
+    """Raised when the form offers no control this harness can press, or the
+    one that was named is not on the page.
+
+    The empty case is a real portal shape, not a bug: a form that submits
+    from script behind a plain `<button type="button">` exposes nothing that
+    submits in the HTML sense. Pressing the nearest thing that looks like a
+    button on a real job application is not an acceptable fallback, so the
+    candidate is told to finish in their own browser.
+    """
+
+    def __init__(self, reason: str, *, available: tuple[str, ...] = ()) -> None:
+        self.reason = reason
+        self.available = available
+        listed = ", ".join(f"'{label}'" for label in available)
+        detail = f" The form offers: {listed}." if available else ""
+        super().__init__(f"This form cannot be submitted here: {reason}.{detail}")
+
+
+class AmbiguousSubmitControlError(ApplicationError):
+    """Raised when a form offers several ways to send it and the caller did
+    not say which.
+
+    Guessing is not available. "Submit application" and "Submit and create an
+    account" are both submissions, and choosing for the candidate would pick
+    a side effect they never agreed to.
+    """
+
+    def __init__(self, available: tuple[str, ...]) -> None:
+        self.available = available
+        listed = ", ".join(f"'{label}'" for label in available)
+        super().__init__(
+            f"This form offers more than one way to submit ({listed}); name "
+            "the one to press."
+        )
+
+
+def _describe_boundaries(boundaries: tuple[ApplicationBoundaryOutput, ...]) -> str:
+    """Summarize boundaries for an exception message."""
+    kinds = [boundary.kind for boundary in boundaries]
+    return ", ".join(kinds) if kinds else "a check only you can complete"
 
 
 class UnattestedGenerationError(ApplicationError):

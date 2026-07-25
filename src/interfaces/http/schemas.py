@@ -304,3 +304,112 @@ class ScoreBucketAgreementResponse(BaseModel):
 
 class ScoringFeedbackSummaryResponse(BaseModel):
     buckets: list[ScoreBucketAgreementResponse]
+
+
+class ApplicationBoundaryResponse(BaseModel):
+    """A human-only check found on an application page.
+
+    A client renders `instruction` — it is what the candidate does next —
+    and shows `evidence` so the hand-off is checkable rather than an
+    assertion. `stopped_autofill` and `blocks_submission` are the two
+    different consequences and must not be collapsed: a CAPTCHA leaves a
+    filled form worth reviewing, a login wall does not.
+    """
+
+    kind: str
+    evidence: str
+    instruction: str
+    stopped_autofill: bool
+    blocks_submission: bool
+
+
+class AutofilledFieldResponse(BaseModel):
+    """One field on the form and what became of it.
+
+    `value` carries what was written onto a real application — the
+    candidate's own contact details, and on the legal fields their
+    work-authorization answers. It is here because a review screen exists to
+    show exactly that, and for no other reason: it must not be logged.
+    """
+
+    field_id: str
+    label: str
+    kind: str
+    required: bool
+    outcome: str
+    slot: str | None = None
+    value: str | None = None
+    is_derived: bool = False
+    reason: str | None = None
+    detail: str | None = None
+    is_sensitive: bool = False
+    sensitivity: str | None = None
+    requires_confirmation: bool = False
+    answered_by_candidate: bool = False
+
+
+class ApplicationAutofillResponse(BaseModel):
+    """A filled application form, as the review screen receives it.
+
+    The two id lists are the submission gates, named rather than left for a
+    client to re-derive from the flags: whatever is in either of them will be
+    refused at submit time, and a UI that computed them differently would
+    offer a Submit button that cannot work.
+    """
+
+    job_posting_id: str
+    apply_url: str
+    ats_provider: str
+    fields: list[AutofilledFieldResponse]
+    screenshot_png_base64: str | None = None
+    boundaries: list[ApplicationBoundaryResponse] = Field(default_factory=list)
+    review_session_id: str | None = None
+    review_expires_at: datetime | None = None
+    requires_handoff: bool = False
+    can_be_submitted_here: bool = False
+    fields_awaiting_confirmation: list[str] = Field(default_factory=list)
+    unanswered_required_fields: list[str] = Field(default_factory=list)
+
+
+class AnswerApplicationFieldRequest(BaseModel):
+    """The candidate's own answer to one surfaced field.
+
+    Empty is refused: clearing a field is not what this route is for, and an
+    empty string written into a required question looks answered while
+    asserting nothing.
+    """
+
+    value: str = Field(min_length=1)
+
+
+class SubmitApplicationRequest(BaseModel):
+    """The candidate's instruction to send the application.
+
+    `confirmed_field_ids` are the sensitive values they have looked at and
+    approved (`fields_awaiting_confirmation` above). `submit_control_label`
+    only has to be given when the form offers more than one way to send it,
+    and is the label the candidate saw.
+    """
+
+    confirmed_field_ids: list[str] = Field(default_factory=list)
+    submit_control_label: str | None = None
+
+
+class ApplicationSubmissionResponse(BaseModel):
+    """What happened when the application was sent.
+
+    `is_confirmed_sent` is the field to trust, not the 200: the press
+    succeeded either way, and only the absence of a post-press boundary means
+    the portal actually took the application.
+    """
+
+    job_posting_id: str
+    submitted_at: datetime
+    pressed_control: str
+    final_url: str
+    confirmation_excerpt: str = ""
+    screenshot_png_base64: str | None = None
+    outstanding_boundaries: list[ApplicationBoundaryResponse] = Field(
+        default_factory=list
+    )
+    is_confirmed_sent: bool = True

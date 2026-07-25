@@ -55,6 +55,15 @@ before any feature UI loads.
    was tailored for the job: which of the posting's listed skills the
    document mentions (and which it does not), which gap answers it drew on,
    and which of the candidate's own data the surviving content traces to.
+3. **Review and submit** (`AutofillReview`) — fills the employer's own form
+   in a real browser and shows it back: every field in page order with what
+   was written, the screenshot of the filled form, a confirmation box on each
+   legal declaration, and an answer box on each question ApplyFlow refused to
+   guess at (including EEO, which reaches a form this way or not at all).
+   Submit is disabled on the same two lists the backend refuses on, and a
+   hand-off — a login wall, a CAPTCHA, a signature request — is rendered as
+   what to do next rather than as an error. It comes third because the
+   autofill attaches the *stored* documents from step 2.
 
 Every route the flow touches is authenticated, so the shell carries an access
 token field (`AccessTokenField`) that stores a Supabase token in
@@ -583,8 +592,9 @@ label, `required`, options, `maxlength`, current value). A caller can only
 touch fields the harness chose to expose, which is what keeps the surface
 controlled:
 
-- Hidden, disabled, read-only, invisible, and submit controls are never
-  discovered — **nothing this harness returns can submit an application.**
+- Hidden, disabled, read-only, invisible, and button controls are never
+  discovered — **no field handle can press anything.** Submitting is a
+  separate capability with its own handle namespace (below).
 - A caller cannot pass a raw CSS/XPath expression, so it cannot reach an
   element that wasn't offered, and cannot smuggle a selector engine
   expression in where a field name is expected.
@@ -610,11 +620,24 @@ anything still open plus the browser itself — a browser process outliving
 its owner is what takes a worker down. A navigation that fails cleans up
 before the exception leaves `open()`.
 
+**Two more reads, and one write that sends.** `read_page_signals()` reports
+what else is on the page — frame and script URLs, markup tokens, visible text
+— *uninterpreted*: which of those amount to a CAPTCHA is a domain rule
+(below), and no implementation of this port contains one. `read_submit_controls()`
+/ `press_submit()` are the only way anything is sent, and they are deliberately
+unreachable from the filling path: submit handles live in their own snapshot,
+so a `FormField` handle passed to `press_submit()` is refused and vice versa,
+and pressing requires a caller to have asked for submit controls by name and
+chosen one. Only controls that genuinely submit are returned — a "Save draft"
+or "Add another employer" button never is. The harness still decides nothing
+about *whether* to press; that gate lives in the use case (below).
+
 **Failures are typed, not generic.** `BrowserNavigationError` (timeout, DNS
 or connection failure, error status — retried once for 5xx/429/timeouts,
 never for other 4xx), `StaleFormFieldError` (re-read the form),
 `FormFieldNotFillableError` (wrong operation for the kind, or the element
 refused input), `RejectedFieldValueError` (pick a different value),
+`SubmitControlNotPressableError` (nothing was sent — safe to retry),
 `BrowserSessionClosedError`. No `playwright.*` type escapes infrastructure.
 
 Frames are included — ATS forms are routinely embedded in an iframe.
@@ -630,12 +653,12 @@ launch flags are all in `Settings` (`BROWSER_*`).
 
 **Not yet in the container images.** The `Dockerfile` installs the
 Playwright wheel with the rest of `requirements.txt` but not the browser
-itself. `AutofillApplicationForm` (below) is the first use case on top of the
-harness, but nothing invokes it in a container yet — there is no Celery task
-for it and it isn't wired into the composition root. Whoever wires it adds
-`playwright install --with-deps chromium` to the image that runs it
-(the worker, most likely) and sets `BROWSER_LAUNCH_ARGS=["--no-sandbox"]`,
-since a container generally cannot use Chromium's sandbox.
+itself. The flow is wired into the API (`/api/job-postings/{id}/autofill` and
+the review routes below), so the image that serves it needs
+`playwright install --with-deps chromium` and
+`BROWSER_LAUNCH_ARGS=["--no-sandbox"]`, since a container generally cannot use
+Chromium's sandbox. There is deliberately no Celery task: a background job
+cannot review a form, and every route in this flow is one a candidate hits.
 
 ---
 
@@ -650,13 +673,15 @@ back every field it did not fill and why.
 ```python
 output = await AutofillApplicationForm(
     job_posting_repository, profile_repository, document_repository,
-    browser, pdf_renderer,
+    browser, pdf_renderer, review_sessions,
 ).execute(AutofillApplicationFormInput(user_id=..., job_posting_id=...))
 
 len(output.applied_fields)             # what it filled
 output.fields_needing_review           # what it refused to guess at, with reasons
 output.unanswered_required_fields      # ...of those, what will block submission
 output.screenshot_png                  # proof of the filled form
+output.boundaries                      # what only the candidate can do (below)
+output.review_session_id               # the parked form they will submit through
 ```
 
 ### Three pieces, deliberately separate
@@ -717,6 +742,8 @@ field is surfaced are genuinely different situations for whoever reviews it:
   didn't state it themselves. Confirming it on the profile is the fix.
 - `sensitive_answer_not_derivable` — the record doesn't settle this legal
   question exactly, and approximating is the one thing it must not do.
+- `requires_candidate_signature` — this field is where the candidate signs.
+  Never filled, whatever its label says (see "Hard boundaries" below).
 - `unsupported_field_kind` — the data doesn't fit the widget, which usually
   means the field was read wrongly. Plus `document_not_generated` and
   `value_too_long`, which only surface while executing.
@@ -854,13 +881,119 @@ exception that abandons the form.
 underneath the snapshot, so every remaining handle is suspect and continuing
 risks writing into whatever field drifted into position.
 
-**Nothing here can submit.** Not by policy — the harness discovers no buttons
-and no submit inputs, so there is nothing to press (see above). This use case
-leaves a filled form in a browser session and hands back a report; a human
-decides whether it goes. Note the session closes when the pass ends, so what
-this currently delivers is the mapping plus the evidence of it — handing a
-live filled session to a human to finish is its own capability, as is
-submission.
+**This use case never submits.** It never asks the session for a submit
+control, so it holds nothing pressable. What it produces is a filled form, an
+honest account of it, and a parked review session; sending is a separate act
+in a separate use case (below).
+
+---
+
+## Hard boundaries: where ApplyFlow stops (Epic 05)
+
+Three checks on an application page exist to confirm that the party filling
+the form is the person applying, and ApplyFlow treats all three as walls
+rather than obstacles: a **login**, a **CAPTCHA**, and a request for the
+candidate's **signature**. Getting past any of them is impossible, dishonest,
+or both — a login wants a credential ApplyFlow holds none of, a CAPTCHA asks
+the one question it cannot answer truthfully, and a signature is the
+candidate personally attesting to the application.
+
+`detect_application_boundaries` is a pure function over one page observation
+(`PageSignals` — frame and script URLs, markup tokens, visible text, plus the
+form's own field labels). The browser layer gathers; the domain decides, so a
+new detection rule never means touching the browser adapter.
+
+**The two stops are different, and conflating them would be wrong both ways:**
+
+| Kind | Autofill | Submitting here |
+| --- | --- | --- |
+| `login` | **stopped** — the page is not the application form, and filling it would type the candidate's details into a sign-in box | no |
+| `captcha` | proceeds — the form around the challenge is real, and filling it is most of the value | no |
+| `signature` | proceeds, except the signature field itself | no |
+
+Every boundary carries `evidence` (what was seen, so the hand-off is
+checkable) and an `instruction` (what the candidate does next, in their
+terms). A hand-off is a *result*, not an error: the autofill route answers
+`200` with `requires_handoff` set, not a 4xx.
+
+**The signature case is enforced twice, from one vocabulary.** The usual shape
+of a signature on an ATS form is a text input labelled "Signature (type your
+full name)" — a label the field recognizer reads as a request for the
+candidate's name, which it can answer. So `is_signature_field` makes the
+planner refuse that field before recognition runs (`requires_candidate_signature`),
+*and* the page-level rule blocks submission. A hand-off that refused to submit
+after signing for the candidate would be worse than no hand-off at all.
+
+**Detection is deliberately narrow on prose.** A false negative costs a
+candidate a stalled application they can see; a false positive costs them the
+whole autofill on a form that was fine, and teaches them to ignore the one
+message in this flow that must be believed. So the text rules only match
+instructions to a person ("draw your signature", "verify you are human") and
+never descriptive prose — notably not the boilerplate "constitutes an
+electronic signature" paragraph that appears on a large share of ordinary ATS
+forms. Markup tokens are matched whole, so `captcha-free-hiring` in a class
+name is not a challenge, and the login path rule reads the URL's path only, so
+a `?redirect_to=/login` query parameter is not a wall.
+
+---
+
+## Review and submit (Epic 05)
+
+A filled form is reviewed by a person and then sent by that person. Between
+those two things is a live browser page, so `ApplicationReviewSessions` keeps
+the filled form parked while the candidate reads it — otherwise submitting
+would mean re-opening the portal and filling a real application a second time.
+
+```
+POST   /api/job-postings/{id}/autofill              fill the form, park it
+POST   /api/autofill-sessions/{id}/fields/{field_id} answer what was surfaced
+POST   /api/autofill-sessions/{id}/submit           send it
+DELETE /api/autofill-sessions/{id}                  walk away
+```
+
+**Answering a surfaced field** writes the candidate's own value onto the same
+live page and returns the whole updated report, since an answer can clear the
+last thing standing between the application and the Submit button. It is also
+the only path by which an EEO answer ever reaches a form. A value the
+candidate typed is already their statement, so it comes back
+`answered_by_candidate` and needs no confirmation.
+
+**Submitting** is refused unless all four of these hold, each re-checked
+against the live page rather than against a report the client may have been
+holding for ten minutes:
+
+1. a candidate asked for it — the instruction is an input, and nothing
+   scheduled, queued, or chained from the autofill pass can produce one;
+2. no boundary is on the page — so a CAPTCHA that appeared *after* the form
+   was filled stops the submission instead of being submitted past;
+3. every sensitive value ApplyFlow filled has been confirmed
+   (`confirmed_field_ids`, a required input rather than a defaulted flag);
+4. every required field is answered — refused here rather than sent for the
+   portal to reject, because a rejected submission on several portals comes
+   back with the uploads dropped.
+
+Which button gets pressed is never guessed: one control means that one, several
+means the candidate names it ("Submit application" and "Submit and create an
+account" are both submissions), none means this portal submits from script the
+harness cannot see and the answer is a hand-off.
+
+Afterwards the receipt claims only what is known. `is_confirmed_sent` is the
+field to trust, not the `200`: the press succeeded either way, and only the
+absence of a post-press boundary means the portal took the application.
+
+**Reviews are process-local and time-bounded.** Each holds a browser context,
+so they expire (`AUTOFILL_REVIEW_TTL_SECONDS`), are capped
+(`AUTOFILL_MAX_PARKED_REVIEWS`), and are closed on shutdown. One review per
+candidate-and-job: a second pass replaces the first. An API served by several
+workers needs sticky routing for these routes — a request that lands elsewhere
+gets the same honest "run the autofill again" an expired review gets.
+
+**The acceptance check.** `docs/epic-05-acceptance-check.md` is Epic 05's
+Definition of Done, and `tests/acceptance/test_epic05_autofill_pipeline.py`
+proves it: a real Chromium fills a real Greenhouse-shaped form, hands off at a
+login wall, a CAPTCHA and a signature request, and a candidate submits — with
+the receiving server's record of the POST checked field by field, down to an
+EEO answer that is *empty* even though the profile has one on file.
 
 ---
 
@@ -997,11 +1130,16 @@ real database or spends money:
 ```bash
 RUN_EPIC03_ACCEPTANCE_TEST=1 pytest tests/acceptance/test_epic03_matching_pipeline.py -v -s
 RUN_EPIC04_ACCEPTANCE_TEST=1 pytest tests/acceptance/test_epic04_tailoring_pipeline.py -v -s
+RUN_EPIC05_ACCEPTANCE_TEST=1 pytest tests/acceptance/test_epic05_autofill_pipeline.py -v -s
 ```
 
-See `docs/epic-03-acceptance-check.md` and
-`docs/epic-04-acceptance-check.md` for what each one proves and which env
-vars it needs.
+See `docs/epic-03-acceptance-check.md`, `docs/epic-04-acceptance-check.md`,
+and `docs/epic-05-acceptance-check.md` for what each one proves and which env
+vars it needs. Epic 05's needs no API keys and spends nothing: it drives a
+real Chromium against a local server that records what was submitted to it,
+with the portal host mapped to 127.0.0.1 so a real Greenhouse apply URL
+resolves there — the one thing that check must never do is send an
+application to an actual employer.
 
 `tests/infrastructure/test_playwright_browser_automation.py` is the other
 exception: it drives a real headless Chromium against a real local HTTP

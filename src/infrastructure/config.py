@@ -209,6 +209,17 @@ class Settings(BaseSettings):
     # the environment, e.g. BROWSER_LAUNCH_ARGS=["--no-sandbox"].
     browser_launch_args: tuple[str, ...] = ()
 
+    # A filled application form stays open in a browser while the candidate
+    # reviews it and decides whether to submit (see
+    # `ApplicationReviewSessions`). These two bound what that costs: how long
+    # one abandoned review holds a browser context, and how many this
+    # process holds at once. Both are resource ceilings rather than product
+    # limits — raising them raises this process's memory floor, and the
+    # sessions are process-local, so an API served by several workers needs
+    # sticky routing for the review flow.
+    autofill_review_ttl_seconds: float = 900.0
+    autofill_max_parked_reviews: int = 8
+
     @model_validator(mode="after")
     def _require_secrets_outside_development(self) -> Settings:
         if self.environment == "development":

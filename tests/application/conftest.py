@@ -9,9 +9,17 @@ about what counts as evidence.
 from __future__ import annotations
 
 from datetime import date, datetime
+from types import TracebackType
 
 import pytest
 
+from src.application.exceptions import StaleFormFieldError
+from src.application.ports.browser_automation_port import (
+    BrowserAutomationPort,
+    BrowserSessionPort,
+    FormField,
+    SubmitControl,
+)
 from src.application.ports.id_generator_port import IdGeneratorPort
 from src.application.ports.resume_pdf_renderer_port import ResumePdfRendererPort
 from src.application.services.application_document_archive import (
@@ -33,6 +41,7 @@ from src.domain.repositories.profile_repository import ProfileRepository
 from src.domain.value_objects.email_address import EmailAddress
 from src.domain.value_objects.generated_document_kind import GeneratedDocumentKind
 from src.domain.value_objects.job_requirements import JobRequirements
+from src.domain.value_objects.page_signals import PageSignals
 from src.domain.value_objects.provenance_source import ProvenanceSource
 
 
@@ -244,6 +253,141 @@ class SequentialIdGenerator(IdGeneratorPort):
     def new_id(self) -> str:
         self.issued += 1
         return f"{self._prefix}-{self.issued}"
+
+
+class FakeBrowserSession(BrowserSessionPort):
+    """A browser session that records instead of driving one.
+
+    Shared by the autofill and the review/submit tests, because both halves
+    of the flow have to be exercised against the *same* session behavior —
+    the submit tests would be worthless against a fake that let a press
+    happen more freely than the real harness does.
+
+    What it reproduces from `PlaywrightBrowserSession`, because the use cases
+    depend on all of it:
+
+    - a form read, with a per-handle failure it can be told to raise;
+    - page signals, so boundary detection has something to detect;
+    - submit controls in their own handle namespace, and a press that only
+      accepts one of those handles;
+    - `pressed`, so a test can assert that nothing was submitted.
+    """
+
+    def __init__(
+        self,
+        fields: tuple[FormField, ...] = (),
+        *,
+        current_url: str = "https://boards.greenhouse.io/globex/jobs/4001",
+        failures: dict[str, Exception] | None = None,
+        screenshot_error: Exception | None = None,
+        signals: PageSignals | None = None,
+        submit_controls: tuple[SubmitControl, ...] = (
+            SubmitControl(handle="s1-submit", label="Submit application"),
+        ),
+        press_error: Exception | None = None,
+        signals_after_press: PageSignals | None = None,
+    ) -> None:
+        self._fields = fields
+        self._current_url = current_url
+        self._failures = failures or {}
+        self._screenshot_error = screenshot_error
+        self._signals = signals or PageSignals(url=current_url, visible_text="Apply")
+        self._submit_controls = submit_controls
+        self._press_error = press_error
+        self._signals_after_press = signals_after_press
+        self.filled: list[tuple[str, str]] = []
+        self.attached: list[tuple[str, str, bytes]] = []
+        self.pressed: list[str] = []
+        self.read_count = 0
+        self.screenshots = 0
+        self.closed = False
+
+    @property
+    def current_url(self) -> str:
+        return self._current_url
+
+    async def read_fields(self) -> tuple[FormField, ...]:
+        self.read_count += 1
+        return self._fields
+
+    async def fill(self, handle: str, value: str) -> None:
+        failure = self._failures.get(handle)
+        if failure is not None:
+            raise failure
+        self.filled.append((handle, value))
+
+    async def attach_file(self, handle: str, *, filename: str, content: bytes) -> None:
+        failure = self._failures.get(handle)
+        if failure is not None:
+            raise failure
+        self.attached.append((handle, filename, content))
+
+    async def read_page_signals(self) -> PageSignals:
+        if self.pressed and self._signals_after_press is not None:
+            return self._signals_after_press
+        return self._signals
+
+    async def read_submit_controls(self) -> tuple[SubmitControl, ...]:
+        return self._submit_controls
+
+    async def press_submit(self, handle: str) -> None:
+        if handle not in {control.handle for control in self._submit_controls}:
+            # The real harness looks a submit handle up in its own snapshot,
+            # so a form-field handle can never press anything.
+            raise StaleFormFieldError(
+                handle,
+                "it is not part of this session's current submit-control snapshot",
+            )
+        if self._press_error is not None:
+            raise self._press_error
+        self.pressed.append(handle)
+
+    async def screenshot(self) -> bytes:
+        if self._screenshot_error is not None:
+            raise self._screenshot_error
+        self.screenshots += 1
+        return b"\x89PNG fake"
+
+    async def close(self) -> None:
+        self.closed = True
+
+    async def __aenter__(self) -> FakeBrowserSession:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        await self.close()
+
+    # Convenience for assertions.
+    def value_for(self, handle: str) -> str | None:
+        return next((v for h, v in self.filled if h == handle), None)
+
+
+class FakeBrowser(BrowserAutomationPort):
+    def __init__(
+        self,
+        session: FakeBrowserSession | None = None,
+        *,
+        open_error: Exception | None = None,
+    ) -> None:
+        self.session = session
+        self._open_error = open_error
+        self.opened: list[str] = []
+        self.shutdowns = 0
+
+    async def open(self, url: str) -> BrowserSessionPort:
+        self.opened.append(url)
+        if self._open_error is not None:
+            raise self._open_error
+        assert self.session is not None
+        return self.session
+
+    async def shutdown(self) -> None:
+        self.shutdowns += 1
 
 
 @pytest.fixture

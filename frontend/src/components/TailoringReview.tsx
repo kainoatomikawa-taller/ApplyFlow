@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { AutofillReview } from './AutofillReview';
 import { DocumentReviewPanel } from './DocumentReviewPanel';
 import { GapQuestionLoop } from './GapQuestionLoop';
 import type { GapOutcome } from './GapQuestionLoop';
@@ -93,6 +94,17 @@ export function TailoringReview({ job, onClose }: Props) {
           the documents can draw on.
         </p>
       )}
+
+      <h3>
+        <span className="step-number">3</span> Review and submit
+      </h3>
+      {/*
+        Third, and after the documents, because the autofill attaches the
+        stored versions of them: filling before they exist would surface the
+        résumé and cover-letter fields as "not generated yet" and the
+        candidate would have to run it twice.
+      */}
+      <AutofillReview job={job} />
     </section>
   );
 }

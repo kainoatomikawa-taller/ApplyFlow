@@ -85,13 +85,16 @@ from src.application.exceptions import (
     FormFieldNotFillableError,
     RejectedFieldValueError,
     StaleFormFieldError,
+    SubmitControlNotPressableError,
 )
 from src.application.ports.browser_automation_port import (
     BrowserAutomationPort,
     BrowserSessionPort,
     FormField,
     FormFieldKind,
+    SubmitControl,
 )
+from src.domain.value_objects.page_signals import PageSignals
 from src.infrastructure.browser_automation.field_discovery import (
     FIELD_DISCOVERY_JS,
     FIELD_SELECTOR,
@@ -103,6 +106,14 @@ from src.infrastructure.browser_automation.field_values import (
     interpret_boolean,
     match_option,
     matches_own_value,
+)
+from src.infrastructure.browser_automation.page_observation import (
+    PAGE_SIGNALS_JS,
+    SUBMIT_DISCOVERY_JS,
+    SUBMIT_SELECTOR,
+    SUBMIT_SIGNATURE_JS,
+    build_page_signals,
+    to_submit_control,
 )
 from src.infrastructure.config import Settings
 
@@ -146,6 +157,18 @@ class _SnapshotEntry:
     signature: str
 
 
+@dataclass(frozen=True)
+class _SubmitEntry:
+    """A submit control from the latest submit snapshot, plus how to reach
+    it again. Kept in its own snapshot from `_SnapshotEntry`, so a form
+    field handle can never resolve to something pressable."""
+
+    control: SubmitControl
+    frame: Frame
+    index: int
+    signature: str
+
+
 class PlaywrightBrowserSession(BrowserSessionPort):
     """One browser context parked on one application form."""
 
@@ -162,6 +185,11 @@ class PlaywrightBrowserSession(BrowserSessionPort):
         self._settings = settings
         self._on_closed = on_closed
         self._snapshot: dict[str, _SnapshotEntry] = {}
+        #: Submit controls live in their own snapshot with their own handle
+        #: prefix. Two dictionaries rather than one is the mechanism behind
+        #: "a field handle cannot press anything": there is no lookup that
+        #: can find a button from a handle `read_fields()` minted.
+        self._submit_snapshot: dict[str, _SubmitEntry] = {}
         #: Bumped on every snapshot and baked into each handle, so a handle
         #: minted by an earlier `read_fields()` is rejected outright rather
         #: than resolving against whatever now sits at its old index.
@@ -263,6 +291,114 @@ class PlaywrightBrowserSession(BrowserSessionPort):
                 handle, f"the portal refused the upload: {_first_line(exc)}"
             ) from exc
 
+    async def read_page_signals(self) -> PageSignals:
+        self._require_open()
+        payloads: list[dict[str, Any]] = []
+        frame_urls: list[str] = []
+        for index, frame in enumerate(self._page.frames):
+            # The main frame's URL is reported as the page URL, not as an
+            # embedded resource: "this page is a sign-in page" and "this
+            # page embeds a challenge from elsewhere" are different
+            # findings, and merging them would let a posting whose own URL
+            # happens to contain a marker word read as a challenge.
+            if frame is not self._page.main_frame and frame.url:
+                frame_urls.append(frame.url)
+            try:
+                payload = await frame.evaluate(PAGE_SIGNALS_JS)
+            except PlaywrightError as exc:
+                # Same as field discovery: a frame detaching mid-read is
+                # ordinary on a live page, and what it held is simply not
+                # part of this observation.
+                logger.debug("Skipped frame %d while observing page: %s", index, exc)
+                continue
+            if isinstance(payload, dict):
+                payloads.append(payload)
+
+        return build_page_signals(
+            url=self._page.url,
+            frame_urls=tuple(frame_urls),
+            frame_payloads=tuple(payloads),
+        )
+
+    async def read_submit_controls(self) -> tuple[SubmitControl, ...]:
+        self._require_open()
+        found: list[tuple[int, int, Frame, dict[str, Any]]] = []
+        for frame_index, frame in enumerate(self._page.frames):
+            try:
+                raw_controls = await frame.evaluate(SUBMIT_DISCOVERY_JS)
+            except PlaywrightError as exc:
+                logger.debug(
+                    "Skipped frame %d during submit discovery: %s", frame_index, exc
+                )
+                continue
+            if not isinstance(raw_controls, list):  # pragma: no cover - defensive
+                continue
+            for raw in raw_controls:
+                if not isinstance(raw, dict):  # pragma: no cover - defensive
+                    continue
+                index = raw.get("index")
+                if not isinstance(index, int):  # pragma: no cover - defensive
+                    continue
+                found.append((frame_index, index, frame, raw))
+
+        self._generation += 1
+        snapshot: dict[str, _SubmitEntry] = {}
+        controls: list[SubmitControl] = []
+        for frame_index, index, frame, raw in found:
+            handle = f"s{self._generation}-f{frame_index}-{index}"
+            control = to_submit_control(handle, raw)
+            snapshot[handle] = _SubmitEntry(
+                control=control,
+                frame=frame,
+                index=index,
+                signature=str(raw.get("signature", "")),
+            )
+            controls.append(control)
+        self._submit_snapshot = snapshot
+        return tuple(controls)
+
+    async def press_submit(self, handle: str) -> None:
+        self._require_open()
+        entry = self._submit_snapshot.get(handle)
+        if entry is None:
+            # Covers the accident that matters most: a `FormField` handle
+            # passed here. Field handles are never in this snapshot, so
+            # they fail before anything is pressed.
+            raise StaleFormFieldError(
+                handle,
+                "it is not part of this session's current submit-control snapshot",
+            )
+
+        locator = entry.frame.locator(SUBMIT_SELECTOR).nth(entry.index)
+        try:
+            signature = await locator.evaluate(SUBMIT_SIGNATURE_JS)
+        except PlaywrightError as exc:
+            raise StaleFormFieldError(handle, _first_line(exc)) from exc
+        if signature != entry.signature:
+            raise StaleFormFieldError(
+                handle,
+                "the page changed and a different control is now in its place",
+            )
+
+        try:
+            await locator.click()
+        except PlaywrightTimeoutError as exc:
+            raise SubmitControlNotPressableError(
+                handle,
+                "it did not become clickable in time (it may be obscured by "
+                f"a banner or overlay): {_first_line(exc)}",
+            ) from exc
+        except PlaywrightError as exc:
+            raise SubmitControlNotPressableError(handle, _first_line(exc)) from exc
+
+        # Every handle on both sides is now suspect: the press either
+        # navigated or rewrote the form in place. Dropped rather than left
+        # to fail one at a time, so the next call says "re-read" instead of
+        # resolving against a page that no longer exists.
+        self._snapshot = {}
+        self._submit_snapshot = {}
+        await self._settle()
+
     async def screenshot(self) -> bytes:
         self._require_open()
         try:
@@ -277,6 +413,7 @@ class PlaywrightBrowserSession(BrowserSessionPort):
             return
         self._closed = True
         self._snapshot = {}
+        self._submit_snapshot = {}
         # Closing the context disposes its pages too. A context whose
         # browser already died raises here, and that is not a failure to
         # report: the resource this call exists to release is already gone.
@@ -314,6 +451,22 @@ class PlaywrightBrowserSession(BrowserSessionPort):
                     continue
                 found.append((frame_index, index, frame, raw))
         return found
+
+    async def _settle(self) -> None:
+        """Give the page time to finish reacting to a press.
+
+        Best-effort, exactly like the settle after navigation: a portal
+        that holds a websocket open never goes network-idle, and that is
+        not a reason to report a submission as failed when it went
+        through.
+        """
+        try:
+            await self._page.wait_for_load_state(
+                "networkidle",
+                timeout=self._settings.browser_settle_timeout_seconds * 1000,
+            )
+        except PlaywrightError as exc:
+            logger.debug("Page did not go network-idle after the press: %s", exc)
 
     def _require_open(self) -> None:
         if self._closed:

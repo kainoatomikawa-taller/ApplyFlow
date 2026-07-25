@@ -24,14 +24,27 @@ screen wants the whole form in order, because a list of five orphaned
 questions with no surrounding context is much harder to answer than the form
 they came from. Two independent lists would also let the two drift.
 
-Nothing here can submit an application — the browser harness exposes no way
-to (see `BrowserAutomationPort`), so this report is always "what is now
-typed into the form", never "what was sent".
+This report is always "what is now typed into the form", never "what was
+sent". Sending is a separate act, requested separately by the candidate
+(`SubmitApplicationFormInput`) and reported separately
+(`ApplicationSubmissionOutput`); nothing in an autofill pass submits
+anything.
+
+Hand-offs are part of the report
+--------------------------------
+`boundaries` carries every human-only check found on the page — a login
+wall, a CAPTCHA, a signature request. It is not an error channel: a report
+with a CAPTCHA on it still lists every field that was filled, because the
+filling is still worth having. What it changes is what happens next, and
+`review_session_id` is the honest signal for that — when a boundary stopped
+the pass, there is no parked session and no submission to make, so the id
+is None and the instruction on the boundary is what the candidate acts on.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
 
 
@@ -78,6 +91,13 @@ APPLIED_OUTCOMES: frozenset[FieldAutofillOutcome] = frozenset(
 class AutofilledFieldOutput:
     """One field on the form and what became of it."""
 
+    #: Opaque id for this field within its review session — what a review
+    #: screen sends back to answer the field or to confirm its value. It is
+    #: the browser handle, which means it stops working the moment the form
+    #: is re-read or the page moves underneath the snapshot; that is the
+    #: intended behavior, since an id that outlived the snapshot would let a
+    #: confirmation approve a value on a field that has since changed.
+    field_id: str
     #: The field's label as the page presented it — what a reviewer will
     #: recognize. May be empty for a field a portal labels only visually.
     label: str
@@ -123,11 +143,38 @@ class AutofilledFieldOutput:
     #: candidate's own attested record, but asserting it to *this* employer is
     #: still theirs to approve.
     requires_confirmation: bool = False
+    #: Whether the candidate answered this field themselves in the review
+    #: step. Such a value is already their own statement, so it never also
+    #: needs confirming — the confirmation gate exists for values ApplyFlow
+    #: derived from stored data, not for words the candidate just typed.
+    answered_by_candidate: bool = False
 
     @property
     def was_applied(self) -> bool:
         """Whether this field was actually written onto the form."""
         return self.outcome in APPLIED_OUTCOMES
+
+
+@dataclass(frozen=True)
+class ApplicationBoundaryOutput:
+    """One human-only check found on the page (see `ApplicationBoundary`).
+
+    Flattened out of the domain value object rather than passed through, so
+    a caller never has to import a domain type to render a hand-off — and
+    `instruction` travels with the finding, because a hand-off that says
+    what was found but not what to do about it just strands the candidate.
+    """
+
+    #: An `ApplicationBoundaryKind` value: login, captcha, signature.
+    kind: str
+    #: What was actually seen, in terms the candidate can check.
+    evidence: str
+    #: What the candidate should do about it.
+    instruction: str
+    #: Whether this boundary meant the form was not filled at all.
+    stopped_autofill: bool
+    #: Whether this boundary puts submission beyond ApplyFlow's reach.
+    blocks_submission: bool
 
 
 @dataclass(frozen=True)
@@ -146,6 +193,17 @@ class ApplicationAutofillOutput:
     #: against. None when the capture itself failed — which loses proof, not
     #: work, so it does not fail the pass.
     screenshot_png: bytes | None = None
+    #: Every human-only check found on the page, in a fixed order. Empty is
+    #: the ordinary case.
+    boundaries: list[ApplicationBoundaryOutput] = field(default_factory=list)
+    #: The parked review session this report belongs to — what the candidate
+    #: answers remaining fields through and submits through. None when there
+    #: is nothing to submit: a boundary stopped the pass before any field was
+    #: filled, so no session was left open.
+    review_session_id: str | None = None
+    #: When the parked session will be closed if the candidate does not
+    #: finish. None when there is no session.
+    review_expires_at: datetime | None = None
 
     @property
     def applied_fields(self) -> list[AutofilledFieldOutput]:
@@ -188,3 +246,23 @@ class ApplicationAutofillOutput:
         have looked at them.
         """
         return [item for item in self.fields if item.requires_confirmation]
+
+    @property
+    def requires_handoff(self) -> bool:
+        """Whether the candidate has to finish this application themselves."""
+        return bool(self.boundaries)
+
+    @property
+    def can_be_submitted_here(self) -> bool:
+        """Whether submitting through ApplyFlow is available at all.
+
+        False when there is no parked session (a boundary stopped the pass)
+        or when a boundary on the page puts submission out of reach. Says
+        nothing about whether the application is *ready* — the confirmation
+        and completeness gates live in `SubmitApplicationForm`, which
+        re-checks all of this against the live page rather than trusting a
+        report a client may have been holding for ten minutes.
+        """
+        if self.review_session_id is None:
+            return False
+        return not any(boundary.blocks_submission for boundary in self.boundaries)

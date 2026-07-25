@@ -3,19 +3,19 @@ over a role's application portal (the `apply_url` Epic 02 resolved).
 
 Every autofill capability builds on this port, so its surface is
 deliberately narrow: open a session on one apply URL, read the form's
-fields, write a value into a named field, attach a file, take a
-screenshot, close. There is no "run this selector", no "evaluate this
-script", and no way to click an arbitrary element — a caller (eventually
-an LLM-driven autofill use case) can only touch fields the harness itself
-discovered and handed back.
+fields, write a value into a named field, attach a file, observe what
+else the page is showing, take a screenshot, close. There is no "run
+this selector", no "evaluate this script", and no way to click an
+arbitrary element — a caller (eventually an LLM-driven autofill use
+case) can only touch fields the harness itself discovered and handed
+back.
 
 That constraint is the point. Fields are addressed by an opaque `handle`
 minted by `read_fields()`, never by a caller-supplied CSS/XPath selector,
 which means:
 
 - a caller cannot reach an element the harness chose not to expose
-  (hidden inputs, disabled controls, submit buttons — notably, nothing
-  here can submit an application),
+  (hidden inputs, disabled controls, buttons of any kind),
 - a caller cannot smuggle a selector engine expression into what looks
   like a field name, and
 - a handle that no longer identifies the same field fails loudly
@@ -26,6 +26,35 @@ Handles are only valid for the most recent `read_fields()` snapshot on
 that session. Any navigation invalidates them; so does the page mutating
 underneath a snapshot. The remedy is always the same — call
 `read_fields()` again — which is why one error type covers both cases.
+
+Submitting is a separate capability, on purpose
+-----------------------------------------------
+An application has to be sendable, or ApplyFlow stops one step short of
+the thing the candidate wanted. So `read_submit_controls()` /
+`press_submit()` exist — and they are deliberately *not* reachable from
+anything the filling path holds:
+
+- `read_fields()` still discovers no button and no submit input, so no
+  field handle can press anything. The two handle namespaces are
+  separate and are looked up in separate snapshots; a field handle
+  passed to `press_submit()` is refused, and vice versa.
+- Pressing requires a caller to have asked for submit controls by name,
+  chosen one, and named it. Nothing does that incidentally.
+- The harness still decides nothing about *whether* to press. That gate
+  — the candidate's explicit approval, their confirmation of every
+  sensitive value, and the absence of any `ApplicationBoundary` — lives
+  in the use case, which is where policy belongs.
+
+The rule the whole epic rests on is unchanged in substance: nothing is
+submitted unattended. It is now enforced one layer up, by a use case that
+requires a human's instruction, rather than by the harness being
+physically incapable.
+
+`read_page_signals()` is the other addition: the observations the domain
+needs to recognize a CAPTCHA, a signature request, or a login wall (see
+`detect_application_boundaries`). It reports what is on the page and
+interprets none of it — no rule about what counts as a challenge lives in
+this port or in any implementation of it.
 
 Implementations own the browser entirely: launching it, isolating each
 session from every other one, and tearing both down. Callers never see a
@@ -38,6 +67,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import StrEnum
 from types import TracebackType
+
+from src.domain.value_objects.page_signals import PageSignals
 
 
 class FormFieldKind(StrEnum):
@@ -128,6 +159,25 @@ class FormField:
     attributes: dict[str, str] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class SubmitControl:
+    """One control that would send the form if pressed.
+
+    Carried separately from `FormField` and minted by a separate call, so
+    that holding a form field can never be a way to press something. The
+    `label` is what the button says — "Submit application", "Send" — and
+    is what a review screen shows the candidate before they authorize the
+    press, because "press the button" is not informed consent when the
+    page has three of them.
+    """
+
+    #: Opaque address for this control, valid only for the snapshot that
+    #: produced it and only on the session that minted it. Not
+    #: interchangeable with a `FormField.handle`.
+    handle: str
+    label: str
+
+
 class BrowserSessionPort(ABC):
     """One isolated browsing session parked on one application form.
 
@@ -198,6 +248,62 @@ class BrowserSessionPort(ABC):
         filesystem path. `filename` is what the portal will record;
         implementations reduce it to a bare filename, since it crosses
         into a multipart upload.
+        """
+
+    @abstractmethod
+    async def read_page_signals(self) -> PageSignals:
+        """Observe what the loaded page is showing, beyond its fields.
+
+        Everything a caller needs to recognize a human-only check —
+        embedded frame and script URLs, markup tokens, the visible text —
+        gathered across the main document and every nested frame, exactly
+        like `read_fields()`. The observation is *uninterpreted*: which
+        markers mean a CAPTCHA and which phrases mean a signature request
+        are domain rules (`detect_application_boundaries`), and an
+        implementation of this port must contain none of them.
+
+        Cheap enough to call alongside every form read, and it mints no
+        handles, so calling it never invalidates a snapshot.
+        """
+
+    @abstractmethod
+    async def read_submit_controls(self) -> tuple[SubmitControl, ...]:
+        """Snapshot the controls that would send this form, in page order.
+
+        Only controls that actually submit: `<button type=submit>`, a
+        button with no type inside a form (which HTML makes a submit
+        button), `<input type=submit|image>`. A "Save draft" or "Add
+        another employer" button is not one of these and is never
+        returned — the only thing this call can hand back is a way to send
+        the application.
+
+        Empty is a legitimate answer, and an important one: a portal that
+        submits through script from a plain `<button type=button>` leaves
+        nothing here to press, and the honest response is to tell the
+        candidate to finish in their own browser rather than to start
+        clicking things that look like buttons.
+
+        Handles minted here live in their own snapshot; they are not
+        `FormField` handles and cannot be used as one.
+        """
+
+    @abstractmethod
+    async def press_submit(self, handle: str) -> None:
+        """Press the submit control addressed by `handle` and wait for the
+        portal to respond.
+
+        This sends the application. Implementations verify the control is
+        still the one that was snapshotted (the same signature check every
+        field write does) before pressing, because pressing whatever
+        drifted into that position on a live page is not a mistake that
+        can be taken back.
+
+        Returns once the resulting navigation or in-page update has
+        settled, so the caller can read the page it landed on. Raises
+        `StaleFormFieldError` when `handle` is not a live submit-control
+        handle for this session — including when it is a `FormField`
+        handle — and `SubmitControlNotPressableError` when the control was
+        found but would not accept the press.
         """
 
     @abstractmethod
