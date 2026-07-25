@@ -17,6 +17,7 @@ from src.interfaces.http.controllers import (
     application_controller,
     application_document_controller,
     cover_letter_controller,
+    document_revision_controller,
     gap_resolution_controller,
     health_controller,
     job_match_feedback_controller,
@@ -58,6 +59,7 @@ def create_app() -> FastAPI:
     app.include_router(gap_resolution_controller.router)
     app.include_router(tailored_resume_controller.router)
     app.include_router(cover_letter_controller.router)
+    app.include_router(document_revision_controller.router)
     app.include_router(application_document_controller.router)
     return app
 

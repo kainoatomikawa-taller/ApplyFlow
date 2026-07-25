@@ -27,6 +27,27 @@ class GenerateCoverLetterInput:
 
 
 @dataclass(frozen=True)
+class ReviseGeneratedDocumentInput:
+    """A candidate's edited text for a document already generated for this
+    job, on its way back through the guard (see `ReviseGeneratedDocument`).
+
+    `content` is the full replacement text rather than a diff: the guard
+    validates whole lines, so a partial edit would have to be reassembled
+    into the whole document before anything could be checked, and the
+    reassembly is what the client already holds.
+
+    `document_kind` is a plain string here for the same reason as
+    `GetLatestApplicationDocumentInput` — the interface layer passes through
+    whatever arrived on the request, and the use case resolves or rejects it.
+    """
+
+    user_id: str
+    job_posting_id: str
+    document_kind: str
+    content: str
+
+
+@dataclass(frozen=True)
 class ProvenanceViolationOutput:
     """One assertion the guard removed, and the terms nothing in the
     candidate's provenance-backed data backed."""

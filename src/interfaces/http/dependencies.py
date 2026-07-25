@@ -59,6 +59,9 @@ from src.application.use_cases.rank_matched_job_postings import (
     RankMatchedJobPostings,
 )
 from src.application.use_cases.resolve_gap_answer import ResolveGapAnswer
+from src.application.use_cases.revise_generated_document import (
+    ReviseGeneratedDocument,
+)
 from src.application.use_cases.submit_job_application import (
     SubmitJobApplication,
 )
@@ -355,6 +358,25 @@ def get_generate_cover_letter_use_case(
         fact_assembler=fact_assembler,
         generator=LlmCoverLetterGenerator(AnthropicLlmClient(get_settings())),
         answer_selector=answer_selector,
+        archive=archive,
+    )
+
+
+def get_revise_generated_document_use_case(
+    job_posting_repository: SqlAlchemyJobPostingRepository = Depends(
+        _job_posting_repository
+    ),
+    fact_assembler: ProvenanceFactAssembler = Depends(_provenance_fact_assembler),
+    archive: ApplicationDocumentArchive = Depends(_application_document_archive),
+) -> ReviseGeneratedDocument:
+    """No generator here — the candidate wrote the text. Everything else is
+    the generation factories' shape: the fact assembler and the archive are
+    injected, while the guard, the formatter, and the audit recorder are pure
+    defaults the use case builds itself, so no wiring mistake can store an
+    edit the guard never validated."""
+    return ReviseGeneratedDocument(
+        job_posting_repository=job_posting_repository,
+        fact_assembler=fact_assembler,
         archive=archive,
     )
 

@@ -5,10 +5,16 @@ Thin: validate input -> call use case -> serialize. No business logic, no
 DB access, no domain entity manipulation.
 
 Read-only on purpose. There is no POST here: a snapshot is written by the
-generation flow that produced the document (see `GenerateTailoredResume`),
-so a route that accepted document text would let a caller store something
-the provenance guard never saw and label it as sent. There is no PUT or
-DELETE either, because a record of what went out is not editable.
+flow that produced the document (see `GenerateTailoredResume`), so a route
+that accepted document text would let a caller store something the
+provenance guard never saw and label it as sent. There is no PUT or DELETE
+either, because a record of what went out is not editable.
+
+A candidate revising a draft before it goes out is a different thing, and
+it has its own route (`document_revision_controller`): the edited text is
+guarded against their attested facts exactly as generated text is, and the
+result is archived as the next version. That neither stores unguarded text
+nor alters a snapshot, so both rules above still hold.
 
 The routes span two prefixes — job-scoped reads under `/api/job-postings`
 and id-scoped reads under `/api/application-documents` — so this router

@@ -160,6 +160,13 @@ class GuardedDocumentResponse(BaseModel):
     violations: list[ProvenanceViolationResponse] = Field(default_factory=list)
 
 
+class ReviseDocumentRequest(BaseModel):
+    """A candidate's edited version of a generated document. `content` is
+    the whole document, not a diff — see `ReviseGeneratedDocumentInput`."""
+
+    content: str = Field(min_length=1)
+
+
 class ApplicationDocumentSummaryResponse(BaseModel):
     """One stored sent-document snapshot, without its text. `content_sha256`
     identifies the exact content so a client can tell versions apart, or

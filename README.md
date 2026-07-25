@@ -36,6 +36,29 @@ a "hello world" status banner that calls `GET /health` and displays which
 environment the API is running in, proving the shell is wired end-to-end
 before any feature UI loads.
 
+### Tailoring review UI
+
+"Tailor & review" on a matched role opens the two-step review flow
+(`frontend/src/components/TailoringReview.tsx`):
+
+1. **Gap questions** (`GapQuestionLoop`) — one question at a time against the
+   match's gap list, with "nothing to add" given the same weight as
+   answering, because `GapAnswerPolicy` treats a decline as a clean omission
+   and a UI that buried it would coax the embellishment the backend refuses
+   to store. Gaps a remembered answer already covers come back as
+   *already answered* and are never re-asked.
+2. **Document review** (`DocumentReviewPanel`) — the tailored resume and
+   cover letter, each editable in place. Saving posts to the revision route,
+   so the stored version is the edited one; lines the guard removed from that
+   edit are shown rather than silently dropped. `TailoringSummary` says what
+   was tailored for the job: which of the posting's listed skills the
+   document mentions (and which it does not), which gap answers it drew on,
+   and which of the candidate's own data the surviving content traces to.
+
+Every route the flow touches is authenticated, so the shell carries an access
+token field (`AccessTokenField`) that stores a Supabase token in
+`localStorage` — the placeholder until a real password sign-in screen lands.
+
 ## Clean Architecture
 
 This project follows **Clean Architecture**. Source code lives under `src/`
@@ -496,11 +519,22 @@ saw — and then prep a candidate for claims they never made.
   overwriting, and a duplicate version is a unique-constraint error rather
   than an ambiguity the tracker has to guess about. The newest version is
   what the most recent submission carried; earlier ones stay readable.
-- **Write path is the generation flow only.** There is no route that accepts
-  document text — that would store content the provenance guard never saw and
-  label it as sent. `ApplicationDocument` also refuses a snapshot with no
-  backing provenance, so an unattested draft has nothing to be stored under
-  (see `ProvenanceGuard` and `UnattestedGenerationError`).
+- **Nothing is stored that the guard has not seen.** There is no route that
+  archives document text as supplied — that would store content the provenance
+  guard never saw and label it as sent. `ApplicationDocument` also refuses a
+  snapshot with no backing provenance, so an unattested draft has nothing to
+  be stored under (see `ProvenanceGuard` and `UnattestedGenerationError`).
+  Two write paths satisfy that rule: the generation flows, and the revision
+  route below.
+- **Candidate edits go back through the guard.**
+  `POST /api/job-postings/{id}/documents/{kind}/revisions` takes the text a
+  candidate edited in the review UI, runs it through the same
+  `ProvenanceGuard` against the same fact corpus, and archives what survived
+  as the next version (`ReviseGeneratedDocument`). A claim the candidate typed
+  themselves is stripped exactly as a model's invention would be, and reported
+  back so the removal is visible rather than silent. Nothing is overwritten,
+  so the history records both what the model produced and what the candidate
+  changed it to.
 - **PII.** `application_documents.content` is flagged sensitive at both the
   domain (`ApplicationDocument.SENSITIVE`) and schema level: a tailored resume
   carries full contact details and work history, and a cover letter is built
@@ -620,6 +654,7 @@ All `/api/applications*` and `/api/resumes*` routes require
 | POST   | `/api/gap-resolution/answers`       | Capture an answer to a gap question (a decline stores nothing) | Yes |
 | POST   | `/api/job-postings/{id}/tailored-resume` | Generate a provenance-guarded tailored resume; stores the exact text sent | Yes |
 | POST   | `/api/job-postings/{id}/cover-letter` | Generate a provenance-guarded cover letter; stores the exact text sent | Yes |
+| POST   | `/api/job-postings/{id}/documents/{kind}/revisions` | Store the candidate's edited document as the next version; re-guarded first | Yes |
 | GET    | `/api/job-postings/{id}/documents`  | List every document stored for one job (both kinds, all versions) | Yes |
 | GET    | `/api/job-postings/{id}/documents/{kind}/latest` | The resume/cover letter this application went out with | Yes |
 | GET    | `/api/application-documents`        | The current user's stored documents across every job (tracker feed) | Yes |

@@ -4,7 +4,9 @@ interface Props {
   job: RankedJob;
   feedback: FeedbackRating | null;
   busy: boolean;
+  selected: boolean;
   onFeedback: (rating: FeedbackRating) => void;
+  onTailor: () => void;
 }
 
 function scoreTier(score: number): 'high' | 'medium' | 'low' {
@@ -13,11 +15,18 @@ function scoreTier(score: number): 'high' | 'medium' | 'low' {
   return 'low';
 }
 
-export function JobMatchCard({ job, feedback, busy, onFeedback }: Props) {
+export function JobMatchCard({
+  job,
+  feedback,
+  busy,
+  selected,
+  onFeedback,
+  onTailor,
+}: Props) {
   const { job_posting: posting, score, rationale, gaps } = job;
 
   return (
-    <div className="card job-match-card">
+    <div className={`card job-match-card${selected ? ' selected' : ''}`}>
       <div className="job-match-header">
         <div>
           <h3>{posting.title}</h3>
@@ -46,9 +55,14 @@ export function JobMatchCard({ job, feedback, busy, onFeedback }: Props) {
       )}
 
       <div className="job-match-footer">
-        <a href={posting.apply_url} target="_blank" rel="noreferrer">
-          View posting
-        </a>
+        <div className="job-match-links">
+          <a href={posting.apply_url} target="_blank" rel="noreferrer">
+            View posting
+          </a>
+          <button type="button" className="secondary" onClick={onTailor}>
+            {selected ? 'Reviewing…' : 'Tailor & review'}
+          </button>
+        </div>
         <div className="feedback-buttons">
           <button
             type="button"

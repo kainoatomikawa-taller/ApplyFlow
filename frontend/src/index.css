@@ -166,3 +166,302 @@ button:disabled {
   border-color: #0f3460;
   color: #fff;
 }
+
+.job-match-links {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.job-match-card.selected {
+  outline: 2px solid #0f3460;
+}
+
+/* ---- Shared bits -------------------------------------------------------- */
+
+button.secondary {
+  background: #fff;
+  color: #0f3460;
+  border: 1px solid #0f3460;
+}
+
+.link-button {
+  background: none;
+  border: 0;
+  color: #0f3460;
+  padding: 0;
+  text-decoration: underline;
+  font: inherit;
+  cursor: pointer;
+}
+
+.button-link {
+  display: inline-block;
+  padding: 0.6rem 1rem;
+  border-radius: 6px;
+  border: 1px solid #0f3460;
+  color: #0f3460;
+  text-decoration: none;
+}
+
+.muted {
+  color: #666;
+}
+
+.quiet {
+  color: #666;
+  font-size: 0.85rem;
+}
+
+.section-label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: #777;
+  margin-bottom: 0.35rem;
+}
+
+.pill {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: #e6e6ef;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.pill-ok {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.pill-warn {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.pill-version {
+  background: #e0e7ff;
+  color: #3730a3;
+}
+
+.notice {
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin: 0.75rem 0;
+  font-size: 0.9rem;
+}
+
+.notice ul {
+  margin: 0.5rem 0 0;
+  padding-left: 1.2rem;
+}
+
+.notice code {
+  background: rgba(0, 0, 0, 0.06);
+  padding: 0.05rem 0.25rem;
+  border-radius: 4px;
+}
+
+.notice-info {
+  background: #eef2ff;
+  color: #3730a3;
+}
+
+.notice-warn {
+  background: #fef3c7;
+  color: #7c4a03;
+}
+
+.notice-ok {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ---- Access token ------------------------------------------------------- */
+
+.token-field label {
+  font-weight: 600;
+}
+
+.token-field .quiet {
+  margin: 0.25rem 0 0.5rem;
+}
+
+.token-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.token-row input {
+  flex: 1;
+}
+
+/* ---- Tailoring review --------------------------------------------------- */
+
+.tailoring-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.tailoring-header h2 {
+  margin: 0;
+}
+
+.tailoring-header .quiet {
+  margin: 0.25rem 0 0;
+}
+
+.step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  margin-right: 0.5rem;
+  border-radius: 999px;
+  background: #0f3460;
+  color: #fff;
+  font-size: 0.85rem;
+}
+
+/* ---- Gap question loop -------------------------------------------------- */
+
+.gap-preview {
+  margin: 0.5rem 0 1rem;
+  padding-left: 1.2rem;
+  color: #555;
+}
+
+.gap-progress {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: #777;
+}
+
+.gap-gap {
+  margin: 0.25rem 0 0.75rem;
+  color: #555;
+}
+
+.gap-question label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+
+.gap-question textarea {
+  width: 100%;
+}
+
+.gap-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.gap-outcomes {
+  margin-top: 1rem;
+}
+
+.gap-outcomes ul {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+}
+
+.gap-outcomes li {
+  padding: 0.25rem 0;
+  border-top: 1px solid #eee;
+}
+
+/* ---- Document review ---------------------------------------------------- */
+
+.document-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.document-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.document-header h3 {
+  margin: 0;
+}
+
+.document-editor {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.document-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+}
+
+.document-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.tailoring-summary {
+  background: #f7f8fc;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.tailoring-summary p {
+  margin: 0.35rem 0;
+}
+
+.coverage-list {
+  margin: 0.5rem 0 0;
+  padding-left: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 0.15rem 1rem;
+  font-size: 0.9rem;
+}
+
+.coverage-mark {
+  display: inline-block;
+  width: 1.1rem;
+  font-weight: 700;
+}
+
+.coverage-list .covered .coverage-mark {
+  color: #065f46;
+}
+
+.coverage-list .uncovered {
+  color: #777;
+}
