@@ -171,6 +171,32 @@ class HumanOnlyFieldError(BrowserAutomationError):
         )
 
 
+class UnsupportedAtsFormError(ApplicationError):
+    """Raised when a posting's apply URL is not one of the ATS platforms
+    field mapping covers (Greenhouse, Lever, Ashby).
+
+    Coverage is scoped on purpose, and this is where the scope is enforced:
+    the field-mapping rules encode how those three platforms name and label
+    their controls, and a dynamic multi-step portal (Workday above all) does
+    not resemble them. Reading one with these rules would not fail — it
+    would confidently fill the wrong fields on a real application. So an
+    unrecognized portal is refused before a browser is ever opened, and the
+    candidate applies by hand.
+
+    Carries the URL so a caller can tell the candidate where to go, and the
+    posting id so the refusal can be logged without the URL.
+    """
+
+    def __init__(self, job_posting_id: str, apply_url: str) -> None:
+        self.job_posting_id = job_posting_id
+        self.apply_url = apply_url
+        super().__init__(
+            f"The application form at {apply_url} is not on a supported ATS "
+            "platform. Field mapping covers Greenhouse, Lever, and Ashby; "
+            "this posting has to be applied to by hand."
+        )
+
+
 class UnattestedGenerationError(ApplicationError):
     """Raised when nothing a generator produced survived the provenance
     guard as an attested claim (see `GuardedContent.has_attested_content`).
