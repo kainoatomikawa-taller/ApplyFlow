@@ -18,6 +18,7 @@ from src.domain.entities.job_posting import JobPosting
 from src.domain.entities.tracked_application import TrackedApplication
 from src.domain.exceptions import BusinessRuleViolationError, InvalidValueError
 from src.domain.value_objects.application_status import ApplicationStatus
+from src.domain.value_objects.application_status_change import ApplicationStatusChange
 from src.domain.value_objects.generated_document_kind import GeneratedDocumentKind
 from src.domain.value_objects.provenance_source import ProvenanceSource
 
@@ -358,3 +359,244 @@ def test_attaching_a_resume_as_the_cover_letter_is_refused() -> None:
 
     with pytest.raises(InvalidValueError, match="not a cover letter"):
         tracked.attach_cover_letter(_resume())
+
+
+# ---- status history ---------------------------------------------------------
+#
+# The property under test throughout: an application's current status and its
+# history are two views of one fact, and the entity does not allow them to
+# disagree. Every case below is one way they could.
+
+
+def test_a_new_application_starts_with_the_entry_for_being_sent() -> None:
+    """History is never empty, and never invented: the first entry is the
+    application being sent, dated when it was sent, with nothing before it."""
+    tracked = _tracked()
+
+    (initial,) = tracked.status_history
+    assert initial.status is ApplicationStatus.APPLIED
+    assert initial.previous_status is None
+    assert initial.is_initial
+    assert initial.changed_at == tracked.applied_at
+    assert tracked.current_status_since == tracked.applied_at
+
+
+def test_each_change_appends_an_entry_naming_where_it_came_from() -> None:
+    tracked = _tracked()
+
+    tracked.change_status(ApplicationStatus.INTERVIEWING)
+    tracked.change_status(ApplicationStatus.OFFER)
+
+    assert [entry.status for entry in tracked.status_history] == [
+        ApplicationStatus.APPLIED,
+        ApplicationStatus.INTERVIEWING,
+        ApplicationStatus.OFFER,
+    ]
+    assert [entry.previous_status for entry in tracked.status_history] == [
+        None,
+        ApplicationStatus.APPLIED,
+        ApplicationStatus.INTERVIEWING,
+    ]
+
+
+def test_change_status_returns_the_entry_it_recorded() -> None:
+    """So a caller can report or log the transition without re-reading the
+    history to work out which entry was just added."""
+    tracked = _tracked()
+
+    change = tracked.change_status(ApplicationStatus.INTERVIEWING, note="phone screen")
+
+    assert change is tracked.last_status_change
+    assert change.previous_status is ApplicationStatus.APPLIED
+    assert change.note == "phone screen"
+
+
+def test_a_refused_transition_records_nothing() -> None:
+    """The history is evidence. A move that was refused did not happen, so it
+    must leave no trace — including no note."""
+    tracked = _tracked(status=ApplicationStatus.REJECTED)
+    before = list(tracked.status_history)
+
+    with pytest.raises(BusinessRuleViolationError):
+        tracked.change_status(ApplicationStatus.INTERVIEWING, note="hoping")
+
+    assert tracked.status_history == before
+    assert tracked.status is ApplicationStatus.REJECTED
+
+
+def test_moving_to_the_status_it_already_holds_is_refused() -> None:
+    """Otherwise "how long has it been at this status?" would have two
+    answers."""
+    tracked = _tracked()
+
+    with pytest.raises(BusinessRuleViolationError):
+        tracked.change_status(ApplicationStatus.APPLIED)
+
+
+def test_current_status_since_moves_with_the_status() -> None:
+    """`applied_at` cannot express "interviewing since Tuesday", which is the
+    field a follow-up view actually sorts on."""
+    tracked = _tracked()
+    interviewing_at = tracked.applied_at + timedelta(days=9)
+
+    tracked.change_status(ApplicationStatus.INTERVIEWING, changed_at=interviewing_at)
+
+    assert tracked.current_status_since == interviewing_at
+    assert tracked.applied_at != interviewing_at
+
+
+def test_a_change_cannot_be_recorded_before_the_one_it_follows() -> None:
+    tracked = _tracked()
+    tracked.change_status(
+        ApplicationStatus.INTERVIEWING,
+        changed_at=tracked.applied_at + timedelta(days=5),
+    )
+
+    with pytest.raises(InvalidValueError, match="cannot be recorded earlier"):
+        tracked.change_status(
+            ApplicationStatus.OFFER,
+            changed_at=tracked.applied_at + timedelta(days=1),
+        )
+
+
+def test_has_held_status_reads_the_history_not_the_current_status() -> None:
+    """An application rejected after two rounds did interview. Counting it as
+    never having interviewed would understate every funnel it appears in."""
+    tracked = _tracked()
+    tracked.change_status(ApplicationStatus.INTERVIEWING)
+    tracked.change_status(ApplicationStatus.REJECTED)
+
+    assert tracked.status is ApplicationStatus.REJECTED
+    assert tracked.has_held_status(ApplicationStatus.INTERVIEWING)
+    assert not tracked.has_held_status(ApplicationStatus.OFFER)
+
+
+def test_reaching_a_terminal_status_closes_the_application() -> None:
+    tracked = _tracked()
+    assert tracked.is_open
+
+    tracked.change_status(ApplicationStatus.WITHDRAWN)
+
+    assert not tracked.is_open
+
+
+# ---- reconstruction from storage --------------------------------------------
+
+
+def _change(
+    status: ApplicationStatus,
+    *,
+    previous: ApplicationStatus | None = None,
+    day: int = 25,
+) -> ApplicationStatusChange:
+    return ApplicationStatusChange(
+        status=status,
+        changed_at=datetime(2026, 7, day, 12, 0, tzinfo=UTC),
+        previous_status=previous,
+    )
+
+
+def test_a_stored_history_is_loaded_as_given() -> None:
+    tracked = _tracked(
+        status=ApplicationStatus.INTERVIEWING,
+        status_history=[
+            _change(ApplicationStatus.APPLIED, day=25),
+            _change(
+                ApplicationStatus.INTERVIEWING,
+                previous=ApplicationStatus.APPLIED,
+                day=28,
+            ),
+        ],
+    )
+
+    assert len(tracked.status_history) == 2
+    assert tracked.current_status_since == datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
+
+
+def test_a_row_predating_history_tracking_is_seeded_rather_than_rejected() -> None:
+    """A row that knows its status and when it was sent *is* a one-entry
+    history, so it loads as one — that is what makes the backfill honest
+    instead of guesswork."""
+    tracked = _tracked(status=ApplicationStatus.REJECTED, status_history=[])
+
+    (only,) = tracked.status_history
+    assert only.status is ApplicationStatus.REJECTED
+    assert only.is_initial
+    assert only.changed_at == tracked.applied_at
+
+
+def test_a_history_that_disagrees_with_the_status_is_refused() -> None:
+    """The invariant the aggregate exists to keep. A row like this is one two
+    different queries would answer differently."""
+    with pytest.raises(InvalidValueError, match="history arrived at"):
+        _tracked(
+            status=ApplicationStatus.OFFER,
+            status_history=[_change(ApplicationStatus.APPLIED)],
+        )
+
+
+def test_a_history_that_does_not_start_at_the_beginning_is_refused() -> None:
+    with pytest.raises(InvalidValueError, match="must begin with the entry"):
+        _tracked(
+            status=ApplicationStatus.INTERVIEWING,
+            status_history=[
+                _change(
+                    ApplicationStatus.INTERVIEWING, previous=ApplicationStatus.APPLIED
+                )
+            ],
+        )
+
+
+def test_a_history_with_two_beginnings_is_refused() -> None:
+    with pytest.raises(InvalidValueError, match="only have one"):
+        _tracked(
+            status=ApplicationStatus.INTERVIEWING,
+            status_history=[
+                _change(ApplicationStatus.APPLIED),
+                _change(ApplicationStatus.INTERVIEWING),
+            ],
+        )
+
+
+def test_a_history_whose_chain_is_broken_is_refused() -> None:
+    """`previous_status` is redundant with the preceding entry on purpose: it
+    is what makes a corrupt history detectable rather than merely wrong."""
+    with pytest.raises(InvalidValueError, match="inconsistent"):
+        _tracked(
+            status=ApplicationStatus.OFFER,
+            status_history=[
+                _change(ApplicationStatus.APPLIED),
+                _change(
+                    ApplicationStatus.OFFER, previous=ApplicationStatus.INTERVIEWING
+                ),
+            ],
+        )
+
+
+def test_a_history_that_runs_backwards_is_refused() -> None:
+    with pytest.raises(InvalidValueError, match="oldest first"):
+        _tracked(
+            status=ApplicationStatus.INTERVIEWING,
+            status_history=[
+                _change(ApplicationStatus.APPLIED, day=28),
+                _change(
+                    ApplicationStatus.INTERVIEWING,
+                    previous=ApplicationStatus.APPLIED,
+                    day=25,
+                ),
+            ],
+        )
+
+
+def test_record_sent_produces_an_application_with_its_first_entry() -> None:
+    tracked = TrackedApplication.record_sent(
+        application_id="tracked-9",
+        user_id=_USER_ID,
+        job_posting=_posting(),
+        submission_key=_SUBMISSION_KEY,
+        resume_document=_resume(),
+    )
+
+    (initial,) = tracked.status_history
+    assert initial.status is ApplicationStatus.APPLIED
+    assert initial.changed_at == tracked.applied_at

@@ -466,7 +466,6 @@ button.secondary {
   color: #777;
 }
 
-<<<<<<< HEAD
 /* --- Autofill review (Epic 05) ------------------------------------------- */
 
 .autofill-fields {
@@ -558,7 +557,7 @@ button.secondary {
   border-radius: 6px;
   margin-top: 0.5rem;
 }
-=======
+
 /* ---- Portal hand-off ---------------------------------------------------- */
 
 .handoff-header {
@@ -741,4 +740,3 @@ button.secondary {
   max-width: 55%;
   overflow-wrap: anywhere;
 }
->>>>>>> origin/main

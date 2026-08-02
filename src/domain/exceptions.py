@@ -119,6 +119,25 @@ class DocumentSnapshotIntegrityError(DomainError):
         self.actual_digest = actual_digest
 
 
+class TrackedApplicationNotFoundError(DomainError):
+    """Raised when a tracked application cannot be located for this candidate.
+
+    Deliberately one error for "no such application" and "not this
+    candidate's": telling the two apart would confirm to a caller that some
+    other user's application exists under an id they guessed. A status update
+    is the operation most likely to be probed that way, since it names an id
+    directly.
+
+    Carries only the id — a tracked application's role and company are not
+    sensitive, but there is no reason for an error to repeat them — so it is
+    safe to log and to return.
+    """
+
+    def __init__(self, application_id: str) -> None:
+        super().__init__(f"Tracked application '{application_id}' was not found.")
+        self.application_id = application_id
+
+
 class ApplicationReviewNotFoundError(DomainError):
     """Raised when a candidate's review of a filled application cannot be
     located.

@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { AutofillReview } from './AutofillReview';
 import { DocumentReviewPanel } from './DocumentReviewPanel';
 import { PortalHandoffPanel } from './PortalHandoffPanel';
 import { ReviewAndSubmit } from './ReviewAndSubmit';
@@ -110,17 +109,6 @@ export function TailoringReview({ job, onClose }: Props) {
       )}
 
       <h3>
-<<<<<<< HEAD
-        <span className="step-number">3</span> Review and submit
-      </h3>
-      {/*
-        Third, and after the documents, because the autofill attaches the
-        stored versions of them: filling before they exist would surface the
-        résumé and cover-letter fields as "not generated yet" and the
-        candidate would have to run it twice.
-      */}
-      <AutofillReview job={job} />
-=======
         <span className="step-number">3</span> Check the portal
       </h3>
       <PortalHandoffPanel jobPostingId={job.job_posting.id} />
@@ -133,7 +121,6 @@ export function TailoringReview({ job, onClose }: Props) {
         jobTitle={job.job_posting.title}
         company={job.job_posting.company}
       />
->>>>>>> origin/main
     </section>
   );
 }

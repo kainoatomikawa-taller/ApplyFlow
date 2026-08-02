@@ -306,7 +306,6 @@ class ScoringFeedbackSummaryResponse(BaseModel):
     buckets: list[ScoreBucketAgreementResponse]
 
 
-<<<<<<< HEAD
 class ApplicationBoundaryResponse(BaseModel):
     """A human-only check found on an application page.
 
@@ -414,7 +413,8 @@ class ApplicationSubmissionResponse(BaseModel):
         default_factory=list
     )
     is_confirmed_sent: bool = True
-=======
+
+
 class InspectPortalRequest(BaseModel):
     job_posting_id: str = Field(min_length=1)
 
@@ -574,4 +574,72 @@ class SubmitApplicationReviewResponse(BaseModel):
 
     review: ApplicationReviewResponse
     apply_url: str
->>>>>>> origin/main
+
+
+class UpdateApplicationStatusRequest(BaseModel):
+    """Move a tracked application to a new status.
+
+    `status` is validated as a non-empty string here and resolved against the
+    lifecycle by the use case — the set of statuses and the legal moves between
+    them are domain rules, and a `Literal` here would be a second copy of the
+    first that could fall out of step with it.
+    """
+
+    status: str = Field(min_length=1)
+    # Capped at the value object's own limit
+    # (`ApplicationStatusChange.MAX_NOTE_LENGTH`) so an over-long note is a 422
+    # here rather than a domain error deeper in.
+    note: str = Field(default="", max_length=1000)
+
+
+class ApplicationStatusChangeResponse(BaseModel):
+    """One recorded move in an application's history.
+
+    `previous_status` is null for exactly one entry: the first, recorded when
+    the application was sent.
+    """
+
+    status: str
+    changed_at: datetime
+    previous_status: str | None = None
+    note: str = ""
+
+
+class TrackedApplicationResponse(BaseModel):
+    """One application the candidate sent, where it stands, and how it got
+    there.
+
+    `current_status_since` is what a follow-up view reads: it equals
+    `applied_at` until the application first moves, and afterwards says how long
+    it has been where it is. `is_open` comes from the domain's own terminal-status
+    rule rather than being re-derived from `status` by each client.
+
+    The document fields are ids, not text. They name the exact snapshots the
+    employer received (see `ApplicationDocument`); a client that wants one asks
+    the documents endpoint for it.
+    """
+
+    id: str
+    job_posting_id: str
+    company_name: str
+    role_title: str
+    applied_at: datetime
+    status: str
+    is_open: bool
+    current_status_since: datetime
+    resume_document_id: str
+    cover_letter_document_id: str | None = None
+    status_history: list[ApplicationStatusChangeResponse] = Field(default_factory=list)
+    updated_at: datetime | None = None
+
+
+class TrackedApplicationListResponse(BaseModel):
+    """A candidate's applications, most recently applied first.
+
+    `open_count` is included because "how many are still live?" is the number
+    the tracker's header shows, and counting it client-side over a `limit`-ed
+    page would be wrong as soon as the page did not hold everything.
+    """
+
+    applications: list[TrackedApplicationResponse] = Field(default_factory=list)
+    open_count: int = 0

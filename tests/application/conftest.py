@@ -15,6 +15,7 @@ identical to each other:
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from datetime import date, datetime
 from types import TracebackType
 
@@ -28,6 +29,7 @@ from src.application.ports.browser_automation_port import (
     BrowserAutomationPort,
     BrowserSessionPort,
     FormField,
+    FormFieldKind,
     SubmitControl,
 )
 from src.application.ports.id_generator_port import IdGeneratorPort
@@ -63,6 +65,7 @@ from src.domain.repositories.profile_repository import ProfileRepository
 from src.domain.repositories.tracked_application_repository import (
     TrackedApplicationRepository,
 )
+from src.domain.value_objects.application_status import ApplicationStatus
 from src.domain.value_objects.email_address import EmailAddress
 from src.domain.value_objects.generated_document_kind import GeneratedDocumentKind
 from src.domain.value_objects.job_requirements import JobRequirements
@@ -325,6 +328,7 @@ class FakeBrowserSession(BrowserSessionPort):
         self.attached: list[tuple[str, str, bytes]] = []
         self.pressed: list[str] = []
         self.read_count = 0
+        self.signal_reads = 0
         self.screenshots = 0
         self.closed = False
 
@@ -348,10 +352,36 @@ class FakeBrowserSession(BrowserSessionPort):
             raise failure
         self.attached.append((handle, filename, content))
 
-    async def read_page_signals(self) -> PageSignals:
+    async def read_boundary_signals(self) -> PageSignals:
+        """The reading `detect_application_boundaries` judges.
+
+        Answers differently once something has been pressed, when the test
+        supplied `signals_after_press` — a challenge raised *on submit* is the
+        case the submit flow has to notice, and a fake that returned the
+        pre-press page forever could not exercise it.
+        """
         if self.pressed and self._signals_after_press is not None:
             return self._signals_after_press
         return self._signals
+
+    async def read_page_signals(self) -> PortalPageSignals:
+        """The other of the port's two readings — the one `HardStopDetector`
+        judges (see `BrowserSessionPort`).
+
+        Derived from the fields this fake holds rather than hardcoded clean, so
+        a fake form containing a password box reads as one. A double that
+        always reported a boundary-free page would let a caller pass a
+        hard-stop check that no real portal would.
+        """
+        self.signal_reads += 1
+        return PortalPageSignals(
+            url=self._current_url,
+            field_labels=tuple(field.label for field in self._fields),
+            password_field_count=sum(
+                1 for field in self._fields if field.kind is FormFieldKind.PASSWORD
+            ),
+            fillable_field_count=len(self._fields),
+        )
 
     async def read_submit_controls(self) -> tuple[SubmitControl, ...]:
         return self._submit_controls
@@ -535,6 +565,18 @@ class ScriptedBrowserSession(BrowserSessionPort):
             raise self._signals_error
         return self._signals
 
+    async def read_boundary_signals(self) -> PageSignals:
+        """The port's *other* reading (see `BrowserSessionPort`). Derived from
+        the same scripted page rather than invented, so the two readings of one
+        portal cannot describe different pages."""
+        return PageSignals(
+            url=self._signals.url,
+            visible_text=self._signals.readable_text,
+            frame_urls=self._signals.frame_urls,
+            script_urls=self._signals.script_urls,
+            element_markers=self._signals.element_hints,
+        )
+
     async def read_fields(self) -> tuple[FormField, ...]:
         self.read_fields_calls += 1
         return self._fields
@@ -544,6 +586,14 @@ class ScriptedBrowserSession(BrowserSessionPort):
 
     async def attach_file(self, handle: str, *, filename: str, content: bytes) -> None:
         raise AssertionError("inspection must never upload to a form")
+
+    async def read_submit_controls(self) -> tuple[SubmitControl, ...]:
+        # Nothing is scripted to press: inspection reads a portal, and the
+        # submit path runs against `FakeBrowserSession` instead.
+        return ()
+
+    async def press_submit(self, handle: str) -> None:
+        raise AssertionError("inspection must never submit a form")
 
     async def screenshot(self) -> bytes:
         return b"png"
@@ -660,9 +710,7 @@ class InMemoryApplicationReviewRepository(ApplicationReviewRepository):
             and other.job_posting_id == review.job_posting_id
             for other in self.reviews.values()
         ):
-            raise AssertionError(
-                "a second open review was added for the same posting"
-            )
+            raise AssertionError("a second open review was added for the same posting")
         self.reviews[review.id] = review
 
     async def update(self, review: ApplicationReview) -> None:
@@ -722,6 +770,7 @@ class InMemoryTrackedApplicationRepository(TrackedApplicationRepository):
             application.id: application for application in applications or []
         }
         self.add_calls = 0
+        self.update_calls = 0
 
     async def add(self, application: TrackedApplication) -> None:
         self.add_calls += 1
@@ -751,12 +800,23 @@ class InMemoryTrackedApplicationRepository(TrackedApplicationRepository):
         return None
 
     async def update(self, application: TrackedApplication) -> None:
+        self.update_calls += 1
         self.rows[application.id] = application
 
     async def list_by_user_id(
-        self, user_id: str, *, limit: int = 100
+        self,
+        user_id: str,
+        *,
+        statuses: Collection[ApplicationStatus] | None = None,
+        limit: int = 100,
     ) -> list[TrackedApplication]:
         owned = [r for r in self.rows.values() if r.user_id == user_id]
+        if statuses is not None:
+            # An empty collection matches nothing, exactly as `IN ()` does —
+            # a fake that treated it as "no filter" would let a test pass that
+            # the database answers differently.
+            allowed = set(statuses)
+            owned = [r for r in owned if r.status in allowed]
         owned.sort(key=lambda application: application.applied_at, reverse=True)
         return owned[:limit]
 

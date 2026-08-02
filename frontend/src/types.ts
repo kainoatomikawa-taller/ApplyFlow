@@ -162,7 +162,6 @@ export interface TailoredResume {
   ats_safety_violations: AtsSafetyViolation[];
 }
 
-<<<<<<< HEAD
 /**
  * A check on the application page that only the candidate can pass: a
  * sign-in wall, a CAPTCHA, or a request for their signature.
@@ -238,7 +237,8 @@ export interface ApplicationSubmissionReceipt {
   screenshot_png_base64: string | null;
   outstanding_boundaries: ApplicationBoundary[];
   is_confirmed_sent: boolean;
-=======
+}
+
 // ---- Application portals & hand-offs --------------------------------------
 
 /**
@@ -384,5 +384,4 @@ export type AnswerAction = 'set' | 'confirm' | 'decline';
 export interface SubmittedApplicationReview {
   review: ApplicationReview;
   apply_url: string;
->>>>>>> origin/main
 }

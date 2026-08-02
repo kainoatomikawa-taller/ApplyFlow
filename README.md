@@ -624,7 +624,8 @@ went out with it.
   interviewing. Unlike the document store, this repository has an `update`:
   following an application through its lifecycle is the point. It has no
   `delete` — erasing a candidate's data is Epic 07's deliberate, user-scoped
-  purge, not an ambient capability.
+  purge, not an ambient capability. Every move is also *recorded* — see
+  "Status lifecycle and history" below.
 - **Every foreign key is `ON DELETE RESTRICT`,** matching
   `application_documents` rather than the CASCADE on `application_reviews` and
   `portal_handoffs`. That is the same distinction those tables draw: in-flight
@@ -680,6 +681,77 @@ dangling reference and a delete of an applied-to posting are both refused. It
 skips (instead of failing) when nothing is reachable at `DATABASE_URL`.
 
 The migration is `migrations/versions/0017_create_tracked_applications.py`.
+
+### Status lifecycle and history
+
+An application's status changes over time, and the tracker keeps the whole
+sequence rather than only where it ended up. `applied → interviewing → rejected`
+is preserved as three recorded moves, because the questions the tracker exists
+to answer are about *when* things changed: "applied three weeks ago, still no
+reply" is a follow-up, and "the recruiter screen already happened" is interview
+prep. Neither is answerable from a single status column.
+
+- **The history is part of the aggregate.** `ApplicationStatusChange` is a value
+  object; `TrackedApplication.status_history` is the list of them, oldest first.
+  The invariant is that `status_history[-1].status` *is* `status`, checked on
+  construction — a row where those disagree is one that two different queries
+  would answer differently. `change_status` appends and reassigns in one step,
+  so it is not possible to move an application without recording that it moved,
+  and a refused transition raises before anything is recorded.
+- **One transaction, one store.** `application_status_events` is a child table
+  of `tracked_applications`, written by the same repository in the same commit.
+  A separate history store with its own repository could commit the status
+  without its entry, leaving a record whose present and past disagree
+  permanently.
+- **Append-only.** Nothing in the data-access layer updates or deletes an event
+  row; `update` inserts the entries whose `sequence` is beyond what is stored.
+  The primary key is (`tracked_application_id`, `sequence`) — no surrogate id,
+  because a status change has no identity beyond its position in one
+  application's history — and that key is what makes appending the same entry
+  twice a constraint violation rather than a duplicated step.
+- **Each entry names where it came from.** `previous_status` is redundant with
+  the preceding row's `status` on purpose: it makes one row self-describing
+  ("rejected after interviewing") and makes a corrupt history *detectable*
+  rather than merely wrong. It is NULL for exactly one entry — `sequence` 0, the
+  application being sent.
+- **`ON DELETE CASCADE`,** the only one on the tracker. This is the one
+  genuinely part-of relationship here: history without its application is
+  unreadable. The application is still protected from a posting being pruned by
+  the RESTRICT on `tracked_applications` itself.
+- **Rows written before history existed are seeded, not guessed.** A row that
+  knows its status and when it was sent *is* a one-entry history, so migration
+  `0019` backfills exactly that (dated `applied_at`, no previous status), and
+  the entity does the same for any row that still arrives with an empty history.
+- **Status is queryable.** `list_by_user_id(statuses=...)` filters in SQL
+  against the existing (`user_id`, `status`) index, so the tracker's views do
+  not get slower as a search gets longer. An empty collection matches nothing —
+  the honest reading of "none of these statuses", distinct from no filter at
+  all. `open_only` on the use case resolves the live statuses from
+  `ApplicationStatus.is_terminal` rather than keeping a second list of them.
+- **Notes are the candidate's own words.** Optional free text per change
+  ("recruiter screen booked for the 14th"), capped at 1000 characters. Not
+  sensitive the way a document is, but it is whatever they typed, so it stays
+  out of logs — status transitions are logged by status and id only.
+
+The HTTP surface is `tracked_application_controller`:
+
+| Route | What it does |
+| --- | --- |
+| `GET /api/tracked-applications` | The feed, newest first. `?status=` (repeatable) or `?open_only=true`. |
+| `GET /api/tracked-applications/{id}` | One application with its full history. |
+| `PATCH /api/tracked-applications/{id}/status` | Move it, with an optional note. |
+| `GET /api/tracked-applications/by-job/{job_posting_id}` | Every application sent to one posting. |
+
+A refused transition is a **409** — well-formed, but the lifecycle does not
+allow it. An unknown status name, or `draft`, is a **422**. An application that
+does not exist *or* belongs to another candidate is a **404** in both cases:
+distinguishing them would confirm that someone else's application exists under a
+guessed id. The status route returns the whole application rather than the new
+status alone, because one move also changes `current_status_since`, can close
+the application (`is_open`), and always appends to the history.
+
+The migration is
+`migrations/versions/0019_create_application_status_events.py`.
 
 ---
 

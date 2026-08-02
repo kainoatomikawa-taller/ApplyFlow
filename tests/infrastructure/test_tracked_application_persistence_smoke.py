@@ -543,3 +543,273 @@ async def test_the_log_service_is_idempotent_against_a_real_database(
             user_id
         )
     assert len(rows) == 1
+
+
+# ---- status history and status queries --------------------------------------
+#
+# The ticket's criteria 2, 3, and 4 against a real database: history is
+# preserved across writes, it survives the round trip in order, and status is
+# filterable in the query rather than in Python.
+
+
+@pytest.mark.asyncio
+async def test_the_full_status_history_survives_the_round_trip(
+    schema_ready: None,
+) -> None:
+    """Criterion 2: the history is preserved, in order, with each entry naming
+    where it came from — not collapsed into the current status."""
+    user_id = f"smoke-user-{uuid.uuid4()}"
+    posting = await _job_posting()
+    resume, _ = await _archived_documents(
+        user_id=user_id, job_posting_id=posting.id, with_letter=False
+    )
+    applied_at = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+
+    tracked = TrackedApplication.record_sent(
+        application_id=f"smoke-tracked-{uuid.uuid4()}",
+        user_id=user_id,
+        job_posting=posting,
+        submission_key=f"smoke-review-{uuid.uuid4()}",
+        resume_document=resume,
+        applied_at=applied_at,
+    )
+
+    async with async_session_factory() as session:
+        repository = SqlAlchemyTrackedApplicationRepository(session)
+        await repository.add(tracked)
+
+    # Three separate transactions, as three real updates would be.
+    for target, offset, note in (
+        (ApplicationStatus.INTERVIEWING, 7, "recruiter screen"),
+        (ApplicationStatus.OFFER, 21, "verbal offer"),
+        (ApplicationStatus.REJECTED, 30, ""),
+    ):
+        async with async_session_factory() as session:
+            repository = SqlAlchemyTrackedApplicationRepository(session)
+            loaded = await repository.get_by_id(tracked.id)
+            assert loaded is not None
+            loaded.change_status(
+                target, note=note, changed_at=applied_at + timedelta(days=offset)
+            )
+            await repository.update(loaded)
+
+    async with async_session_factory() as session:
+        stored = await SqlAlchemyTrackedApplicationRepository(session).get_by_id(
+            tracked.id
+        )
+
+    assert stored is not None
+    assert stored.status is ApplicationStatus.REJECTED
+    assert [entry.status for entry in stored.status_history] == [
+        ApplicationStatus.APPLIED,
+        ApplicationStatus.INTERVIEWING,
+        ApplicationStatus.OFFER,
+        ApplicationStatus.REJECTED,
+    ]
+    assert [entry.previous_status for entry in stored.status_history] == [
+        None,
+        ApplicationStatus.APPLIED,
+        ApplicationStatus.INTERVIEWING,
+        ApplicationStatus.OFFER,
+    ]
+    assert stored.status_history[1].note == "recruiter screen"
+    assert stored.status_history[1].changed_at == applied_at + timedelta(days=7)
+    # The rejection is terminal, and the history still shows the interview and
+    # the offer that came before it.
+    assert not stored.is_open
+    assert stored.has_held_status(ApplicationStatus.OFFER)
+    assert stored.current_status_since == applied_at + timedelta(days=30)
+
+
+@pytest.mark.asyncio
+async def test_recording_an_application_stores_its_first_history_entry(
+    schema_ready: None,
+) -> None:
+    """A newly logged application already has a history — the entry for being
+    sent — so nothing has to invent one on the first read."""
+    user_id = f"smoke-user-{uuid.uuid4()}"
+    posting = await _job_posting()
+    resume, _ = await _archived_documents(
+        user_id=user_id, job_posting_id=posting.id, with_letter=False
+    )
+    applied_at = datetime(2026, 6, 2, 9, 0, tzinfo=UTC)
+
+    tracked = TrackedApplication.record_sent(
+        application_id=f"smoke-tracked-{uuid.uuid4()}",
+        user_id=user_id,
+        job_posting=posting,
+        submission_key=f"smoke-review-{uuid.uuid4()}",
+        resume_document=resume,
+        applied_at=applied_at,
+    )
+
+    async with async_session_factory() as session:
+        await SqlAlchemyTrackedApplicationRepository(session).add(tracked)
+
+    async with async_session_factory() as session:
+        rows = (
+            await session.execute(
+                text(
+                    "SELECT sequence, status, previous_status, note "
+                    "FROM application_status_events "
+                    "WHERE tracked_application_id = :id ORDER BY sequence"
+                ),
+                {"id": tracked.id},
+            )
+        ).all()
+
+    assert rows == [(0, "applied", None, "")]
+
+
+@pytest.mark.asyncio
+async def test_an_update_appends_rather_than_rewriting_history(
+    schema_ready: None,
+) -> None:
+    """The history is append-only in the store, not just in the entity: an
+    update inserts the new entry and leaves the stored ones untouched."""
+    user_id = f"smoke-user-{uuid.uuid4()}"
+    posting = await _job_posting()
+    resume, _ = await _archived_documents(
+        user_id=user_id, job_posting_id=posting.id, with_letter=False
+    )
+
+    tracked = TrackedApplication.record_sent(
+        application_id=f"smoke-tracked-{uuid.uuid4()}",
+        user_id=user_id,
+        job_posting=posting,
+        submission_key=f"smoke-review-{uuid.uuid4()}",
+        resume_document=resume,
+    )
+
+    async with async_session_factory() as session:
+        repository = SqlAlchemyTrackedApplicationRepository(session)
+        await repository.add(tracked)
+        tracked.change_status(ApplicationStatus.INTERVIEWING)
+        await repository.update(tracked)
+        # Saving again with no further change must not duplicate anything —
+        # the primary key on (application, sequence) is what guarantees it.
+        await repository.update(tracked)
+
+    async with async_session_factory() as session:
+        count = (
+            await session.execute(
+                text(
+                    "SELECT count(*) FROM application_status_events "
+                    "WHERE tracked_application_id = :id"
+                ),
+                {"id": tracked.id},
+            )
+        ).scalar()
+
+    assert count == 2
+
+
+@pytest.mark.asyncio
+async def test_the_feed_can_be_filtered_by_status_in_the_query(
+    schema_ready: None,
+) -> None:
+    """Criterion 4: status is queryable. Filtered in SQL, which is what keeps
+    the tracker's views from getting slower as a search gets longer."""
+    user_id = f"smoke-user-{uuid.uuid4()}"
+
+    wanted: dict[ApplicationStatus, str] = {}
+    for index, status in enumerate(
+        (
+            ApplicationStatus.APPLIED,
+            ApplicationStatus.INTERVIEWING,
+            ApplicationStatus.REJECTED,
+        )
+    ):
+        # A posting each: `application_documents` allows one version-1 resume
+        # per (candidate, posting, kind), so three applications need three
+        # postings rather than three resumes for one.
+        posting = await _job_posting()
+        resume, _ = await _archived_documents(
+            user_id=user_id, job_posting_id=posting.id, with_letter=False
+        )
+        tracked = TrackedApplication.record_sent(
+            application_id=f"smoke-tracked-{uuid.uuid4()}",
+            user_id=user_id,
+            job_posting=posting,
+            submission_key=f"smoke-review-{uuid.uuid4()}",
+            resume_document=resume,
+            applied_at=datetime(2026, 6, 1, 9, 0, tzinfo=UTC) + timedelta(days=index),
+        )
+        async with async_session_factory() as session:
+            repository = SqlAlchemyTrackedApplicationRepository(session)
+            await repository.add(tracked)
+            if status is not ApplicationStatus.APPLIED:
+                tracked.change_status(status)
+                await repository.update(tracked)
+        wanted[status] = tracked.id
+
+    async with async_session_factory() as session:
+        repository = SqlAlchemyTrackedApplicationRepository(session)
+
+        everything = await repository.list_by_user_id(user_id)
+        interviewing = await repository.list_by_user_id(
+            user_id, statuses=[ApplicationStatus.INTERVIEWING]
+        )
+        live = await repository.list_by_user_id(
+            user_id,
+            statuses=[ApplicationStatus.APPLIED, ApplicationStatus.INTERVIEWING],
+        )
+        none_of_them = await repository.list_by_user_id(user_id, statuses=[])
+
+    assert len(everything) == 3
+    assert [a.id for a in interviewing] == [wanted[ApplicationStatus.INTERVIEWING]]
+    assert {a.id for a in live} == {
+        wanted[ApplicationStatus.APPLIED],
+        wanted[ApplicationStatus.INTERVIEWING],
+    }
+    # An empty filter means "no status is acceptable", not "no filter".
+    assert none_of_them == []
+    # Every application in the feed carries its own history.
+    assert all(application.status_history for application in everything)
+
+
+@pytest.mark.asyncio
+async def test_history_is_removed_with_the_application_it_belongs_to(
+    schema_ready: None,
+) -> None:
+    """The one CASCADE on the tracker. History without its application is
+    unreadable, so it is a part-of rather than a reference-to."""
+    user_id = f"smoke-user-{uuid.uuid4()}"
+    posting = await _job_posting()
+    resume, _ = await _archived_documents(
+        user_id=user_id, job_posting_id=posting.id, with_letter=False
+    )
+
+    tracked = TrackedApplication.record_sent(
+        application_id=f"smoke-tracked-{uuid.uuid4()}",
+        user_id=user_id,
+        job_posting=posting,
+        submission_key=f"smoke-review-{uuid.uuid4()}",
+        resume_document=resume,
+    )
+
+    async with async_session_factory() as session:
+        repository = SqlAlchemyTrackedApplicationRepository(session)
+        await repository.add(tracked)
+        tracked.change_status(ApplicationStatus.WITHDRAWN)
+        await repository.update(tracked)
+
+    async with async_session_factory() as session:
+        await session.execute(
+            text("DELETE FROM tracked_applications WHERE id = :id"),
+            {"id": tracked.id},
+        )
+        await session.commit()
+
+    async with async_session_factory() as session:
+        count = (
+            await session.execute(
+                text(
+                    "SELECT count(*) FROM application_status_events "
+                    "WHERE tracked_application_id = :id"
+                ),
+                {"id": tracked.id},
+            )
+        ).scalar()
+
+    assert count == 0
