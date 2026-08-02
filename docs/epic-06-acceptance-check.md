@@ -180,9 +180,13 @@ design is ever quietly undone.
 
 ## The UI, and what "reflects correctly" is checked against
 
-`frontend/src/components/ApplicationTracker.tsx` renders the feed: one row per
-application, the sent documents by version and digest, a status control, and
-the status history behind a disclosure once an application has moved.
+`frontend/src/components/ApplicationTracker.tsx` renders the feed and owns the
+filtering; `TrackedApplicationRow.tsx` is one application — role, company,
+location, applied date, status, how long it has held that status, the sent
+documents, the history behind a disclosure once it has moved, and the status
+control. `SentDocumentLine.tsx` is one document, named by version and digest
+and readable in place. `TrackerFilters.tsx` is the chip row, the search box,
+and the sort.
 
 The check proves criterion 2 through the API rather than through the screen,
 because that is where the rule lives — and the component is written so those
@@ -197,7 +201,30 @@ are the same thing:
   cannot do anything;
 - a successful `PATCH` replaces the row with **what came back**, rather than
   patching it locally, so the screen shows the stored outcome rather than the
-  candidate's intent.
+  candidate's intent;
+- choosing a status arms the change and reveals a note field — nothing is sent
+  until the candidate confirms. A select that submitted on change would make a
+  mis-click a permanent history entry, and the note the `PATCH` carries would
+  have nowhere to be typed.
+
+**Reading what was sent** is the other half of criterion 1 on screen. A row
+names its documents by version and digest and fetches the text only when the
+candidate opens one, by id, through `GET /api/application-documents/{id}` —
+the same route step 4 of this check follows, and never
+`…/documents/{kind}/latest`, which is the newer document whenever the résumé
+has been revised since. What comes back is compared against the digest the
+application froze at send time and withheld on a mismatch, because a document
+body under the words "what was sent" must not be shown on an unverified
+reference.
+
+**Filtering is client-side over one unfiltered page, deliberately.** The list
+route can filter by status and by `open_only`, and this screen uses neither:
+every chip shows a count, and those counts only exist if the client holds the
+whole page. Nothing is re-derived to do it — the chips select on `status` and
+`is_open`, both decided by the domain and sent per row, so "still live" remains
+`ApplicationStatus.is_terminal`'s answer rather than a second opinion. The page
+is capped at 100 and the screen says so when it comes back full, rather than
+letting the tallies read as a complete history.
 
 The repo has no frontend test harness, so that screen is verified by
 `npm run build` and `npm run lint` only — the same limitation Epic 05's check

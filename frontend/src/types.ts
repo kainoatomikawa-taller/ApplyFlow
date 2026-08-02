@@ -418,6 +418,34 @@ export interface SentDocument {
   created_at: string;
 }
 
+/**
+ * One archived snapshot read back in full — a `SentDocument` reference
+ * followed, with the text it stands for.
+ *
+ * This is what makes a sent document *viewable* rather than merely named. It
+ * is fetched one document at a time, on the candidate's own action, because
+ * that is the only shape in which the backend serves the text: a list
+ * response carries references and digests, never content (see
+ * `ApplicationDocumentSummaryOutput`), so a tracker that showed thirty
+ * resumes by default would be asking for something the API deliberately does
+ * not have.
+ *
+ * `content_sha256` arrives again here and is not redundant: compared against
+ * the digest the application froze at send time, it is what says the text on
+ * screen is the snapshot this application referenced and not some other
+ * version that resolved under the same id.
+ */
+export interface StoredApplicationDocument {
+  id: string;
+  job_posting_id: string;
+  document_kind: DocumentKind;
+  version: number;
+  content: string;
+  content_sha256: string;
+  created_at: string;
+  backing_sources: string[];
+}
+
 /** One recorded move in an application's history. `previous_status` is null
  *  for exactly one entry: the first, recorded when the application was sent. */
 export interface ApplicationStatusChange {

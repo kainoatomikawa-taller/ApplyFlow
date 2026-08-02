@@ -790,10 +790,17 @@ button.secondary {
 }
 
 .sent-document {
+  padding: 0.15rem 0;
+}
+
+/* The reference line — what the document is — with its text, when opened,
+   underneath it rather than beside it. */
+.sent-document-line,
+.sent-document.missing {
   display: flex;
   gap: 0.6rem;
   align-items: baseline;
-  padding: 0.15rem 0;
+  flex-wrap: wrap;
 }
 
 .sent-document-label {
@@ -855,4 +862,130 @@ button.secondary {
   padding: 0;
   display: grid;
   gap: 0.25rem;
+}
+
+/* ---- The tracker: reading a sent document ------------------------------- */
+
+.sent-document-body {
+  margin: 0.4rem 0 0.6rem;
+}
+
+.sent-document-meta {
+  margin: 0 0 0.35rem;
+  overflow-wrap: anywhere;
+}
+
+.sent-document-meta code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* The archived text, shown as the fixed artifact it is: preserved line
+   breaks, no wrapping surprises, and scrollable rather than pushing every
+   other application off the screen. */
+.sent-document-content {
+  margin: 0 0 0.5rem;
+  padding: 0.6rem 0.75rem;
+  max-height: 22rem;
+  overflow: auto;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---- The tracker: recording a status change ------------------------------ */
+
+.tracked-application-update {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 0.6rem;
+}
+
+.status-change-confirm {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.status-change-confirm input {
+  min-width: 16rem;
+  flex: 1 1 16rem;
+  font-size: 0.9rem;
+}
+
+.status-change-confirm button {
+  padding: 0.4rem 0.75rem;
+  font-size: 0.9rem;
+}
+
+/* ---- The tracker: filters ------------------------------------------------ */
+
+.tracker-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.tracker-header h2 {
+  margin: 0;
+}
+
+.tracker-filters {
+  border-bottom: 1px solid #e5e7eb;
+  padding-bottom: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.tracker-chips {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.tracker-chip {
+  background: #f3f4f6;
+  color: #374151;
+  border: 1px solid #e5e7eb;
+  border-radius: 999px;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.85rem;
+}
+
+.tracker-chip.active {
+  background: #0f3460;
+  border-color: #0f3460;
+  color: #fff;
+}
+
+/* The count is what makes the row of chips double as a summary, so it stays
+   legible against both chip backgrounds. */
+.tracker-chip-count {
+  font-weight: 600;
+  opacity: 0.75;
+}
+
+.tracker-controls {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 0.6rem;
+}
+
+.tracker-search {
+  flex: 1 1 18rem;
+  font-size: 0.9rem;
+}
+
+.tracker-summary {
+  margin: 0.5rem 0 0;
 }

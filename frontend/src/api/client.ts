@@ -18,6 +18,7 @@ import type {
   PortalInspection,
   RankedJob,
   ResolvedGapAnswer,
+  StoredApplicationDocument,
   SubmittedApplicationReview,
   TailoredResume,
   TrackedApplication,
@@ -321,6 +322,24 @@ export const applyFlowApi = {
     return request<GuardedDocument>(
       `/api/job-postings/${jobPostingId}/documents/${documentKind}/revisions`,
       { method: 'POST', body: JSON.stringify({ content }) },
+    );
+  },
+
+  /**
+   * One archived snapshot by id, with the exact text that was stored.
+   *
+   * The tracker's rows carry document *references*; this is how one of them is
+   * followed to the content. Always by id — never "the newest document for
+   * this job", which is a different and later document whenever the candidate
+   * has revised one since applying.
+   *
+   * A 500 here is meaningful rather than a glitch: the backend re-checks the
+   * stored digest before serving, so it refuses a snapshot that no longer
+   * matches its own hash instead of presenting altered text as what was sent.
+   */
+  getApplicationDocument(documentId: string): Promise<StoredApplicationDocument> {
+    return request<StoredApplicationDocument>(
+      `/api/application-documents/${documentId}`,
     );
   },
 

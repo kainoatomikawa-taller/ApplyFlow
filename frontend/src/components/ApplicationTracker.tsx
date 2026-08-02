@@ -1,99 +1,60 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { applyFlowApi } from '../api/client';
-import type { SentDocument, TrackedApplication, TrackedApplicationStatus } from '../types';
+import { TrackedApplicationRow } from './TrackedApplicationRow';
+import { TrackerFilters } from './TrackerFilters';
+import { STATUS_ORDER } from './trackerPresentation';
+import type { TrackerFilter, TrackerSort } from './TrackerFilters';
+import type { TrackedApplication, TrackedApplicationStatus } from '../types';
 
 interface Props {
   /** Bumped by the parent when the access token changes, so the feed reloads. */
   authGeneration?: number;
 }
 
-const STATUS_LABELS: Record<TrackedApplicationStatus, string> = {
-  applied: 'Applied',
-  interviewing: 'Interviewing',
-  offer: 'Offer',
-  rejected: 'Rejected',
-  withdrawn: 'Withdrawn',
-};
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  });
-}
-
-/**
- * One document reference, shown as what it is rather than as a link to
- * something regenerated.
- *
- * The short digest is the point of this line. "Tailored résumé v2" is only a
- * label; the digest is what makes the claim checkable — it identifies the
- * exact bytes that were archived, so a candidate reading their tracker can
- * tell that the document on screen is the one the employer received and not a
- * later revision that happens to share a name.
- */
-function SentDocumentLine({ label, document }: { label: string; document: SentDocument | null }) {
-  if (document === null) {
-    return (
-      <li className="sent-document missing">
-        <span className="sent-document-label">{label}</span>
-        <span className="quiet">not on file</span>
-      </li>
-    );
-  }
-  return (
-    <li className="sent-document">
-      <span className="sent-document-label">
-        {label} <span className="pill">v{document.version}</span>
-      </span>
-      <code className="sent-document-digest" title={document.content_sha256}>
-        {document.content_sha256.slice(0, 12)}
-      </code>
-    </li>
-  );
-}
+/** One page of the candidate's history. The backend caps this at 500. */
+const PAGE_LIMIT = 100;
 
 /**
  * The tracker: every application the candidate has sent, what went out with
- * it, and where it stands.
+ * it, where it stands, and how it got there.
  *
- * **The status control offers only what the backend will accept.** Its
- * options are `allowed_next_statuses` from the response — the domain's own
- * state machine (`ApplicationStatus.allowed_transitions`), passed through. A
- * dropdown that listed every status would offer "back to interviewing" on a
- * rejected application, and the candidate would meet the refusal only after
- * choosing. When the list is empty the application has settled, and the
- * status renders as text rather than as a control that cannot do anything.
+ * **One unfiltered read, narrowed here.** The list route can filter by status
+ * and by "open only", and this screen deliberately does not use either. The
+ * filter bar shows a count against every status, and those counts only exist
+ * if the client holds the whole page — asking the backend per chip would mean
+ * either a request per click or counts that describe a set the candidate
+ * cannot see. What is narrowed here is narrowed on values the backend already
+ * decided and sent per row (`status`, `is_open`), so no rule is being
+ * reimplemented; the domain still owns which statuses exist and which of them
+ * count as live.
+ *
+ * **The page bound is stated, not hidden.** Only the most recent
+ * {@link PAGE_LIMIT} applications are read, and when the page comes back full
+ * the screen says so rather than letting the counts read as a complete
+ * history.
  *
  * **A change re-renders from what was stored.** The PATCH returns the whole
- * updated record, including the next set of choices, and that is what
- * replaces the row. Patching the row locally would mean the screen showed the
- * candidate's intent rather than the stored outcome — which is the same
- * mistake as a UI that computes its own gates.
- *
- * **What was sent is shown by reference, never re-rendered.** Each row names
- * the archived snapshots by version and digest and does not fetch their text:
- * a tracker exists to say what the employer received, and the closest thing
- * to proof this screen can offer is the digest of the bytes that were stored
- * at send time.
+ * updated record — status, `is_open`, `current_status_since`, the grown
+ * history, and the next set of legal moves — and that is what replaces the
+ * row. Patching locally would show the candidate's intent rather than the
+ * stored outcome, which is the same mistake as a UI that computes its own
+ * gates.
  */
 export function ApplicationTracker({ authGeneration = 0 }: Props) {
   const [applications, setApplications] = useState<TrackedApplication[]>([]);
-  // The candidate's live total, from the backend. Not counted from the rows
-  // below: they are one `limit`-ed page, so a client-side count would start
-  // understating as soon as the page stopped holding everything.
-  const [openCount, setOpenCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
 
+  const [filter, setFilter] = useState<TrackerFilter>('all');
+  const [sort, setSort] = useState<TrackerSort>('applied');
+  const [query, setQuery] = useState('');
+
   const load = useCallback(async () => {
     try {
       setError(null);
-      const feed = await applyFlowApi.listTrackedApplications();
+      const feed = await applyFlowApi.listTrackedApplications({ limit: PAGE_LIMIT });
       setApplications(feed.applications);
-      setOpenCount(feed.open_count);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
@@ -108,17 +69,24 @@ export function ApplicationTracker({ authGeneration = 0 }: Props) {
   const changeStatus = async (
     application: TrackedApplication,
     status: TrackedApplicationStatus,
-  ) => {
+    note: string,
+  ): Promise<boolean> => {
     setBusyIds((prev) => new Set(prev).add(application.id));
     setError(null);
     try {
-      const updated = await applyFlowApi.updateApplicationStatus(application.id, status);
+      const updated = await applyFlowApi.updateApplicationStatus(
+        application.id,
+        status,
+        note,
+      );
       // Replaced wholesale with what came back — see the component docstring.
       setApplications((prev) =>
         prev.map((row) => (row.id === updated.id ? updated : row)),
       );
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
+      return false;
     } finally {
       setBusyIds((prev) => {
         const next = new Set(prev);
@@ -128,104 +96,117 @@ export function ApplicationTracker({ authGeneration = 0 }: Props) {
     }
   };
 
-  if (loaded && applications.length === 0 && error === null) {
+  /**
+   * Counted from the rows rather than read from the response's `open_count`.
+   * Not a disagreement with the backend: that field is the number of open
+   * applications *in the response*, and this read is unfiltered, so the two
+   * are the same set. Counting `is_open` — the flag the domain decided and
+   * sent — keeps the header true after a status change closes an application,
+   * where a number carried over from the last read would be stale.
+   */
+  const openCount = useMemo(
+    () => applications.filter((application) => application.is_open).length,
+    [applications],
+  );
+
+  const countsByStatus = useMemo(() => {
+    const counts = Object.fromEntries(
+      STATUS_ORDER.map((status) => [status, 0]),
+    ) as Record<TrackedApplicationStatus, number>;
+    for (const application of applications) counts[application.status] += 1;
+    return counts;
+  }, [applications]);
+
+  const shown = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    const matchesQuery = (application: TrackedApplication) =>
+      needle === '' ||
+      [application.company_name, application.role_title, application.job_location ?? '']
+        .join(' ')
+        .toLowerCase()
+        .includes(needle);
+    const matchesFilter = (application: TrackedApplication) => {
+      if (filter === 'all') return true;
+      if (filter === 'open') return application.is_open;
+      return application.status === filter;
+    };
+
+    // Sorted on parsed instants rather than on the strings, which would order
+    // correctly only as long as every timestamp came back in the same offset.
+    const field = sort === 'applied' ? 'applied_at' : 'current_status_since';
+    return applications
+      .filter((application) => matchesFilter(application) && matchesQuery(application))
+      .sort((left, right) => Date.parse(right[field]) - Date.parse(left[field]));
+  }, [applications, filter, query, sort]);
+
+  if (loaded && applications.length === 0) {
     return (
       <section className="card">
         <h2>Applications sent</h2>
-        <p className="quiet">
-          Nothing sent yet. An application appears here the moment you submit
-          one — you never add it by hand.
-        </p>
+        {/* A failed read is not evidence of an empty history, so it never
+            gets to claim one. */}
+        {error !== null ? (
+          <p className="error">{error}</p>
+        ) : (
+          <p className="quiet">
+            Nothing sent yet. An application appears here the moment you submit
+            one — you never add it by hand.
+          </p>
+        )}
       </section>
     );
   }
 
   return (
     <section className="card">
-      <h2>
-        Applications sent{' '}
+      <div className="tracker-header">
+        <h2>Applications sent</h2>
         <span className="quiet">
-          ({openCount} still live of {applications.length})
+          {openCount} still live of {applications.length}
         </span>
-      </h2>
-      {error && <p className="error">{error}</p>}
+      </div>
 
-      <ul className="tracked-applications">
-        {applications.map((application) => {
-          const busy = busyIds.has(application.id);
-          return (
-            <li key={application.id} className={`tracked-application ${application.status}`}>
-              <div className="tracked-application-header">
-                <div>
-                  <strong>{application.role_title}</strong>
-                  <span className="quiet"> @ {application.company_name}</span>
-                  {application.job_location && (
-                    <span className="quiet"> · {application.job_location}</span>
-                  )}
-                </div>
-                <span className="quiet">Applied {formatDate(application.applied_at)}</span>
-              </div>
+      {error !== null && <p className="error">{error}</p>}
 
-              <ul className="sent-documents">
-                <SentDocumentLine label="Tailored résumé" document={application.resume} />
-                {application.cover_letter && (
-                  <SentDocumentLine
-                    label="Cover letter"
-                    document={application.cover_letter}
-                  />
-                )}
-              </ul>
+      <TrackerFilters
+        filter={filter}
+        onFilterChange={setFilter}
+        sort={sort}
+        onSortChange={setSort}
+        query={query}
+        onQueryChange={setQuery}
+        total={applications.length}
+        openCount={openCount}
+        countsByStatus={countsByStatus}
+        shownCount={shown.length}
+      />
 
-              {application.status_history.length > 1 && (
-                <details className="status-history">
-                  <summary className="quiet">
-                    {application.status_history.length} status changes
-                  </summary>
-                  <ol>
-                    {application.status_history.map((change) => (
-                      <li key={`${change.status}-${change.changed_at}`}>
-                        <span className={`pill status-${change.status}`}>
-                          {STATUS_LABELS[change.status]}
-                        </span>{' '}
-                        <span className="quiet">{formatDate(change.changed_at)}</span>
-                        {change.note && <span> — {change.note}</span>}
-                      </li>
-                    ))}
-                  </ol>
-                </details>
-              )}
+      {applications.length === PAGE_LIMIT && (
+        <p className="quiet">
+          Showing your {PAGE_LIMIT} most recent applications — older ones are
+          not counted above.
+        </p>
+      )}
 
-              <div className="tracked-application-status">
-                <span className={`pill status-${application.status}`}>
-                  {STATUS_LABELS[application.status]}
-                </span>
-                {application.allowed_next_statuses.length > 0 ? (
-                  <label>
-                    <span className="quiet">Update to</span>{' '}
-                    <select
-                      value=""
-                      disabled={busy}
-                      onChange={(event) => {
-                        const next = event.target.value as TrackedApplicationStatus;
-                        if (next) void changeStatus(application, next);
-                      }}
-                    >
-                      <option value="">Choose…</option>
-                      {application.allowed_next_statuses.map((status) => (
-                        <option key={status} value={status}>
-                          {STATUS_LABELS[status]}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : (
-                  <span className="quiet">This application has closed.</span>
-                )}
-              </div>
-            </li>
-          );
-        })}
-      </ul>
+      {shown.length === 0 ? (
+        <p className="quiet">
+          No application matches this filter. Every one you have sent is still
+          on file.
+        </p>
+      ) : (
+        <ul className="tracked-applications">
+          {shown.map((application) => (
+            <TrackedApplicationRow
+              key={application.id}
+              application={application}
+              busy={busyIds.has(application.id)}
+              onStatusChange={(status, note) =>
+                changeStatus(application, status, note)
+              }
+            />
+          ))}
+        </ul>
+      )}
     </section>
   );
 }
