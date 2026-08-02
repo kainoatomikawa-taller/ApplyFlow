@@ -455,7 +455,10 @@ consumes.
    candidate actually meets.
 5. **Ranking** (`RankMatchedJobPostings`, `GET /api/job-postings/matches`)
    assembles the final list: filtered, scored, ordered highest-fit-first,
-   each entry carrying its score, rationale, and gap list.
+   each entry carrying its score, rationale, and gap list. Roles the
+   candidate already applied to are dropped here, matched on canonical
+   identity rather than posting id — see
+   [Already-applied jobs stop being suggested](#already-applied-jobs-stop-being-suggested).
 6. **Feedback loop** (`SubmitJobMatchFeedback`/`AnalyzeScoringFeedback`,
    `POST /api/job-postings/{id}/feedback`,
    `GET /api/job-postings/feedback(/analysis)`) records a candidate's
@@ -751,7 +754,60 @@ status alone, because one move also changes `current_status_since`, can close
 the application (`is_open`), and always appends to the history.
 
 The migration is
-`migrations/versions/0019_create_application_status_events.py`.
+`migrations/versions/0020_create_application_status_events.py`.
+
+### Already-applied jobs stop being suggested
+
+The tracker feeds back into matching, so a role the candidate has applied to
+is not offered to them again. `RankMatchedJobPostings` and
+`ListEligibleJobPostings` both drop those postings before returning, which is
+the whole feature: the matched list is a list of jobs *to apply to*.
+
+- **Matched on canonical identity, not posting id.** `CanonicalJobIdentity` is
+  company + title + location, each collapsed by the same `normalize_text` that
+  derives Epic 02's dedup keys. Posting ids would not work: the role
+  reappears in the active job set under a new id every time it is re-ingested,
+  relisted by the employer, or picked up from a second aggregator, and each of
+  those would come back as a job to apply to.
+- **`source` is deliberately dropped.** Epic 02's dedup key is *per source* —
+  the same opening from Adzuna and from Greenhouse is legitimately two rows,
+  because that key answers "did this feed already give me this listing?" This
+  identity answers "is this the role I applied to?", and applying through one
+  board reaches the employer no matter which feed surfaced it.
+- **Not fuzzy, for the same reason Epic 02 is not.** "Backend Engineer" and
+  "Backend Engineer II" stay distinct, and a posting naming no location is not
+  assumed to be the one applied to in Berlin. Suppression *removes* things from
+  the candidate's view, so it has to fail toward showing one job too many
+  rather than hiding one they never applied to.
+- **Location is snapshotted onto the tracked row** (`job_location`, migration
+  `0019`), like `company_name` and `role_title` before it. A join through
+  `job_posting_id` would lose the answer in exactly the cases suppression
+  exists for — the posting pruned, relisted, or re-ingested. Rows predating the
+  column read as `NULL` and are not backfilled: the honest value is "unknown",
+  and guessing it from today's posting would assert something about send time
+  that nobody knows.
+- **Outcome does not matter.** A rejected or withdrawn application still
+  suppresses. A rejection is the strongest possible reason not to suggest
+  applying again, and re-applying deliberately is something the candidate does
+  from the tracker, not something the matcher proposes.
+- **Suppressed, or flagged on request.** `GET /api/job-postings/matches`
+  excludes them by default; `?include_already_applied=true` returns them with
+  `already_applied: true` on the entry, for a client that wants to show a "you
+  already applied" section. The flag is set the same way in both modes, so the
+  two cannot disagree. The check runs before rationale generation, so a
+  suppressed job also costs no LLM call.
+- **Read completely, once per run.** `TrackedApplicationRepository.list_applied_identities`
+  returns the candidate's distinct roles — three short columns, no limit. A
+  limit would quietly un-suppress the oldest applications, and a feature that
+  starts nudging again after the hundredth application is worse than none,
+  because it looks like it works.
+
+`tests/application/test_applied_job_suppression.py` is the cross-epic check:
+it drives the **real** `IngestAggregatorJobs` and the **real**
+`SubmittedApplicationLog` rather than hand-building their rows, so the
+identity rule is verified against the dedup key it has to agree with — 
+including the case where Epic 02 keeps two rows (same role, two sources) and
+matching suppresses both anyway.
 
 ---
 
@@ -1495,7 +1551,7 @@ All `/api/applications*` and `/api/resumes*` routes require
 | POST   | `/api/resumes`                      | Upload a resume (PDF/DOCX/text); stores it and returns extracted text | Yes |
 | GET    | `/api/resumes/{id}`                 | Fetch one resume's metadata + extracted text | Yes   |
 | GET    | `/api/resumes`                      | List the current user's uploaded resumes | Yes       |
-| GET    | `/api/job-postings/matches?limit=`  | Ranked, filtered, scored job matches for the current user | Yes |
+| GET    | `/api/job-postings/matches?limit=&include_already_applied=` | Ranked, filtered, scored job matches for the current user; roles already applied to are excluded unless `include_already_applied=true`, which returns them flagged | Yes |
 | POST   | `/api/job-postings/{id}/feedback`   | Submit thumbs-up/down feedback on a match | Yes      |
 | GET    | `/api/job-postings/feedback`        | List the current user's feedback history | Yes       |
 | GET    | `/api/job-postings/feedback/analysis` | Bucketed feedback agreement-rate summary (tuning signal) | Yes |

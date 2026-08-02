@@ -350,10 +350,14 @@ class TrackedApplicationModel(Base):
     to this candidate and posting. Any `application_documents.id` satisfies the
     constraint, so that check lives in `TrackedApplication.record_sent`.
 
-    `company_name`/`role_title` are copied from the posting at record time
-    rather than read through `job_posting_id` on every query. A posting is a
-    live row — re-ingested, re-normalized, retitled, eventually stale — and
-    this one states what the candidate applied to *then*.
+    `company_name`/`role_title`/`job_location` are copied from the posting at
+    record time rather than read through `job_posting_id` on every query. A
+    posting is a live row — re-ingested, re-normalized, retitled, eventually
+    stale — and this one states what the candidate applied to *then*. The same
+    three columns are the canonical role identity the matching layer suppresses
+    already-applied jobs on, which is the other reason they are snapshotted:
+    the answer has to survive the posting being pruned or relisted under a new
+    id, and a join would lose it in exactly those cases.
 
     No unique constraint on (`user_id`, `job_posting_id`): applying to the same
     posting twice is two real events, each with its own date, documents, and
@@ -409,6 +413,21 @@ class TrackedApplicationModel(Base):
     #: Snapshotted from the posting — see the class docstring.
     company_name: Mapped[str] = mapped_column(String(255))
     role_title: Mapped[str] = mapped_column(String(255))
+    #: Snapshotted too, and the third component of the role identity the
+    #: matching layer suppresses re-application nudges on (company + title +
+    #: location — see `CanonicalJobIdentity`). Nullable: plenty of postings
+    #: name no location, and rows written before this column existed have
+    #: none either.
+    job_location: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        comment=(
+            "The posting's location as of send time. With company_name and "
+            "role_title this forms the canonical role identity that keeps "
+            "already-applied jobs out of the candidate's matches — see "
+            "src/domain/value_objects/canonical_job_identity.py."
+        ),
+    )
     #: When the application was sent. Not nullable: this row exists because it
     #: was, and a tracker whose "date applied" could be NULL would need a
     #: branch in every reader for applications that were never applications.

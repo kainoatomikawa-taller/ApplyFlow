@@ -6,7 +6,9 @@ any source-specific payload, so an aggregator adapter's only job is to
 map its raw response onto these fields. `normalized_company`,
 `normalized_title`, and `normalized_location` are derived automatically
 (never independently settable) so every adapter produces consistent dedup
-keys without re-implementing the normalization rule.
+keys without re-implementing the normalization rule. `canonical_identity`
+exposes those same three values as the role identity the tracker matches
+against — see `CanonicalJobIdentity`.
 
 `status`/`last_checked_at`/`consecutive_link_failures` track this
 posting's lifecycle past ingestion — see `mark_stale_if_expired` and
@@ -23,6 +25,7 @@ from typing import ClassVar
 
 from src.domain.exceptions import InvalidValueError
 from src.domain.services.text_normalization import normalize_text
+from src.domain.value_objects.canonical_job_identity import CanonicalJobIdentity
 from src.domain.value_objects.job_posting_status import JobPostingStatus
 from src.domain.value_objects.job_requirements import JobRequirements
 from src.domain.value_objects.link_check_outcome import LinkCheckOutcome
@@ -101,6 +104,23 @@ class JobPosting:
     @property
     def is_active(self) -> bool:
         return self.status == JobPostingStatus.ACTIVE
+
+    @property
+    def canonical_identity(self) -> CanonicalJobIdentity:
+        """This posting's role identity — company + title + location, built
+        from the same normalized values the ingestion dedup key is built from.
+
+        What the tracker matches on to decide the candidate has already
+        applied to this role (see `CanonicalJobIdentity` and
+        `AppliedJobIndex`). Derived from the normalized fields rather than
+        recomputed from the raw ones so a posting can never be its own
+        duplicate under one rule and a distinct role under the other.
+        """
+        return CanonicalJobIdentity(
+            company=self.normalized_company,
+            title=self.normalized_title,
+            location=self.normalized_location,
+        )
 
     def mark_stale_if_expired(
         self, *, as_of: datetime, stale_after_days: int | None = None

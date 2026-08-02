@@ -7,6 +7,7 @@ no real database or LLM call is required.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 
 from fastapi.testclient import TestClient
@@ -44,6 +45,11 @@ _RANKED = RankedJobOutput(
     rationale="Strong match on Python experience.",
     gaps=["Kubernetes"],
 )
+
+#: What the use case returns for a role the candidate already applied to —
+#: only ever reachable when the caller opts in (see the route's
+#: `include_already_applied` query param).
+_ALREADY_APPLIED = replace(_RANKED, already_applied=True)
 
 
 class _FakeRankUseCase:
@@ -195,4 +201,63 @@ def test_get_gaps_returns_502_when_the_llm_call_fails():
     response = _client(app).get("/api/job-postings/job-1/gaps")
 
     assert response.status_code == 502
+    app.dependency_overrides.clear()
+
+
+def test_list_matches_does_not_ask_for_already_applied_roles_by_default():
+    """The route must not nudge a re-application unless asked: the flag it
+    forwards is what the use case reads to suppress them."""
+    app = create_app()
+    app.dependency_overrides[get_current_user] = lambda: _USER
+    seen: list[object] = []
+    use_case = _FakeRankUseCase(outputs=[])
+
+    async def _capture(dto):
+        seen.append(dto)
+        return []
+
+    use_case.execute = _capture  # type: ignore[method-assign]
+    app.dependency_overrides[get_rank_matched_jobs_use_case] = lambda: use_case
+
+    response = _client(app).get("/api/job-postings/matches")
+
+    assert response.status_code == 200
+    assert seen[0].include_already_applied is False
+    app.dependency_overrides.clear()
+
+
+def test_list_matches_forwards_the_include_already_applied_flag():
+    app = create_app()
+    app.dependency_overrides[get_current_user] = lambda: _USER
+    seen: list[object] = []
+
+    class _Capturing:
+        async def execute(self, dto):
+            seen.append(dto)
+            return [_ALREADY_APPLIED]
+
+    app.dependency_overrides[get_rank_matched_jobs_use_case] = lambda: _Capturing()
+
+    response = _client(app).get(
+        "/api/job-postings/matches?include_already_applied=true"
+    )
+
+    assert response.status_code == 200
+    assert seen[0].include_already_applied is True
+    # And the flag is visible on the entry, so a client can label it rather
+    # than presenting it as a job to apply to.
+    assert response.json()[0]["already_applied"] is True
+    app.dependency_overrides.clear()
+
+
+def test_ranked_entries_are_not_flagged_already_applied_by_default():
+    app = create_app()
+    app.dependency_overrides[get_current_user] = lambda: _USER
+    app.dependency_overrides[get_rank_matched_jobs_use_case] = lambda: _FakeRankUseCase(
+        outputs=[_RANKED]
+    )
+
+    response = _client(app).get("/api/job-postings/matches")
+
+    assert response.json()[0]["already_applied"] is False
     app.dependency_overrides.clear()

@@ -1,11 +1,11 @@
 """Tests for RankMatchedJobPostings — the final ranked job list: filtered
-for hard disqualifiers, ordered by fit score, each entry carrying its
-score, rationale, and gap list.
+for hard disqualifiers and for roles already applied to, ordered by fit
+score, each entry carrying its score, rationale, and gap list.
 """
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 
 import pytest
 
@@ -19,10 +19,12 @@ from src.application.use_cases.rank_matched_job_postings import (
 )
 from src.domain.entities.job_posting import JobPosting
 from src.domain.entities.skill import Skill
+from src.domain.entities.tracked_application import TrackedApplication
 from src.domain.entities.user_profile import UserProfile
 from src.domain.exceptions import ProfileNotFoundError
 from src.domain.repositories.job_posting_repository import JobPostingRepository
 from src.domain.repositories.profile_repository import ProfileRepository
+from src.domain.value_objects.application_status import ApplicationStatus
 from src.domain.value_objects.email_address import EmailAddress
 from src.domain.value_objects.job_requirements import JobRequirements
 from src.domain.value_objects.provenance_source import ProvenanceSource
@@ -30,6 +32,7 @@ from src.domain.value_objects.work_authorization import WorkAuthorization
 from src.domain.value_objects.work_authorization_status import (
     WorkAuthorizationStatus,
 )
+from tests.application.conftest import InMemoryTrackedApplicationRepository
 
 _AS_OF = date(2026, 1, 1)
 
@@ -134,15 +137,36 @@ class FakeGenerator(JobFitRationaleGeneratorPort):
         return self.rationale
 
 
+def _application(**overrides: object) -> TrackedApplication:
+    """One record in the candidate's tracker — an application already sent."""
+    defaults: dict[str, object] = {
+        "id": "tracked-1",
+        "user_id": "user-1",
+        "job_posting_id": "job-1",
+        "submission_key": "review-1",
+        "company_name": "Acme Corp",
+        "role_title": "Backend Engineer",
+        "job_location": None,
+        "applied_at": datetime(2026, 3, 1, tzinfo=UTC),
+        "resume_document_id": "doc-resume",
+    }
+    defaults.update(overrides)
+    return TrackedApplication(**defaults)
+
+
 def _use_case(
     postings: list[JobPosting],
     profiles: list[UserProfile],
     generator: JobFitRationaleGeneratorPort | None = None,
+    applications: list[TrackedApplication] | None = None,
 ) -> RankMatchedJobPostings:
     return RankMatchedJobPostings(
         job_posting_repository=FakeJobPostingRepository(postings),
         profile_repository=FakeProfileRepository(profiles),
         rationale_generator=generator or FakeGenerator(),
+        tracked_application_repository=InMemoryTrackedApplicationRepository(
+            applications or []
+        ),
     )
 
 
@@ -266,3 +290,151 @@ async def test_respects_limit_on_the_active_job_set():
     )
 
     assert len(result) == 2
+
+
+# ---- already-applied roles (the tracker feeding back into matching) ---------
+
+
+@pytest.mark.asyncio
+async def test_a_role_already_applied_to_is_not_in_the_ranked_list():
+    """Acceptance criterion 3: the ranked list is a list of jobs to apply to,
+    so it never nudges a re-application."""
+    applied_to = _posting(id="job-1", company="Acme Corp", title="Backend Engineer")
+    fresh = _posting(id="job-2", company="Globex", title="Backend Engineer")
+    use_case = _use_case(
+        [applied_to, fresh],
+        [_profile()],
+        applications=[_application(company_name="Acme Corp")],
+    )
+
+    result = await use_case.execute(
+        RankMatchedJobsInput(user_id="user-1", as_of=_AS_OF)
+    )
+
+    assert [entry.job_posting.id for entry in result] == ["job-2"]
+
+
+@pytest.mark.asyncio
+async def test_suppression_matches_on_canonical_identity_not_posting_id():
+    """Acceptance criterion 2. The posting in the active set is a *different
+    row* from the one applied to — relisted, or re-ingested from another
+    source — and matching on id would nudge the candidate to apply again."""
+    relisted = _posting(
+        id="job-relisted-999",
+        source="greenhouse",
+        company="  ACME   CORP ",
+        title="backend  engineer",
+    )
+    use_case = _use_case(
+        [relisted],
+        [_profile()],
+        applications=[
+            _application(job_posting_id="job-long-gone", company_name="Acme Corp")
+        ],
+    )
+
+    result = await use_case.execute(
+        RankMatchedJobsInput(user_id="user-1", as_of=_AS_OF)
+    )
+
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_the_same_title_in_another_location_is_still_offered():
+    """Location is part of the identity, so a genuinely different opening is
+    not hidden by an application to its namesake elsewhere."""
+    berlin = _posting(id="job-berlin", location="Berlin, DE")
+    use_case = _use_case(
+        [berlin],
+        [_profile()],
+        applications=[_application(job_location="New York, NY")],
+    )
+
+    result = await use_case.execute(
+        RankMatchedJobsInput(user_id="user-1", as_of=_AS_OF)
+    )
+
+    assert [entry.job_posting.id for entry in result] == ["job-berlin"]
+
+
+@pytest.mark.asyncio
+async def test_another_candidates_applications_do_not_suppress_anything():
+    use_case = _use_case(
+        [_posting()],
+        [_profile()],
+        applications=[_application(user_id="user-2")],
+    )
+
+    result = await use_case.execute(
+        RankMatchedJobsInput(user_id="user-1", as_of=_AS_OF)
+    )
+
+    assert [entry.job_posting.id for entry in result] == ["job-1"]
+
+
+@pytest.mark.asyncio
+async def test_entries_are_not_flagged_already_applied_by_default():
+    use_case = _use_case([_posting()], [_profile()])
+
+    result = await use_case.execute(
+        RankMatchedJobsInput(user_id="user-1", as_of=_AS_OF)
+    )
+
+    assert result[0].already_applied is False
+
+
+@pytest.mark.asyncio
+async def test_opting_in_returns_already_applied_roles_flagged():
+    """Acceptance criterion 1's other half: a caller that wants the full
+    picture gets the entries back *labelled*, never silently mixed in."""
+    applied_to = _posting(id="job-1", company="Acme Corp")
+    fresh = _posting(id="job-2", company="Globex")
+    use_case = _use_case(
+        [applied_to, fresh],
+        [_profile()],
+        applications=[_application(company_name="Acme Corp")],
+    )
+
+    result = await use_case.execute(
+        RankMatchedJobsInput(
+            user_id="user-1", as_of=_AS_OF, include_already_applied=True
+        )
+    )
+
+    flags = {entry.job_posting.id: entry.already_applied for entry in result}
+    assert flags == {"job-1": True, "job-2": False}
+
+
+@pytest.mark.asyncio
+async def test_a_suppressed_job_costs_no_rationale_call():
+    """Suppression happens before the LLM call, so a run does not pay for
+    narratives nobody will read."""
+    generator = FakeGenerator()
+    use_case = _use_case(
+        [_posting(company="Acme Corp")],
+        [_profile()],
+        generator,
+        applications=[_application(company_name="Acme Corp")],
+    )
+
+    await use_case.execute(RankMatchedJobsInput(user_id="user-1", as_of=_AS_OF))
+
+    assert generator.calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_application_still_keeps_the_role_out_of_the_list():
+    use_case = _use_case(
+        [_posting(company="Acme Corp")],
+        [_profile()],
+        applications=[
+            _application(company_name="Acme Corp", status=ApplicationStatus.REJECTED)
+        ],
+    )
+
+    result = await use_case.execute(
+        RankMatchedJobsInput(user_id="user-1", as_of=_AS_OF)
+    )
+
+    assert result == []

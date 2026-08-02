@@ -39,12 +39,25 @@ router = APIRouter(
 @router.get("/matches", response_model=list[RankedJobResponse])
 async def list_matched_job_postings(
     limit: int = Query(default=100, ge=1, le=500),
+    include_already_applied: bool = Query(
+        default=False,
+        description=(
+            "Include roles this candidate has already applied to, flagged "
+            "with `already_applied`. Off by default so the list never nudges "
+            "a re-application."
+        ),
+    ),
     user: AuthenticatedUserDTO = Depends(get_current_user),
     use_case: RankMatchedJobPostings = Depends(get_rank_matched_jobs_use_case),
 ) -> list[RankedJobResponse]:
     try:
         outputs = await use_case.execute(
-            RankMatchedJobsInput(user_id=user.subject, as_of=date.today(), limit=limit)
+            RankMatchedJobsInput(
+                user_id=user.subject,
+                as_of=date.today(),
+                limit=limit,
+                include_already_applied=include_already_applied,
+            )
         )
     except ProfileNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc

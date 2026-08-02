@@ -128,6 +128,11 @@ class RankedJobResponse(BaseModel):
     score: int
     rationale: str
     gaps: list[str]
+    #: Whether the candidate already applied to this role. False on every
+    #: entry unless the caller asked for already-applied jobs to be included —
+    #: they are suppressed by default, so the list stays a list of jobs to
+    #: apply to.
+    already_applied: bool = False
 
 
 class JobRequirementGapsResponse(BaseModel):

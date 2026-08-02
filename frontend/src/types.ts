@@ -67,6 +67,13 @@ export interface RankedJob {
   score: number;
   rationale: string;
   gaps: string[];
+  /**
+   * Whether this role is one the candidate already applied to. Always false
+   * for the default matches call, which suppresses those entries so the list
+   * never nudges a re-application — only a caller that opts in
+   * (`include_already_applied`) sees them, flagged.
+   */
+  already_applied: boolean;
 }
 
 export type FeedbackRating = 'thumbs_up' | 'thumbs_down';

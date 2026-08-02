@@ -26,7 +26,7 @@ _USER_ID = "user-1"
 _SUBMISSION_KEY = "review-1"
 
 
-def _posting(posting_id: str = "job-1") -> JobPosting:
+def _posting(posting_id: str = "job-1", location: str | None = None) -> JobPosting:
     return JobPosting(
         id=posting_id,
         source="greenhouse",
@@ -34,6 +34,7 @@ def _posting(posting_id: str = "job-1") -> JobPosting:
         title="Senior Backend Engineer",
         apply_url="https://boards.greenhouse.io/globex/jobs/1",
         description="Build the thing.",
+        location=location,
     )
 
 
@@ -600,3 +601,78 @@ def test_record_sent_produces_an_application_with_its_first_entry() -> None:
     (initial,) = tracked.status_history
     assert initial.status is ApplicationStatus.APPLIED
     assert initial.changed_at == tracked.applied_at
+
+# ---- canonical identity (what matching suppresses on) -----------------------
+
+
+def test_record_sent_snapshots_the_postings_location() -> None:
+    """The third component of the role identity, copied like role and company
+    so the answer survives the posting being pruned or relisted."""
+    tracked = TrackedApplication.record_sent(
+        application_id="tracked-1",
+        user_id=_USER_ID,
+        job_posting=_posting(location="Berlin, DE"),
+        submission_key=_SUBMISSION_KEY,
+        resume_document=_resume(),
+    )
+
+    assert tracked.job_location == "Berlin, DE"
+
+
+def test_a_posting_naming_no_location_records_none() -> None:
+    tracked = TrackedApplication.record_sent(
+        application_id="tracked-1",
+        user_id=_USER_ID,
+        job_posting=_posting(),
+        submission_key=_SUBMISSION_KEY,
+        resume_document=_resume(),
+    )
+
+    assert tracked.job_location is None
+
+
+def test_the_recorded_identity_is_the_postings_identity() -> None:
+    """What ties the tracker to the matching layer: an application recorded
+    against a posting must produce the identity that posting matches on."""
+    posting = _posting(location="Berlin, DE")
+    tracked = TrackedApplication.record_sent(
+        application_id="tracked-1",
+        user_id=_USER_ID,
+        job_posting=posting,
+        submission_key=_SUBMISSION_KEY,
+        resume_document=_resume(),
+    )
+
+    assert tracked.canonical_identity == posting.canonical_identity
+
+
+def test_the_identity_survives_the_posting_being_retitled() -> None:
+    """The snapshot is the point: a posting edited after the fact must not
+    change which role the candidate is recorded as having applied to."""
+    posting = _posting(location="Berlin, DE")
+    tracked = TrackedApplication.record_sent(
+        application_id="tracked-1",
+        user_id=_USER_ID,
+        job_posting=posting,
+        submission_key=_SUBMISSION_KEY,
+        resume_document=_resume(),
+    )
+    before = tracked.canonical_identity
+
+    posting.title = "Staff Backend Engineer"
+    posting.location = "Munich, DE"
+
+    assert tracked.canonical_identity == before
+
+
+def test_the_recorded_identity_is_normalized() -> None:
+    tracked = _tracked(
+        company_name="  GLOBEX  ",
+        role_title="Senior  Backend Engineer",
+        job_location=" Berlin, DE ",
+    )
+
+    identity = tracked.canonical_identity
+    assert identity.company == "globex"
+    assert identity.title == "senior backend engineer"
+    assert identity.location == "berlin, de"

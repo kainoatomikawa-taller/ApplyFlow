@@ -66,6 +66,7 @@ from src.domain.repositories.tracked_application_repository import (
     TrackedApplicationRepository,
 )
 from src.domain.value_objects.application_status import ApplicationStatus
+from src.domain.value_objects.canonical_job_identity import CanonicalJobIdentity
 from src.domain.value_objects.email_address import EmailAddress
 from src.domain.value_objects.generated_document_kind import GeneratedDocumentKind
 from src.domain.value_objects.job_requirements import JobRequirements
@@ -830,6 +831,13 @@ class InMemoryTrackedApplicationRepository(TrackedApplicationRepository):
         ]
         owned.sort(key=lambda application: application.applied_at, reverse=True)
         return owned
+
+    async def list_applied_identities(
+        self, *, user_id: str
+    ) -> list[CanonicalJobIdentity]:
+        return list(
+            {r.canonical_identity for r in self.rows.values() if r.user_id == user_id}
+        )
 
 
 @pytest.fixture

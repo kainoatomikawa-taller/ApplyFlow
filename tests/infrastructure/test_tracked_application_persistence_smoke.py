@@ -35,6 +35,7 @@ from src.domain.entities.application_document import ApplicationDocument
 from src.domain.entities.job_posting import JobPosting
 from src.domain.entities.tracked_application import TrackedApplication
 from src.domain.value_objects.application_status import ApplicationStatus
+from src.domain.value_objects.canonical_job_identity import CanonicalJobIdentity
 from src.domain.value_objects.generated_document_kind import GeneratedDocumentKind
 from src.domain.value_objects.provenance_source import ProvenanceSource
 from src.infrastructure.persistence.application_document_repository_impl import (
@@ -813,3 +814,126 @@ async def test_history_is_removed_with_the_application_it_belongs_to(
         ).scalar()
 
     assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_applied_identities_come_back_normalized_and_deduplicated(
+    schema_ready: None,
+) -> None:
+    """The read the matching layer suppresses on, against real SQL.
+
+    Two things a fake cannot prove: that the snapshotted location actually
+    round-trips through the new column, and that identities arrive collapsed
+    by the *domain's* rule rather than by Postgres — "Smoke Test Co" and
+    "SMOKE TEST  CO" are two rows to a `SELECT DISTINCT` and one role here.
+    """
+    user_id = f"smoke-user-{uuid.uuid4()}"
+    other_user_id = f"smoke-user-{uuid.uuid4()}"
+
+    async def _record(
+        *,
+        owner_id: str,
+        company: str,
+        title: str,
+        location: str | None,
+    ) -> None:
+        posting = JobPosting(
+            id=f"smoke-job-{uuid.uuid4()}",
+            source="greenhouse",
+            company=company,
+            title=title,
+            apply_url="https://smoketestco.example.com/careers/tracker",
+            description="Build things.",
+            location=location,
+        )
+        async with async_session_factory() as session:
+            await SqlAlchemyJobPostingRepository(session).add(posting)
+        resume, _ = await _archived_documents(
+            user_id=owner_id, job_posting_id=posting.id, with_letter=False
+        )
+        tracked = TrackedApplication.record_sent(
+            application_id=f"smoke-tracked-{uuid.uuid4()}",
+            user_id=owner_id,
+            job_posting=posting,
+            submission_key=f"smoke-review-{uuid.uuid4()}",
+            resume_document=resume,
+        )
+        async with async_session_factory() as session:
+            await SqlAlchemyTrackedApplicationRepository(session).add(tracked)
+
+    await _record(
+        owner_id=user_id,
+        company="Smoke Test Co",
+        title="Backend Engineer",
+        location="New York, NY",
+    )
+    # The same role written differently — one identity, two rows.
+    await _record(
+        owner_id=user_id,
+        company="SMOKE TEST  CO",
+        title="backend engineer",
+        location="new york, ny",
+    )
+    # Same role, another city — a distinct identity.
+    await _record(
+        owner_id=user_id,
+        company="Smoke Test Co",
+        title="Backend Engineer",
+        location="Berlin, DE",
+    )
+    # Another candidate's application must not leak into this answer.
+    await _record(
+        owner_id=other_user_id,
+        company="Other Co",
+        title="Backend Engineer",
+        location="New York, NY",
+    )
+
+    async with async_session_factory() as session:
+        identities = await SqlAlchemyTrackedApplicationRepository(
+            session
+        ).list_applied_identities(user_id=user_id)
+
+    assert set(identities) == {
+        CanonicalJobIdentity.of(
+            company="Smoke Test Co", title="Backend Engineer", location="New York, NY"
+        ),
+        CanonicalJobIdentity.of(
+            company="Smoke Test Co", title="Backend Engineer", location="Berlin, DE"
+        ),
+    }
+
+
+@pytest.mark.asyncio
+async def test_the_snapshotted_location_round_trips(schema_ready: None) -> None:
+    user_id = f"smoke-user-{uuid.uuid4()}"
+    posting = JobPosting(
+        id=f"smoke-job-{uuid.uuid4()}",
+        source="greenhouse",
+        company="Smoke Test Co",
+        title="Backend Engineer",
+        apply_url="https://smoketestco.example.com/careers/tracker",
+        description="Build things.",
+        location="Berlin, DE",
+    )
+    async with async_session_factory() as session:
+        await SqlAlchemyJobPostingRepository(session).add(posting)
+    resume, _ = await _archived_documents(
+        user_id=user_id, job_posting_id=posting.id, with_letter=False
+    )
+    tracked = TrackedApplication.record_sent(
+        application_id=f"smoke-tracked-{uuid.uuid4()}",
+        user_id=user_id,
+        job_posting=posting,
+        submission_key=f"smoke-review-{uuid.uuid4()}",
+        resume_document=resume,
+    )
+
+    async with async_session_factory() as session:
+        repository = SqlAlchemyTrackedApplicationRepository(session)
+        await repository.add(tracked)
+        stored = await repository.get_by_id(tracked.id)
+
+    assert stored is not None
+    assert stored.job_location == "Berlin, DE"
+    assert stored.canonical_identity == posting.canonical_identity

@@ -21,8 +21,8 @@ sent, which is exactly a one-entry history. Without it those applications would
 load with an empty history, and the domain would seed the same entry on every
 read instead of once, at write time (see `TrackedApplication._validate_history`).
 
-Revision ID: 0019
-Revises: 0018
+Revision ID: 0020
+Revises: 0019
 Create Date: 2026-08-01 00:00:00.000000
 """
 
@@ -31,8 +31,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0019"
-down_revision: Union[str, None] = "0018"
+revision: str = "0020"
+down_revision: Union[str, None] = "0019"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

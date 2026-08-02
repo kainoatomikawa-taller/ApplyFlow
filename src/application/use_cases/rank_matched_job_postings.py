@@ -14,6 +14,15 @@ A single posting's rationale-generation failure never drops it from the
 list — that would silently hide a job the candidate genuinely qualifies
 for over a transient LLM hiccup — it falls back to a plain, deterministic
 summary of the same facts the LLM would have been given instead.
+
+Roles the candidate has already applied to are dropped before any of
+that. The tracker's records feed back in here as an `AppliedJobIndex`,
+matched on canonical identity (company + title + location — see
+`CanonicalJobIdentity`) rather than posting id, so a role that was
+re-ingested, relisted, or picked up from a second aggregator is still
+recognized as one the candidate has sent an application to. The test runs
+*before* the rationale call for a second reason beyond the nudge: a
+suppressed job is one fewer LLM request per ranking run.
 """
 
 from __future__ import annotations
@@ -31,6 +40,10 @@ from src.domain.entities.user_profile import UserProfile
 from src.domain.exceptions import ProfileNotFoundError
 from src.domain.repositories.job_posting_repository import JobPostingRepository
 from src.domain.repositories.profile_repository import ProfileRepository
+from src.domain.repositories.tracked_application_repository import (
+    TrackedApplicationRepository,
+)
+from src.domain.services.applied_job_index import AppliedJobIndex
 from src.domain.services.hard_disqualifier_filter import HardDisqualifierFilter
 from src.domain.services.requirement_classifier import RequirementClassifier
 from src.domain.services.soft_preference_evaluator import SoftPreferenceEvaluator
@@ -43,6 +56,7 @@ class RankMatchedJobPostings:
         job_posting_repository: JobPostingRepository,
         profile_repository: ProfileRepository,
         rationale_generator: JobFitRationaleGeneratorPort,
+        tracked_application_repository: TrackedApplicationRepository,
         disqualifier_filter: HardDisqualifierFilter | None = None,
         classifier: RequirementClassifier | None = None,
         soft_evaluator: SoftPreferenceEvaluator | None = None,
@@ -50,6 +64,7 @@ class RankMatchedJobPostings:
         self._job_posting_repository = job_posting_repository
         self._profile_repository = profile_repository
         self._rationale_generator = rationale_generator
+        self._tracked_application_repository = tracked_application_repository
         self._disqualifier_filter = disqualifier_filter or HardDisqualifierFilter()
         self._classifier = classifier or RequirementClassifier()
         self._soft_evaluator = soft_evaluator or SoftPreferenceEvaluator()
@@ -60,15 +75,30 @@ class RankMatchedJobPostings:
             raise ProfileNotFoundError(dto.user_id)
 
         postings = await self._job_posting_repository.list_active(limit=dto.limit)
+        # Loaded once for the whole run: the candidate's applied-to set does
+        # not change while a ranking is being assembled, and asking per
+        # posting would be a round trip per job.
+        applied = AppliedJobIndex(
+            await self._tracked_application_repository.list_applied_identities(
+                user_id=dto.user_id
+            )
+        )
 
         ranked: list[RankedJobOutput] = []
         for posting in postings:
             requirements = posting.requirements or JobRequirements()
             if not self._disqualifier_filter.evaluate(profile, requirements).qualifies:
                 continue
+            already_applied = applied.has_applied_to(posting)
+            if already_applied and not dto.include_already_applied:
+                continue
             ranked.append(
                 await self._rank_one(
-                    posting, profile, requirements, as_of=dto.as_of
+                    posting,
+                    profile,
+                    requirements,
+                    as_of=dto.as_of,
+                    already_applied=already_applied,
                 )
             )
 
@@ -82,6 +112,7 @@ class RankMatchedJobPostings:
         requirements: JobRequirements,
         *,
         as_of: date,
+        already_applied: bool,
     ) -> RankedJobOutput:
         classification = self._classifier.classify(requirements)
         soft_evaluation = self._soft_evaluator.evaluate(
@@ -108,6 +139,7 @@ class RankMatchedJobPostings:
             score=soft_evaluation.fit_score,
             rationale=rationale,
             gaps=list(gaps),
+            already_applied=already_applied,
         )
 
     @staticmethod

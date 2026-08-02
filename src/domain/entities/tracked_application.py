@@ -39,14 +39,22 @@ reference no foreign key can catch: `application_documents.id` is a valid
 target whether or not the row behind it has anything to do with this
 application.
 
-Why role and company are stored, not read through the posting
-------------------------------------------------------------
+Why role, company, and location are stored, not read through the posting
+------------------------------------------------------------------------
 They are copied from `JobPosting` at record time. A posting is a live row —
 re-ingested, re-normalized, retitled by the employer, eventually marked
 stale — while this row states what the candidate applied to *then*. Deriving
 the label on every read would let a posting edited in June rewrite the history
 of an application sent in March. `record_sent` copies them from the posting so
 the two cannot disagree at the moment it matters.
+
+Those three fields are also what `canonical_identity` is built from, and that
+is the second reason they are snapshotted rather than joined: the matching
+layer suppresses roles the candidate has already applied to (see
+`AppliedJobIndex`), and it has to keep suppressing them after the posting they
+were applied through is pruned, relisted under a new id, or picked up again
+from a different aggregator. A join would lose the answer in exactly the cases
+the suppression exists for.
 
 Why the status history is part of this aggregate
 -----------------------------------------------
@@ -85,6 +93,7 @@ from src.domain.entities.job_posting import JobPosting
 from src.domain.exceptions import InvalidValueError
 from src.domain.value_objects.application_status import ApplicationStatus
 from src.domain.value_objects.application_status_change import ApplicationStatusChange
+from src.domain.value_objects.canonical_job_identity import CanonicalJobIdentity
 
 
 def _utcnow() -> datetime:
@@ -117,6 +126,14 @@ class TrackedApplication:
     #: The archived `ApplicationDocument` that went out as the resume.
     #: Required — an application ApplyFlow sent always carried one.
     resume_document_id: str
+    #: The posting's location, copied at record time — the third component of
+    #: `canonical_identity`. Optional because plenty of postings name no
+    #: location, and `CanonicalJobIdentity` treats "no location" as its own
+    #: value rather than as a wildcard. Rows written before this field
+    #: existed read back as None, which makes them match only postings that
+    #: also name no location — a stale record under-suppresses (the candidate
+    #: sees a job again) instead of hiding one they never applied to.
+    job_location: str | None = None
     #: The archived cover letter, when the posting asked for one. Optional
     #: because plenty of forms do not, and a fabricated reference would be
     #: worse than an honest absence.
@@ -302,6 +319,7 @@ class TrackedApplication:
             submission_key=submission_key,
             company_name=job_posting.company,
             role_title=job_posting.title,
+            job_location=job_posting.location,
             applied_at=applied_at if applied_at is not None else _utcnow(),
             resume_document_id=resume_document.id,
             cover_letter_document_id=(
@@ -311,6 +329,21 @@ class TrackedApplication:
         )
 
     # ---- Behaviors (business rules live here) --------------------------------
+
+    @property
+    def canonical_identity(self) -> CanonicalJobIdentity:
+        """The role this application was for, as an identity comparable
+        against any posting's — see `CanonicalJobIdentity`.
+
+        Built from the snapshotted company/title/location rather than the
+        posting, so it keeps answering "already applied to this role" once
+        that posting is gone, relisted, or re-ingested from another source.
+        """
+        return CanonicalJobIdentity.of(
+            company=self.company_name,
+            title=self.role_title,
+            location=self.job_location,
+        )
 
     def change_status(
         self,
