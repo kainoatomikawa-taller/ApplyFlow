@@ -34,6 +34,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 from src.domain.entities.tracked_application import TrackedApplication
+from src.domain.value_objects.canonical_job_identity import CanonicalJobIdentity
 
 
 class TrackedApplicationRepository(ABC):
@@ -80,3 +81,24 @@ class TrackedApplicationRepository(ABC):
         """Return every application this candidate has made to one posting,
         most recently applied first — normally one, but see the module
         docstring on re-applying."""
+
+    @abstractmethod
+    async def list_applied_identities(
+        self, *, user_id: str
+    ) -> list[CanonicalJobIdentity]:
+        """Return the distinct roles this candidate has applied to — what the
+        matching layer suppresses against (see `AppliedJobIndex`).
+
+        Deliberately not `list_by_user_id`, for two reasons. It must be
+        *complete*: a limit would silently un-suppress the oldest
+        applications, and "you already applied to this" turning back into a
+        nudge after the hundredth application is worse than no suppression at
+        all, because it looks like the feature works. And it needs three short
+        columns rather than whole records, so completeness costs little even
+        for a candidate with years of history.
+
+        Identities come back already normalized through `CanonicalJobIdentity`,
+        so no implementation gets to invent its own notion of "the same role".
+        Distinct: applying to one role twice is two records but one identity.
+        Ordering is unspecified — the caller builds a set from it.
+        """

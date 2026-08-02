@@ -41,6 +41,7 @@ from src.domain.repositories.tracked_application_repository import (
     TrackedApplicationRepository,
 )
 from src.domain.value_objects.application_status import ApplicationStatus
+from src.domain.value_objects.canonical_job_identity import CanonicalJobIdentity
 from src.infrastructure.persistence.models import TrackedApplicationModel
 
 #: Postgres SQLSTATE for `unique_violation`. Checked rather than matching on
@@ -122,6 +123,35 @@ class SqlAlchemyTrackedApplicationRepository(TrackedApplicationRepository):
         )
         return [self._to_entity(model) for model in result.scalars().all()]
 
+    async def list_applied_identities(
+        self, *, user_id: str
+    ) -> list[CanonicalJobIdentity]:
+        """Every distinct role this candidate has applied to.
+
+        Selects the three snapshot columns rather than whole rows: the caller
+        needs a complete set (see the interface on why a limit would be
+        wrong), and three short strings per application keeps that cheap. The
+        SQL `DISTINCT` collapses byte-identical rows only — `CanonicalJobIdentity`
+        does the real collapsing, since "Acme  Corp" and "acme corp" are one
+        role to the domain and two to Postgres. Building the value objects
+        through `of` is what keeps that rule in the domain and out of here.
+        """
+        result = await self._session.execute(
+            select(
+                TrackedApplicationModel.company_name,
+                TrackedApplicationModel.role_title,
+                TrackedApplicationModel.job_location,
+            )
+            .where(TrackedApplicationModel.user_id == user_id)
+            .distinct()
+        )
+        return [
+            CanonicalJobIdentity.of(
+                company=company_name, title=role_title, location=job_location
+            )
+            for company_name, role_title, job_location in result.all()
+        ]
+
     # ---- error translation ---------------------------------------------------
 
     @staticmethod
@@ -153,6 +183,7 @@ class SqlAlchemyTrackedApplicationRepository(TrackedApplicationRepository):
             submission_key=entity.submission_key,
             company_name=entity.company_name,
             role_title=entity.role_title,
+            job_location=entity.job_location,
             applied_at=entity.applied_at,
             status=entity.status.value,
             resume_document_id=entity.resume_document_id,
@@ -172,6 +203,7 @@ class SqlAlchemyTrackedApplicationRepository(TrackedApplicationRepository):
         # them either.
         model.company_name = entity.company_name
         model.role_title = entity.role_title
+        model.job_location = entity.job_location
         model.status = entity.status.value
         model.cover_letter_document_id = entity.cover_letter_document_id
         model.updated_at = entity.updated_at
@@ -185,6 +217,7 @@ class SqlAlchemyTrackedApplicationRepository(TrackedApplicationRepository):
             submission_key=model.submission_key,
             company_name=model.company_name,
             role_title=model.role_title,
+            job_location=model.job_location,
             applied_at=model.applied_at,
             status=ApplicationStatus(model.status),
             resume_document_id=model.resume_document_id,

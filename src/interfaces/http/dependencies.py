@@ -259,11 +259,20 @@ def _job_posting_repository(
     return SqlAlchemyJobPostingRepository(session)
 
 
+def _tracked_application_repository(
+    session: AsyncSession = Depends(get_session),
+) -> SqlAlchemyTrackedApplicationRepository:
+    return SqlAlchemyTrackedApplicationRepository(session)
+
+
 def get_rank_matched_jobs_use_case(
     job_posting_repository: SqlAlchemyJobPostingRepository = Depends(
         _job_posting_repository
     ),
     profile_repository: SqlAlchemyProfileRepository = Depends(_profile_repository),
+    tracked_application_repository: SqlAlchemyTrackedApplicationRepository = Depends(
+        _tracked_application_repository
+    ),
 ) -> RankMatchedJobPostings:
     return RankMatchedJobPostings(
         job_posting_repository=job_posting_repository,
@@ -271,6 +280,7 @@ def get_rank_matched_jobs_use_case(
         rationale_generator=LlmJobFitRationaleGenerator(
             AnthropicLlmClient(get_settings())
         ),
+        tracked_application_repository=tracked_application_repository,
     )
 
 
@@ -337,12 +347,6 @@ def _application_document_repository(
     session: AsyncSession = Depends(get_session),
 ) -> SqlAlchemyApplicationDocumentRepository:
     return SqlAlchemyApplicationDocumentRepository(session)
-
-
-def _tracked_application_repository(
-    session: AsyncSession = Depends(get_session),
-) -> SqlAlchemyTrackedApplicationRepository:
-    return SqlAlchemyTrackedApplicationRepository(session)
 
 
 def _application_document_archive(

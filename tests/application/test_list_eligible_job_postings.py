@@ -1,8 +1,11 @@
 """Tests for ListEligibleJobPostings — the active job set filtered down to
-postings a candidate's profile doesn't fail a hard disqualifier against.
+postings a candidate's profile doesn't fail a hard disqualifier against and
+hasn't already been applied to.
 """
 
 from __future__ import annotations
+
+from datetime import UTC, datetime
 
 import pytest
 
@@ -10,6 +13,7 @@ from src.application.use_cases.list_eligible_job_postings import (
     ListEligibleJobPostings,
 )
 from src.domain.entities.job_posting import JobPosting
+from src.domain.entities.tracked_application import TrackedApplication
 from src.domain.entities.user_profile import UserProfile
 from src.domain.exceptions import ProfileNotFoundError
 from src.domain.repositories.job_posting_repository import JobPostingRepository
@@ -23,6 +27,7 @@ from src.domain.value_objects.work_authorization import WorkAuthorization
 from src.domain.value_objects.work_authorization_status import (
     WorkAuthorizationStatus,
 )
+from tests.application.conftest import InMemoryTrackedApplicationRepository
 
 
 def _posting(**overrides: object) -> JobPosting:
@@ -96,6 +101,37 @@ class FakeProfileRepository(ProfileRepository):
         self.profiles = [p for p in self.profiles if p.id != profile_id]
 
 
+def _application(**overrides: object) -> TrackedApplication:
+    """One record in the candidate's tracker — an application already sent."""
+    defaults: dict[str, object] = {
+        "id": "tracked-1",
+        "user_id": "user-1",
+        "job_posting_id": "job-1",
+        "submission_key": "review-1",
+        "company_name": "Acme Corp",
+        "role_title": "Backend Engineer",
+        "job_location": None,
+        "applied_at": datetime(2026, 3, 1, tzinfo=UTC),
+        "resume_document_id": "doc-resume",
+    }
+    defaults.update(overrides)
+    return TrackedApplication(**defaults)
+
+
+def _use_case(
+    postings: list[JobPosting],
+    profiles: list[UserProfile],
+    applications: list[TrackedApplication] | None = None,
+) -> ListEligibleJobPostings:
+    return ListEligibleJobPostings(
+        job_posting_repository=FakeJobPostingRepository(postings),
+        profile_repository=FakeProfileRepository(profiles),
+        tracked_application_repository=InMemoryTrackedApplicationRepository(
+            applications or []
+        ),
+    )
+
+
 @pytest.mark.asyncio
 async def test_excludes_a_posting_the_profile_fails_a_hard_disqualifier_on():
     disqualifying = _posting(id="job-citizens-only")
@@ -110,10 +146,7 @@ async def test_excludes_a_posting_the_profile_fails_a_hard_disqualifier_on():
             source=ProvenanceSource.USER_ENTERED,
         )
     )
-    use_case = ListEligibleJobPostings(
-        job_posting_repository=FakeJobPostingRepository([disqualifying, ok]),
-        profile_repository=FakeProfileRepository([profile]),
-    )
+    use_case = _use_case([disqualifying, ok], [profile])
 
     result = await use_case.execute(profile_id="profile-1")
 
@@ -136,10 +169,7 @@ async def test_never_excludes_a_posting_over_soft_preferences_alone():
         )
     )
     profile = _profile()
-    use_case = ListEligibleJobPostings(
-        job_posting_repository=FakeJobPostingRepository([near_miss]),
-        profile_repository=FakeProfileRepository([profile]),
-    )
+    use_case = _use_case([near_miss], [profile])
 
     result = await use_case.execute(profile_id="profile-1")
 
@@ -150,10 +180,7 @@ async def test_never_excludes_a_posting_over_soft_preferences_alone():
 async def test_postings_with_no_extracted_requirements_are_never_excluded():
     posting = _posting(id="job-unprocessed")
     profile = _profile()
-    use_case = ListEligibleJobPostings(
-        job_posting_repository=FakeJobPostingRepository([posting]),
-        profile_repository=FakeProfileRepository([profile]),
-    )
+    use_case = _use_case([posting], [profile])
 
     result = await use_case.execute(profile_id="profile-1")
 
@@ -162,10 +189,7 @@ async def test_postings_with_no_extracted_requirements_are_never_excluded():
 
 @pytest.mark.asyncio
 async def test_raises_when_profile_does_not_exist():
-    use_case = ListEligibleJobPostings(
-        job_posting_repository=FakeJobPostingRepository([]),
-        profile_repository=FakeProfileRepository([]),
-    )
+    use_case = _use_case([], [])
 
     with pytest.raises(ProfileNotFoundError):
         await use_case.execute(profile_id="missing-profile")
@@ -175,11 +199,78 @@ async def test_raises_when_profile_does_not_exist():
 async def test_respects_limit_before_filtering():
     postings = [_posting(id=f"job-{i}") for i in range(5)]
     profile = _profile()
-    use_case = ListEligibleJobPostings(
-        job_posting_repository=FakeJobPostingRepository(postings),
-        profile_repository=FakeProfileRepository([profile]),
-    )
+    use_case = _use_case(postings, [profile])
 
     result = await use_case.execute(profile_id="profile-1", limit=2)
 
     assert len(result) == 2
+
+
+# ---- already-applied roles (the tracker feeding back into matching) ---------
+
+
+@pytest.mark.asyncio
+async def test_excludes_a_role_the_candidate_already_applied_to():
+    applied_to = _posting(id="job-1", company="Acme Corp")
+    fresh = _posting(id="job-2", company="Globex")
+    use_case = _use_case(
+        [applied_to, fresh],
+        [_profile()],
+        applications=[_application(company_name="Acme Corp")],
+    )
+
+    result = await use_case.execute(profile_id="profile-1")
+
+    assert [o.id for o in result] == ["job-2"]
+
+
+@pytest.mark.asyncio
+async def test_exclusion_matches_canonical_identity_not_posting_id():
+    """The same suppression rule the ranked list uses — a relisted posting is
+    a new row for a role the candidate has already applied to."""
+    relisted = _posting(id="job-relisted", source="greenhouse", company="ACME  CORP")
+    use_case = _use_case(
+        [relisted],
+        [_profile()],
+        applications=[
+            _application(job_posting_id="job-long-gone", company_name="Acme Corp")
+        ],
+    )
+
+    result = await use_case.execute(profile_id="profile-1")
+
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_a_role_in_another_location_is_still_eligible():
+    berlin = _posting(id="job-berlin", location="Berlin, DE")
+    use_case = _use_case(
+        [berlin], [_profile()], applications=[_application(job_location="New York, NY")]
+    )
+
+    result = await use_case.execute(profile_id="profile-1")
+
+    assert [o.id for o in result] == ["job-berlin"]
+
+
+@pytest.mark.asyncio
+async def test_another_candidates_applications_exclude_nothing():
+    use_case = _use_case(
+        [_posting()], [_profile()], applications=[_application(user_id="user-2")]
+    )
+
+    result = await use_case.execute(profile_id="profile-1")
+
+    assert [o.id for o in result] == ["job-1"]
+
+
+@pytest.mark.asyncio
+async def test_already_applied_roles_can_be_asked_for_explicitly():
+    use_case = _use_case([_posting()], [_profile()], applications=[_application()])
+
+    result = await use_case.execute(
+        profile_id="profile-1", include_already_applied=True
+    )
+
+    assert [o.id for o in result] == ["job-1"]
