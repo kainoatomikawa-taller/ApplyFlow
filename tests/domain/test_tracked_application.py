@@ -435,3 +435,40 @@ def test_the_recorded_identity_is_normalized() -> None:
     assert identity.company == "globex"
     assert identity.title == "senior backend engineer"
     assert identity.location == "berlin, de"
+
+
+# ---- the choices the tracker offers ------------------------------------------
+
+
+def test_allowed_transitions_match_what_transition_to_accepts():
+    """The one property that matters: a control built from
+    `allowed_transitions` can only offer moves the state machine permits, so a
+    candidate never meets a refusal after making a choice."""
+    for status in ApplicationStatus:
+        for target in status.allowed_transitions:
+            assert status.transition_to(target) is target
+        forbidden = set(ApplicationStatus) - set(status.allowed_transitions)
+        for target in forbidden:
+            with pytest.raises(BusinessRuleViolationError):
+                status.transition_to(target)
+
+
+def test_allowed_transitions_are_stable_in_order():
+    """Set iteration order would reshuffle a status control between renders,
+    and a control whose options move is a control people misclick."""
+    assert ApplicationStatus.APPLIED.allowed_transitions == (
+        ApplicationStatus.INTERVIEWING,
+        ApplicationStatus.REJECTED,
+        ApplicationStatus.WITHDRAWN,
+    )
+    assert ApplicationStatus.INTERVIEWING.allowed_transitions == (
+        ApplicationStatus.OFFER,
+        ApplicationStatus.REJECTED,
+        ApplicationStatus.WITHDRAWN,
+    )
+
+
+def test_a_terminal_status_offers_nothing_and_says_so_both_ways():
+    for status in (ApplicationStatus.REJECTED, ApplicationStatus.WITHDRAWN):
+        assert status.allowed_transitions == ()
+        assert status.is_terminal is True

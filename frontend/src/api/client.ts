@@ -1,12 +1,9 @@
 import { getAccessToken } from './accessToken';
 import type {
-<<<<<<< HEAD
-  ApplicationAutofillReport,
-  ApplicationSubmissionReceipt,
-=======
   AnswerAction,
+  ApplicationAutofillReport,
   ApplicationReview,
->>>>>>> origin/main
+  ApplicationSubmissionReceipt,
   CreateApplicationInput,
   DocumentKind,
   FeedbackRating,
@@ -23,6 +20,8 @@ import type {
   ResolvedGapAnswer,
   SubmittedApplicationReview,
   TailoredResume,
+  TrackedApplication,
+  TrackedApplicationStatus,
 } from '../types';
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? '';
@@ -153,15 +152,6 @@ export const applyFlowApi = {
   },
 
   /**
-<<<<<<< HEAD
-   * Fill this posting's application form in a real browser and park it for
-   * review. Never submits: sending is a separate call the candidate makes
-   * (`submitAutofilledApplication`).
-   */
-  autofillApplication(jobPostingId: string): Promise<ApplicationAutofillReport> {
-    return request<ApplicationAutofillReport>(
-      `/api/job-postings/${jobPostingId}/autofill`,
-=======
    * Open the posting's application portal and report what it presents. A
    * portal with a hard boundary comes back with `is_handed_off: true` and no
    * fields — that is a normal 200, not a failure: ApplyFlow stopped where it
@@ -209,28 +199,22 @@ export const applyFlowApi = {
   openApplicationReview(jobPostingId: string): Promise<OpenApplicationReview> {
     return request<OpenApplicationReview>(
       `/api/job-postings/${jobPostingId}/review`,
->>>>>>> origin/main
       { method: 'POST' },
     );
   },
 
-<<<<<<< HEAD
   /**
-   * Write the candidate's own answer into one field of the parked form —
-   * the company's screening questions, and EEO self-identification, which
-   * reaches a form through this call or not at all. Returns the whole
-   * updated report, since an answer can clear the last thing blocking
-   * submission.
+   * Fill this posting's application form in a real browser and park it for
+   * review. Never submits: sending is a separate call the candidate makes
+   * (`submitAutofilledApplication`).
    */
-  answerAutofillField(
-    reviewSessionId: string,
-    fieldId: string,
-    value: string,
-  ): Promise<ApplicationAutofillReport> {
+  autofillApplication(jobPostingId: string): Promise<ApplicationAutofillReport> {
     return request<ApplicationAutofillReport>(
-      `/api/autofill-sessions/${reviewSessionId}/fields/${fieldId}`,
-      { method: 'POST', body: JSON.stringify({ value }) },
-=======
+      `/api/job-postings/${jobPostingId}/autofill`,
+      { method: 'POST' },
+    );
+  },
+
   /** The review in progress for this posting, if there is one (404 if not). */
   getApplicationReview(jobPostingId: string): Promise<ApplicationReview> {
     return request<ApplicationReview>(`/api/job-postings/${jobPostingId}/review`);
@@ -249,12 +233,28 @@ export const applyFlowApi = {
     return request<ApplicationReview>(
       `/api/application-reviews/${reviewId}/answers/${encodeURIComponent(fieldKey)}`,
       { method: 'POST', body: JSON.stringify({ action, value }) },
->>>>>>> origin/main
     );
   },
 
   /**
-<<<<<<< HEAD
+   * Write the candidate's own answer into one field of the parked form —
+   * the company's screening questions, and EEO self-identification, which
+   * reaches a form through this call or not at all. Returns the whole
+   * updated report, since an answer can clear the last thing blocking
+   * submission.
+   */
+  answerAutofillField(
+    reviewSessionId: string,
+    fieldId: string,
+    value: string,
+  ): Promise<ApplicationAutofillReport> {
+    return request<ApplicationAutofillReport>(
+      `/api/autofill-sessions/${reviewSessionId}/fields/${fieldId}`,
+      { method: 'POST', body: JSON.stringify({ value }) },
+    );
+  },
+
+  /**
    * Send the reviewed application. `confirmedFieldIds` are the sensitive
    * values the candidate has looked at and approved; the backend refuses
    * the submission without them, so this is never defaulted here.
@@ -293,7 +293,7 @@ export const applyFlowApi = {
     }
   },
 
-=======
+  /**
    * The candidate submits. Refused (409) while a blocker stands or if the
    * review was already submitted — ApplyFlow never reaches this on its own.
    */
@@ -307,7 +307,6 @@ export const applyFlowApi = {
     );
   },
 
->>>>>>> origin/main
   /**
    * Store the candidate's edited text as the next version of this document.
    * The edit goes back through the provenance guard, so the returned
@@ -321,6 +320,32 @@ export const applyFlowApi = {
     return request<GuardedDocument>(
       `/api/job-postings/${jobPostingId}/documents/${documentKind}/revisions`,
       { method: 'POST', body: JSON.stringify({ content }) },
+    );
+  },
+
+  /**
+   * The tracker: every application the candidate has sent, most recently
+   * applied first, each carrying the exact documents that went out with it.
+   */
+  listTrackedApplications(limit = 100): Promise<TrackedApplication[]> {
+    return request<TrackedApplication[]>(
+      `/api/tracked-applications?limit=${limit}`,
+    );
+  },
+
+  /**
+   * Record what became of one application. Returns the whole updated record,
+   * including the next set of `allowed_next_statuses` — the transition just
+   * changed which moves are legal, and the caller re-renders from what was
+   * stored rather than from what it assumed.
+   */
+  updateApplicationStatus(
+    applicationId: string,
+    status: TrackedApplicationStatus,
+  ): Promise<TrackedApplication> {
+    return request<TrackedApplication>(
+      `/api/tracked-applications/${applicationId}/status`,
+      { method: 'PATCH', body: JSON.stringify({ status }) },
     );
   },
 };

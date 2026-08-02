@@ -737,6 +737,63 @@ identity rule is verified against the dedup key it has to agree with —
 including the case where Epic 02 keeps two rows (same role, two sources) and
 matching suppresses both anyway.
 
+### Reading the tracker, and keeping it current
+
+Two routes, and deliberately no more: `GET /api/tracked-applications` and
+`PATCH /api/tracked-applications/{id}/status`.
+
+- **There is no route that creates one.** A record exists because an
+  application was *sent*, so it is written by the flow that sends one. A route
+  that accepted a tracked application would let a caller assert that an
+  employer received a document, which is the one thing this table must never
+  be able to say untruthfully. There is no `DELETE` either — see the
+  repository's note on Epic 07's purge.
+- **The feed resolves the document references.** `ListTrackedApplications`
+  follows `resume_document_id` and `cover_letter_document_id` so one request
+  answers "what did I send to whom, and when". It resolves them **by id**, not
+  through `get_latest`: the latter is the right question at send time and the
+  wrong one afterwards, because a candidate who revises their resume has a
+  newer version stored against the same job, and reading it would show the
+  tracker a document the employer never received.
+- **Without the document text.** The feed carries `content_sha256` and not
+  `content` — the same line `ApplicationDocumentSummaryOutput` draws. A list
+  view never displays a resume, the text is the most PII-dense content in the
+  system, and a caller that wants it asks for one document by id. The digest
+  is what keeps the reference checkable without shipping it.
+- **A reference that no longer resolves is reported, not raised.** The write
+  path refuses to create one and `ON DELETE RESTRICT` refuses to break one, so
+  a null here means something has gone wrong beneath both. The row still comes
+  back, with an empty reference and an ERROR log: one unreadable row must not
+  hide the candidate's whole history, and *that they applied* is the fact
+  suppression depends on.
+- **The status choices come from the domain.**
+  `ApplicationStatus.allowed_transitions` is passed through as
+  `allowed_next_statuses`, so a client offers exactly the moves the route
+  accepts. A control that computed its own would eventually offer one
+  `change_status` refuses, and the candidate would meet the refusal only after
+  choosing. An empty list means the application has settled.
+- **Two different refusals, two different codes.** A value that is not a
+  status is `422`; a real status the lifecycle forbids (`rejected` back to
+  `interviewing`, or a sent application back to `draft`) is `409`, and nothing
+  is written — the domain refuses before the repository is reached.
+- **Another candidate's application is `404`, never `403`.** The two are
+  indistinguishable on purpose, so the API never confirms that an id it was
+  handed is real.
+
+`frontend/src/components/ApplicationTracker.tsx` renders it, and binds its
+status control to `allowed_next_statuses` rather than to a list of its own.
+
+### Acceptance check
+
+`docs/epic-06-acceptance-check.md` is Epic 06's Definition of Done, and
+`tests/acceptance/test_epic06_tracker_pipeline.py` proves it against a real
+database and the real HTTP app: a submission is logged with the exact
+documents that went out (checked by *following* the references back to the
+archived bytes, and against a newer revision archived afterwards that must not
+appear), the status is driven through its lifecycle and re-read from the route
+the UI renders from, and the applied-to role leaves the matched list and stays
+gone after the application is rejected.
+
 ---
 
 ## Browser automation harness (Epic 05)
@@ -1501,6 +1558,8 @@ All `/api/applications*` and `/api/resumes*` routes require
 | GET    | `/api/job-postings/{id}/review`     | The review in progress for this posting, with the submit gate | Yes |
 | POST   | `/api/application-reviews/{id}/answers/{field_key}` | One decision about one field: `set` a value, `confirm` it, or `decline` it | Yes |
 | POST   | `/api/application-reviews/{id}/submit` | **The candidate submits.** Refused while any blocker stands; returns the portal URL to finish on | Yes |
+| GET    | `/api/tracked-applications`         | The tracker: every application sent, newest first, each with the exact documents that went out | Yes |
+| PATCH  | `/api/tracked-applications/{id}/status` | Record what became of one application. 409 for a move the lifecycle forbids, 422 for a value that is not a status | Yes |
 
 ---
 
@@ -1529,11 +1588,13 @@ real database or spends money:
 RUN_EPIC03_ACCEPTANCE_TEST=1 pytest tests/acceptance/test_epic03_matching_pipeline.py -v -s
 RUN_EPIC04_ACCEPTANCE_TEST=1 pytest tests/acceptance/test_epic04_tailoring_pipeline.py -v -s
 RUN_EPIC05_ACCEPTANCE_TEST=1 pytest tests/acceptance/test_epic05_autofill_pipeline.py -v -s
+RUN_EPIC06_ACCEPTANCE_TEST=1 pytest tests/acceptance/test_epic06_tracker_pipeline.py -v -s
 ```
 
 See `docs/epic-03-acceptance-check.md`, `docs/epic-04-acceptance-check.md`,
-and `docs/epic-05-acceptance-check.md` for what each one proves and which env
-vars it needs. Epic 05's needs no API keys and spends nothing: it drives a
+`docs/epic-05-acceptance-check.md`, and `docs/epic-06-acceptance-check.md`
+for what each one proves and which env vars it needs. Epic 05's needs no API
+keys and spends nothing: it drives a
 real Chromium against a local server that records what was submitted to it,
 with the portal host mapped to 127.0.0.1 so a real Greenhouse apply URL
 resolves there — the one thing that check must never do is send an

@@ -901,18 +901,6 @@ async def test_shutdown_closes_open_sessions_and_the_browser(server):
     await harness.shutdown()
 
 
-<<<<<<< HEAD
-# --- observing the page ----------------------------------------------------
-
-
-async def test_page_signals_report_what_the_page_carries(harness, server):
-    """The observation is uninterpreted on purpose: the harness reports the
-    frame it embeds, the tokens in its markup and the words on it, and the
-    domain decides which of those amount to a boundary."""
-    server.page("/recaptcha/api2/anchor", CHALLENGE_FRAME_HTML)
-    url = server.page("/wall", BOUNDARY_PAGE_HTML)
-
-=======
 # --- hard boundaries: page signals -----------------------------------------
 #
 # These drive the real detection path end to end: a real page, the real
@@ -1067,157 +1055,10 @@ async def test_a_page_with_no_form_still_yields_signals(harness, server):
     """A dead posting or an interstitial presents nothing fillable, and its
     URL and text are frequently the whole story."""
     url = server.page("/gone-but-200", NO_FORM_HTML)
->>>>>>> origin/main
     async with await harness.open(url) as session:
         signals = await session.read_page_signals()
 
     assert signals.url == url
-<<<<<<< HEAD
-    assert "please sign in to continue" in signals.visible_text.casefold()
-    assert any("/recaptcha/api2/anchor" in frame for frame in signals.frame_urls)
-    assert "g-recaptcha" in signals.element_markers
-    assert "signature-pad" in signals.element_markers
-
-
-async def test_page_signals_read_across_nested_frames(harness, server):
-    """An ATS form is routinely inside an iframe, so text and markup inside
-    one have to count — the same reason field discovery walks frames."""
-    url = server.page("/embedded", EMBEDDED_FORM_HTML)
-
-    async with await harness.open(url) as session:
-        signals = await session.read_page_signals()
-
-    assert "Inner question" in signals.visible_text
-
-
-async def test_the_pages_own_url_is_not_reported_as_an_embedded_frame(harness, server):
-    """"This page *is* a sign-in page" and "this page embeds something from
-    elsewhere" are different findings, and the main frame belongs to the
-    first."""
-    url = server.page("/apply", APPLICATION_FORM_HTML)
-
-    async with await harness.open(url) as session:
-        signals = await session.read_page_signals()
-
-    assert url not in signals.frame_urls
-
-
-async def test_observing_the_page_does_not_invalidate_field_handles(harness, server):
-    url = server.page("/apply", APPLICATION_FORM_HTML)
-
-    async with await harness.open(url) as session:
-        field = _by_name(await session.read_fields(), "full_name")
-        await session.read_page_signals()
-
-        await session.fill(field.handle, "Ada Lovelace")
-
-    # No StaleFormFieldError: the observation mints no handles and takes no
-    # snapshot, so it cannot move the ground under one.
-
-
-# --- submit controls -------------------------------------------------------
-
-
-async def test_only_controls_that_send_the_form_are_offered(harness, server):
-    """The one call that hands back something pressable returns exactly the
-    submit controls: not the "add another employer" button, not the
-    disabled one, and not a button that belongs to no form."""
-    url = server.page("/apply", SUBMITTABLE_FORM_HTML)
-
-    async with await harness.open(url) as session:
-        controls = await session.read_submit_controls()
-
-    assert [control.label for control in controls] == ["Submit application"]
-
-
-async def test_pressing_the_submit_control_sends_the_form(harness, server):
-    server.page("/thanks", THANKS_HTML)
-    url = server.page("/apply", SUBMITTABLE_FORM_HTML)
-
-    async with await harness.open(url) as session:
-        name = _by_name(await session.read_fields(), "full_name")
-        await session.fill(name.handle, "Ada")
-        (control,) = await session.read_submit_controls()
-
-        await session.press_submit(control.handle)
-
-        assert "/thanks" in session.current_url
-        assert "full_name=Ada" in session.current_url
-        assert "received" in (await session.read_page_signals()).visible_text
-    assert server.requests["/thanks"] == 1
-
-
-async def test_a_form_field_handle_cannot_press_anything(harness, server):
-    """The separation that keeps filling from being a way to submit: field
-    handles and submit handles live in different snapshots, so one is never
-    accepted where the other is expected."""
-    url = server.page("/apply", SUBMITTABLE_FORM_HTML)
-
-    async with await harness.open(url) as session:
-        field = _by_name(await session.read_fields(), "full_name")
-
-        with pytest.raises(StaleFormFieldError) as caught:
-            await session.press_submit(field.handle)
-
-    assert "submit-control snapshot" in str(caught.value)
-    assert server.requests.get("/thanks") is None
-
-
-async def test_a_submit_handle_cannot_be_used_to_fill_a_field(harness, server):
-    url = server.page("/apply", SUBMITTABLE_FORM_HTML)
-
-    async with await harness.open(url) as session:
-        await session.read_fields()
-        (control,) = await session.read_submit_controls()
-
-        with pytest.raises(StaleFormFieldError):
-            await session.fill(control.handle, "anything")
-
-
-async def test_a_form_whose_submit_is_scripted_offers_nothing_to_press(harness, server):
-    """A portal that submits from a plain `type="button"` leaves nothing
-    here to press, and saying so is the honest answer — the alternative is
-    clicking whatever looks close enough on a real application."""
-    url = server.page("/scripted", SCRIPTED_SUBMIT_HTML)
-
-    async with await harness.open(url) as session:
-        assert await session.read_submit_controls() == ()
-
-
-async def test_a_submit_handle_from_an_earlier_snapshot_is_rejected(harness, server):
-    url = server.page("/apply", SUBMITTABLE_FORM_HTML)
-
-    async with await harness.open(url) as session:
-        (stale,) = await session.read_submit_controls()
-        await session.read_submit_controls()
-
-        with pytest.raises(StaleFormFieldError):
-            await session.press_submit(stale.handle)
-
-    assert server.requests.get("/thanks") is None
-
-
-async def test_a_press_invalidates_every_handle_on_both_sides(harness, server):
-    """After a submission the page has moved. Every handle is suspect, and
-    failing loudly beats resolving one against a page that no longer
-    exists."""
-    server.page("/thanks", THANKS_HTML)
-    url = server.page("/apply", SUBMITTABLE_FORM_HTML)
-
-    async with await harness.open(url) as session:
-        field = _by_name(await session.read_fields(), "full_name")
-        (control,) = await session.read_submit_controls()
-
-        await session.press_submit(control.handle)
-
-        with pytest.raises(StaleFormFieldError):
-            await session.fill(field.handle, "too late")
-        with pytest.raises(StaleFormFieldError):
-            await session.press_submit(control.handle)
-
-    # And the application went out exactly once.
-    assert server.requests["/thanks"] == 1
-=======
     assert signals.fillable_field_count == 0
     assert "no longer accepting applications" in signals.text
 
@@ -1317,4 +1158,163 @@ async def test_ordinary_fields_on_the_same_form_are_still_fillable(harness, serv
         assert _by_name(await session.read_fields(), "full_name").value == (
             "Ada Lovelace"
         )
->>>>>>> origin/main
+
+
+# --- observing the page ----------------------------------------------------
+
+
+async def test_boundary_signals_report_what_the_page_carries(harness, server):
+    """The observation is uninterpreted on purpose: the harness reports the
+    frame it embeds, the tokens in its markup and the words on it, and the
+    domain decides which of those amount to a boundary."""
+    server.page("/recaptcha/api2/anchor", CHALLENGE_FRAME_HTML)
+    url = server.page("/wall", BOUNDARY_PAGE_HTML)
+
+    async with await harness.open(url) as session:
+        signals = await session.read_boundary_signals()
+
+    assert signals.url == url
+    assert "please sign in to continue" in signals.visible_text.casefold()
+    assert any("/recaptcha/api2/anchor" in frame for frame in signals.frame_urls)
+    assert "g-recaptcha" in signals.element_markers
+    assert "signature-pad" in signals.element_markers
+
+
+async def test_boundary_signals_read_across_nested_frames(harness, server):
+    """An ATS form is routinely inside an iframe, so text and markup inside
+    one have to count — the same reason field discovery walks frames."""
+    url = server.page("/embedded", EMBEDDED_FORM_HTML)
+
+    async with await harness.open(url) as session:
+        signals = await session.read_boundary_signals()
+
+    assert "Inner question" in signals.visible_text
+
+
+async def test_the_pages_own_url_is_not_reported_as_an_embedded_frame(harness, server):
+    """ "This page *is* a sign-in page" and "this page embeds something from
+    elsewhere" are different findings, and the main frame belongs to the
+    first."""
+    url = server.page("/apply", APPLICATION_FORM_HTML)
+
+    async with await harness.open(url) as session:
+        signals = await session.read_boundary_signals()
+
+    assert url not in signals.frame_urls
+
+
+async def test_observing_the_page_does_not_invalidate_field_handles(harness, server):
+    url = server.page("/apply", APPLICATION_FORM_HTML)
+
+    async with await harness.open(url) as session:
+        field = _by_name(await session.read_fields(), "full_name")
+        await session.read_boundary_signals()
+
+        await session.fill(field.handle, "Ada Lovelace")
+
+    # No StaleFormFieldError: the observation mints no handles and takes no
+    # snapshot, so it cannot move the ground under one.
+
+
+# --- submit controls -------------------------------------------------------
+
+
+async def test_only_controls_that_send_the_form_are_offered(harness, server):
+    """The one call that hands back something pressable returns exactly the
+    submit controls: not the "add another employer" button, not the
+    disabled one, and not a button that belongs to no form."""
+    url = server.page("/apply", SUBMITTABLE_FORM_HTML)
+
+    async with await harness.open(url) as session:
+        controls = await session.read_submit_controls()
+
+    assert [control.label for control in controls] == ["Submit application"]
+
+
+async def test_pressing_the_submit_control_sends_the_form(harness, server):
+    server.page("/thanks", THANKS_HTML)
+    url = server.page("/apply", SUBMITTABLE_FORM_HTML)
+
+    async with await harness.open(url) as session:
+        name = _by_name(await session.read_fields(), "full_name")
+        await session.fill(name.handle, "Ada")
+        (control,) = await session.read_submit_controls()
+
+        await session.press_submit(control.handle)
+
+        assert "/thanks" in session.current_url
+        assert "full_name=Ada" in session.current_url
+        assert "received" in (await session.read_boundary_signals()).visible_text
+    assert server.requests["/thanks"] == 1
+
+
+async def test_a_form_field_handle_cannot_press_anything(harness, server):
+    """The separation that keeps filling from being a way to submit: field
+    handles and submit handles live in different snapshots, so one is never
+    accepted where the other is expected."""
+    url = server.page("/apply", SUBMITTABLE_FORM_HTML)
+
+    async with await harness.open(url) as session:
+        field = _by_name(await session.read_fields(), "full_name")
+
+        with pytest.raises(StaleFormFieldError) as caught:
+            await session.press_submit(field.handle)
+
+    assert "submit-control snapshot" in str(caught.value)
+    assert server.requests.get("/thanks") is None
+
+
+async def test_a_submit_handle_cannot_be_used_to_fill_a_field(harness, server):
+    url = server.page("/apply", SUBMITTABLE_FORM_HTML)
+
+    async with await harness.open(url) as session:
+        await session.read_fields()
+        (control,) = await session.read_submit_controls()
+
+        with pytest.raises(StaleFormFieldError):
+            await session.fill(control.handle, "anything")
+
+
+async def test_a_form_whose_submit_is_scripted_offers_nothing_to_press(harness, server):
+    """A portal that submits from a plain `type="button"` leaves nothing
+    here to press, and saying so is the honest answer — the alternative is
+    clicking whatever looks close enough on a real application."""
+    url = server.page("/scripted", SCRIPTED_SUBMIT_HTML)
+
+    async with await harness.open(url) as session:
+        assert await session.read_submit_controls() == ()
+
+
+async def test_a_submit_handle_from_an_earlier_snapshot_is_rejected(harness, server):
+    url = server.page("/apply", SUBMITTABLE_FORM_HTML)
+
+    async with await harness.open(url) as session:
+        (stale,) = await session.read_submit_controls()
+        await session.read_submit_controls()
+
+        with pytest.raises(StaleFormFieldError):
+            await session.press_submit(stale.handle)
+
+    assert server.requests.get("/thanks") is None
+
+
+async def test_a_press_invalidates_every_handle_on_both_sides(harness, server):
+    """After a submission the page has moved. Every handle is suspect, and
+    failing loudly beats resolving one against a page that no longer
+    exists."""
+    server.page("/thanks", THANKS_HTML)
+    url = server.page("/apply", SUBMITTABLE_FORM_HTML)
+
+    async with await harness.open(url) as session:
+        field = _by_name(await session.read_fields(), "full_name")
+        (control,) = await session.read_submit_controls()
+
+        await session.press_submit(control.handle)
+
+        with pytest.raises(StaleFormFieldError):
+            await session.fill(field.handle, "too late")
+        with pytest.raises(StaleFormFieldError):
+            await session.press_submit(control.handle)
+
+    # And the application went out exactly once.
+    assert server.requests["/thanks"] == 1

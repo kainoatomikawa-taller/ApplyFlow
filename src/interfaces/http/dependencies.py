@@ -18,7 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.application.dtos.auth_dtos import AuthenticatedUserDTO
 from src.application.exceptions import AuthenticationError
 from src.application.ports.auth_verifier_port import AuthVerifierPort
-from src.application.ports.browser_automation_port import BrowserAutomationPort
 from src.application.services.application_document_archive import (
     ApplicationDocumentArchive,
 )
@@ -35,10 +34,7 @@ from src.application.use_cases.analyze_job_application import (
 from src.application.use_cases.analyze_scoring_feedback import (
     AnalyzeScoringFeedback,
 )
-<<<<<<< HEAD
 from src.application.use_cases.answer_application_field import AnswerApplicationField
-=======
->>>>>>> origin/main
 from src.application.use_cases.autofill_application_form import AutofillApplicationForm
 from src.application.use_cases.create_job_application import (
     CreateJobApplication,
@@ -74,6 +70,9 @@ from src.application.use_cases.list_job_match_feedback import (
 )
 from src.application.use_cases.list_portal_handoffs import ListPortalHandoffs
 from src.application.use_cases.list_resumes import ListResumes
+from src.application.use_cases.list_tracked_applications import (
+    ListTrackedApplications,
+)
 from src.application.use_cases.open_application_review import OpenApplicationReview
 from src.application.use_cases.parse_resume import ParseResume
 from src.application.use_cases.rank_matched_job_postings import (
@@ -84,19 +83,19 @@ from src.application.use_cases.resume_portal_handoff import ResumePortalHandoff
 from src.application.use_cases.revise_generated_document import (
     ReviseGeneratedDocument,
 )
-<<<<<<< HEAD
-from src.application.use_cases.submit_application_form import SubmitApplicationForm
-=======
 from src.application.use_cases.revise_reviewed_answer import ReviseReviewedAnswer
+from src.application.use_cases.submit_application_form import SubmitApplicationForm
 from src.application.use_cases.submit_application_review import (
     SubmitApplicationReview,
 )
->>>>>>> origin/main
 from src.application.use_cases.submit_job_application import (
     SubmitJobApplication,
 )
 from src.application.use_cases.submit_job_match_feedback import (
     SubmitJobMatchFeedback,
+)
+from src.application.use_cases.update_tracked_application_status import (
+    UpdateTrackedApplicationStatus,
 )
 from src.application.use_cases.upload_resume import UploadResume
 from src.domain.services.application_ranking_service import (
@@ -457,6 +456,40 @@ def get_list_application_documents_use_case(
     return ListApplicationDocuments(repository=repository)
 
 
+def get_list_tracked_applications_use_case(
+    tracked_application_repository: SqlAlchemyTrackedApplicationRepository = Depends(
+        _tracked_application_repository
+    ),
+    document_repository: SqlAlchemyApplicationDocumentRepository = Depends(
+        _application_document_repository
+    ),
+) -> ListTrackedApplications:
+    """The tracker feed takes the document store as well as the tracker,
+    because a row's whole point is the snapshots it references — but only to
+    *read* them by id. No archive is wired in: nothing on the tracker's read
+    path can write a document, and nothing can generate one."""
+    return ListTrackedApplications(
+        tracked_application_repository=tracked_application_repository,
+        document_repository=document_repository,
+    )
+
+
+def get_update_tracked_application_status_use_case(
+    tracked_application_repository: SqlAlchemyTrackedApplicationRepository = Depends(
+        _tracked_application_repository
+    ),
+    document_repository: SqlAlchemyApplicationDocumentRepository = Depends(
+        _application_document_repository
+    ),
+) -> UpdateTrackedApplicationStatus:
+    """Same two stores, and the document one is still read-only here: a status
+    change must not be able to touch what was sent."""
+    return UpdateTrackedApplicationStatus(
+        tracked_application_repository=tracked_application_repository,
+        document_repository=document_repository,
+    )
+
+
 def _job_match_feedback_repository(
     session: AsyncSession = Depends(get_session),
 ) -> SqlAlchemyJobMatchFeedbackRepository:
@@ -494,24 +527,35 @@ def get_analyze_scoring_feedback_use_case(
     return AnalyzeScoringFeedback(repository=repository)
 
 
-<<<<<<< HEAD
-# -- Portal autofill, review, and submit (Epic 05) ---------------------------
+# -- Portal inspection, autofill, review, and submit (Epic 05) ---------------
 #
 # The only two process-wide singletons in this module, and both have to be:
 # the harness owns one browser process shared by every session, and the
 # review registry holds the filled forms candidates are currently looking at.
-# A per-request instance of either would launch a browser per request and
-# lose every parked review the moment the response was sent.
+# A per-request instance of either would launch a browser per request — each
+# launch costs a process and hundreds of milliseconds — and lose every parked
+# review the moment the response was sent.
 #
 # `@lru_cache` rather than a module global so the instance is still created
-# lazily — importing this module must not start a browser, which is what
-# would happen to every CLI command and every test that touches it.
+# lazily: importing this module must not start a browser, which is what would
+# happen to every CLI command and every test that touches it.
+#
+# One harness serves *both* portal paths — the parked-review autofill flow and
+# the persisted inspect/review flow. They arrived on separate branches, each
+# with its own singleton; keeping both would have meant two Chromium processes
+# for one API, so they share this one and each request still gets its own
+# isolated `BrowserContext`.
 
 
 @lru_cache(maxsize=1)
-def get_browser_automation() -> BrowserAutomationPort:
+def get_browser_automation() -> PlaywrightBrowserAutomation:
     """The one Chromium this process drives portals with."""
     return PlaywrightBrowserAutomation(get_settings())
+
+
+def _browser_automation() -> PlaywrightBrowserAutomation:
+    """`Depends(...)` spelling of `get_browser_automation` — same instance."""
+    return get_browser_automation()
 
 
 @lru_cache(maxsize=1)
@@ -534,36 +578,23 @@ async def shutdown_portal_automation() -> None:
     """
     await get_review_sessions().close_all()
     await get_browser_automation().shutdown()
-=======
+
+
+async def shutdown_browser_automation() -> None:
+    """Release the shared browser, if one was ever launched.
+
+    Idempotent, and deliberately still called from the lifespan after
+    `shutdown_portal_automation`: the inspect/review path parks no reviews, so
+    this is the backstop that keeps a browser process from outliving the API
+    even if nothing ever opened a parked review.
+    """
+    await get_browser_automation().shutdown()
+
+
 def _portal_handoff_repository(
     session: AsyncSession = Depends(get_session),
 ) -> SqlAlchemyPortalHandoffRepository:
     return SqlAlchemyPortalHandoffRepository(session)
-
-
-#: The one deliberately process-wide adapter here. A browser launch costs a
-#: process and hundreds of milliseconds, and the harness is built to own one
-#: browser across many sessions (each request still gets its own isolated
-#: `BrowserContext`), so creating a harness per request would launch and tear
-#: down a Chromium per inspection. Closed by `shutdown_browser_automation` on
-#: application shutdown — see `lifespan` in app.py — which is what keeps a
-#: browser process from outliving the API.
-_browser_automation_instance: PlaywrightBrowserAutomation | None = None
-
-
-def _browser_automation() -> PlaywrightBrowserAutomation:
-    global _browser_automation_instance
-    if _browser_automation_instance is None:
-        _browser_automation_instance = PlaywrightBrowserAutomation(get_settings())
-    return _browser_automation_instance
-
-
-async def shutdown_browser_automation() -> None:
-    """Release the shared browser, if one was ever launched. Idempotent."""
-    global _browser_automation_instance
-    harness, _browser_automation_instance = _browser_automation_instance, None
-    if harness is not None:
-        await harness.shutdown()
 
 
 def get_inspect_application_portal_use_case(
@@ -609,7 +640,6 @@ def _application_review_repository(
     session: AsyncSession = Depends(get_session),
 ) -> SqlAlchemyApplicationReviewRepository:
     return SqlAlchemyApplicationReviewRepository(session)
->>>>>>> origin/main
 
 
 def get_autofill_application_form_use_case(
@@ -620,24 +650,18 @@ def get_autofill_application_form_use_case(
     document_repository: SqlAlchemyApplicationDocumentRepository = Depends(
         _application_document_repository
     ),
-<<<<<<< HEAD
-) -> AutofillApplicationForm:
-    """The field planner is a pure default the use case builds itself, so no
-    wiring mistake here can put a different set of mapping rules — or a
-    different sensitive-field policy — in front of a real form."""
-=======
     browser_automation: PlaywrightBrowserAutomation = Depends(_browser_automation),
 ) -> AutofillApplicationForm:
     """The field planner is a pure default the use case builds itself, so no
-    wiring mistake here can produce a pass that skipped the mapping rules — or
-    the refusal to write into a field only the candidate may fill."""
->>>>>>> origin/main
+    wiring mistake here can put a different set of mapping rules — or a
+    different sensitive-field policy — in front of a real form, nor produce a
+    pass that skipped the refusal to write into a field only the candidate may
+    fill."""
     return AutofillApplicationForm(
         job_posting_repository,
         profile_repository,
         document_repository,
-<<<<<<< HEAD
-        get_browser_automation(),
+        browser_automation,
         AtsSafePdfRenderer(),
         get_review_sessions(),
     )
@@ -653,10 +677,6 @@ def get_submit_application_form_use_case() -> SubmitApplicationForm:
 
 def get_discard_application_review_use_case() -> DiscardApplicationReview:
     return DiscardApplicationReview(get_review_sessions())
-=======
-        browser_automation,
-        AtsSafePdfRenderer(),
-    )
 
 
 def get_open_application_review_use_case(
@@ -735,7 +755,6 @@ def get_submit_application_review_use_case(
             id_generator=UuidIdGenerator(),
         ),
     )
->>>>>>> origin/main
 
 
 def _auth_verifier() -> AuthVerifierPort:

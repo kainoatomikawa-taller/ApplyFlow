@@ -466,7 +466,6 @@ button.secondary {
   color: #777;
 }
 
-<<<<<<< HEAD
 /* --- Autofill review (Epic 05) ------------------------------------------- */
 
 .autofill-fields {
@@ -558,7 +557,6 @@ button.secondary {
   border-radius: 6px;
   margin-top: 0.5rem;
 }
-=======
 /* ---- Portal hand-off ---------------------------------------------------- */
 
 .handoff-header {
@@ -741,4 +739,106 @@ button.secondary {
   max-width: 55%;
   overflow-wrap: anywhere;
 }
->>>>>>> origin/main
+
+/* ---- The tracker (Epic 06) ---------------------------------------------- */
+
+.tracked-applications {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.tracked-application {
+  border: 1px solid #e5e7eb;
+  border-left: 3px solid #cbd0e0;
+  border-radius: 6px;
+  padding: 0.75rem 0.9rem;
+}
+
+/* An application that has settled reads as finished rather than as one more
+   thing to act on. */
+.tracked-application.rejected,
+.tracked-application.withdrawn {
+  border-left-color: #d1d5db;
+  background: #fafafa;
+}
+
+.tracked-application.interviewing {
+  border-left-color: #6366f1;
+}
+
+.tracked-application.offer {
+  border-left-color: #059669;
+}
+
+.tracked-application-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.sent-documents {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  font-size: 0.88rem;
+}
+
+.sent-document {
+  display: flex;
+  gap: 0.6rem;
+  align-items: baseline;
+  padding: 0.15rem 0;
+}
+
+.sent-document-label {
+  min-width: 12rem;
+}
+
+/* The digest is the checkable part of "this is what was sent", so it is set
+   in monospace and never truncated below the point of being comparable. */
+.sent-document-digest {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  color: #4b5563;
+  background: #f3f4f6;
+  border-radius: 4px;
+  padding: 0.05rem 0.35rem;
+}
+
+.sent-document.missing .quiet {
+  font-style: italic;
+}
+
+.tracked-application-status {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 0.6rem;
+}
+
+.pill.status-applied {
+  background: #e0e7ff;
+  color: #3730a3;
+}
+
+.pill.status-interviewing {
+  background: #ede9fe;
+  color: #5b21b6;
+}
+
+.pill.status-offer {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.pill.status-rejected,
+.pill.status-withdrawn {
+  background: #f3f4f6;
+  color: #4b5563;
+}

@@ -169,7 +169,6 @@ export interface TailoredResume {
   ats_safety_violations: AtsSafetyViolation[];
 }
 
-<<<<<<< HEAD
 /**
  * A check on the application page that only the candidate can pass: a
  * sign-in wall, a CAPTCHA, or a request for their signature.
@@ -245,7 +244,8 @@ export interface ApplicationSubmissionReceipt {
   screenshot_png_base64: string | null;
   outstanding_boundaries: ApplicationBoundary[];
   is_confirmed_sent: boolean;
-=======
+}
+
 // ---- Application portals & hand-offs --------------------------------------
 
 /**
@@ -391,5 +391,56 @@ export type AnswerAction = 'set' | 'confirm' | 'decline';
 export interface SubmittedApplicationReview {
   review: ApplicationReview;
   apply_url: string;
->>>>>>> origin/main
+}
+
+// ---- The tracker (Epic 06) -------------------------------------------------
+
+/**
+ * The lifecycle of a *sent* application. Derived from `ApplicationStatus`
+ * rather than spelled out again, so the two cannot drift: `draft` belongs to
+ * an application still being prepared, and a tracked application exists
+ * because something was sent, so it can never hold one.
+ */
+export type TrackedApplicationStatus = Exclude<ApplicationStatus, 'draft'>;
+
+/**
+ * One document exactly as it went out with an application.
+ *
+ * No `content`: the tracker lists what was sent, and reading a document is a
+ * separate request. `content_sha256` is what identifies the exact snapshot,
+ * so this reference is checkable without shipping the text.
+ */
+export interface SentDocument {
+  id: string;
+  document_kind: DocumentKind;
+  version: number;
+  content_sha256: string;
+  created_at: string;
+}
+
+/**
+ * One logged application: what was sent, and where it stands.
+ *
+ * `allowed_next_statuses` comes from the backend's own state machine. A
+ * status control renders exactly these and nothing else — options computed
+ * here would eventually offer a move the update route refuses, and the
+ * candidate would meet the refusal only after choosing.
+ */
+export interface TrackedApplication {
+  id: string;
+  job_posting_id: string;
+  company_name: string;
+  role_title: string;
+  job_location: string | null;
+  applied_at: string;
+  status: TrackedApplicationStatus;
+  /** False once the application has settled. */
+  is_open: boolean;
+  allowed_next_statuses: TrackedApplicationStatus[];
+  /** Null only if the stored reference no longer resolves. */
+  resume: SentDocument | null;
+  /** Absent when the form never asked for one. */
+  cover_letter: SentDocument | null;
+  created_at: string | null;
+  updated_at: string | null;
 }

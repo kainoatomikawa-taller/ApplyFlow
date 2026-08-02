@@ -311,7 +311,6 @@ class ScoringFeedbackSummaryResponse(BaseModel):
     buckets: list[ScoreBucketAgreementResponse]
 
 
-<<<<<<< HEAD
 class ApplicationBoundaryResponse(BaseModel):
     """A human-only check found on an application page.
 
@@ -419,7 +418,8 @@ class ApplicationSubmissionResponse(BaseModel):
         default_factory=list
     )
     is_confirmed_sent: bool = True
-=======
+
+
 class InspectPortalRequest(BaseModel):
     job_posting_id: str = Field(min_length=1)
 
@@ -579,4 +579,52 @@ class SubmitApplicationReviewResponse(BaseModel):
 
     review: ApplicationReviewResponse
     apply_url: str
->>>>>>> origin/main
+
+
+class SentDocumentResponse(BaseModel):
+    """One document as it went out with an application.
+
+    No `content`: a tracker list never displays document text, and it is the
+    most PII-dense content the system holds. `content_sha256` lets a client
+    confirm which exact snapshot this is; the text itself is a separate,
+    deliberate read (`GET /api/application-documents/{id}`)."""
+
+    id: str
+    document_kind: str
+    version: int
+    content_sha256: str
+    created_at: datetime
+
+
+class TrackedApplicationResponse(BaseModel):
+    """One logged application: what was sent, and where it stands.
+
+    `allowed_next_statuses` is the domain's own answer
+    (`ApplicationStatus.allowed_transitions`), sent so a status control offers
+    exactly the transitions the update route will accept. Empty means the
+    application has settled and there is nothing left to choose."""
+
+    id: str
+    job_posting_id: str
+    company_name: str
+    role_title: str
+    applied_at: datetime
+    status: str
+    is_open: bool
+    allowed_next_statuses: list[str] = Field(default_factory=list)
+    job_location: str | None = None
+    resume: SentDocumentResponse | None = None
+    cover_letter: SentDocumentResponse | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class UpdateApplicationStatusRequest(BaseModel):
+    """Move one logged application to a new status.
+
+    Validated as a non-empty string here and resolved to an
+    `ApplicationStatus` by the use case, so the list of statuses lives in the
+    domain rather than being restated as a `Literal` that would drift from
+    it."""
+
+    status: str = Field(min_length=1)

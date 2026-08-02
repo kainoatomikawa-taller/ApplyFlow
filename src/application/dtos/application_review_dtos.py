@@ -1,10 +1,33 @@
 """DTOs — input/output contracts for the review-and-submit flow.
 
+Two review flows share this module, and they are not duplicates
+---------------------------------------------------------------
+ApplyFlow reviews a filled application in two different situations, and each
+has its own contracts here:
+
+- the **persisted review** (`OpenApplicationReviewInput` and the
+  `ApplicationReviewOutput` family) — the answers are stored, the candidate
+  comes back to them later, and submitting *records* their own act on a portal
+  ApplyFlow cannot press for them;
+- the **parked review** (`AnswerApplicationFieldInput`,
+  `SubmitApplicationFormInput`, `ApplicationSubmissionOutput`) — a live browser
+  session is held open on a supported ATS, and submitting presses that form's
+  own button with the candidate watching.
+
+Which one applies is decided by the portal, not by preference: a form
+ApplyFlow can drive end to end gets the second, everything else gets the
+first. They are kept in one module because they answer the same question — "is
+this application ready to send?" — and splitting them invited the drift that
+put two different `can_submit` rules in front of one candidate.
+
 SENSITIVE: `ReviewedAnswerOutput.value` is what goes onto a real application —
 the candidate's name, email, address, and their work-authorization
-declarations. The whole point of this payload is that a human reads it, so it
-necessarily carries all of that; it must never be logged. Log the review id,
-the posting id, and counts.
+declarations — and `AnswerApplicationFieldInput.value` is whatever they typed
+into a field on a real form, routinely their address, their salary
+expectation, or their EEO self-identification (answering EEO themselves is the
+*only* way it is ever answered). The whole point of these payloads is that a
+human reads them, so they necessarily carry all of that; they must never be
+logged. Log the review id, the posting id, the field id, and counts.
 
 One list, in page order
 -----------------------
@@ -30,7 +53,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from src.application.dtos.application_autofill_dtos import ApplicationAutofillOutput
+from src.application.dtos.application_autofill_dtos import (
+    ApplicationAutofillOutput,
+    ApplicationBoundaryOutput,
+)
 from src.application.dtos.portal_handoff_dtos import PortalHandoffOutput
 
 
@@ -184,3 +210,107 @@ class SubmitApplicationReviewOutput:
 
     review: ApplicationReviewOutput
     apply_url: str
+
+
+# -- The parked review: a live form, submitted with the candidate watching ----
+#
+# Sending is the candidate's act, and this is where that is enforced. There is
+# exactly one input type that can lead to a submission
+# (`SubmitApplicationFormInput`), it names one parked review session, and it
+# carries the candidate's confirmation of every sensitive value ApplyFlow
+# filled. Nothing constructs one on a schedule, from a queue, or as a
+# follow-on step of an autofill pass: the only caller is the authenticated
+# route the candidate hits when they press Submit. "Nothing is submitted
+# unattended" is that shape — a human instruction is a required input, not a
+# default.
+
+
+@dataclass(frozen=True)
+class AnswerApplicationFieldInput:
+    """The candidate's own answer to one field on the parked form.
+
+    Used for the questions ApplyFlow refused to answer for them: a company
+    screening question, a legal field the record does not settle, and EEO
+    self-identification — which reaches a form through this path or not at
+    all.
+    """
+
+    user_id: str
+    review_session_id: str
+    field_id: str
+    value: str
+
+
+@dataclass(frozen=True)
+class DiscardApplicationReviewInput:
+    """Abandon a parked review session and close its browser."""
+
+    user_id: str
+    review_session_id: str
+
+
+@dataclass(frozen=True)
+class SubmitApplicationFormInput:
+    """The candidate's instruction to send the application now.
+
+    `confirmed_field_ids` are the sensitive values they have looked at and
+    approved. It is a required input rather than a flag with a default,
+    because a default would mean a caller could submit legal declarations
+    the candidate never saw — which is exactly the failure the confirmation
+    gate exists to prevent.
+
+    `submit_control_label` names which button to press, and only has to be
+    given when the form offers more than one way to send it. Named by label
+    rather than by id because a label is what the candidate saw and what
+    stays stable between reads of the page.
+    """
+
+    user_id: str
+    review_session_id: str
+    confirmed_field_ids: tuple[str, ...] = ()
+    submit_control_label: str | None = None
+
+
+@dataclass(frozen=True)
+class ApplicationSubmissionOutput:
+    """What happened when the application was sent.
+
+    Deliberately does not claim more than it knows. `pressed_control` and
+    `final_url` are facts about what ApplyFlow did; `confirmation_excerpt`
+    is what the portal said back, for the candidate to read. If the portal
+    answered with a challenge instead of a confirmation, that is reported in
+    `outstanding_boundaries` rather than smoothed over — a submission that
+    may not have landed must never read as one that did.
+    """
+
+    job_posting_id: str
+    #: When the submit control was pressed, in UTC.
+    submitted_at: datetime
+    #: The label of the control that was pressed — what the candidate
+    #: authorized, recorded as what was done.
+    pressed_control: str
+    #: Where the portal left the browser afterwards.
+    final_url: str
+    #: The opening of the page the portal answered with, so the candidate can
+    #: see the confirmation (or the validation errors) in their own words.
+    confirmation_excerpt: str = ""
+    #: A PNG of the page the portal answered with. The candidate's proof of
+    #: what was sent and what came back; None if the capture failed.
+    screenshot_png: bytes | None = None
+    #: Human-only checks the portal raised *after* the press — a challenge on
+    #: submit. Non-empty means the application may not have been received and
+    #: the candidate has to finish it themselves.
+    outstanding_boundaries: list[ApplicationBoundaryOutput] = field(
+        default_factory=list
+    )
+
+    @property
+    def is_confirmed_sent(self) -> bool:
+        """Whether the portal accepted the submission without asking for
+        anything further.
+
+        The one thing a caller must not infer from "no exception was
+        raised": the press succeeded either way, and only the absence of a
+        post-press boundary says the application actually went through.
+        """
+        return not self.outstanding_boundaries

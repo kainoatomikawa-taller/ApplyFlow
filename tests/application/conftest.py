@@ -28,6 +28,7 @@ from src.application.ports.browser_automation_port import (
     BrowserAutomationPort,
     BrowserSessionPort,
     FormField,
+    FormFieldKind,
     SubmitControl,
 )
 from src.application.ports.id_generator_port import IdGeneratorPort
@@ -294,10 +295,17 @@ class FakeBrowserSession(BrowserSessionPort):
     depend on all of it:
 
     - a form read, with a per-handle failure it can be told to raise;
-    - page signals, so boundary detection has something to detect;
+    - *both* page readings the port defines — `read_boundary_signals` for
+      `detect_application_boundaries` and `read_page_signals` for
+      `HardStopDetector` (see "Two readings, two judges" on the port);
     - submit controls in their own handle namespace, and a press that only
       accepts one of those handles;
     - `pressed`, so a test can assert that nothing was submitted.
+
+    `read_page_signals` is *derived from the fields this fake holds* rather
+    than hardcoded clean: a fake form containing a password box has to read as
+    one, because a double that always reported a boundary-free page would let
+    a caller pass a hard-stop check no real portal would.
     """
 
     def __init__(
@@ -326,6 +334,7 @@ class FakeBrowserSession(BrowserSessionPort):
         self.attached: list[tuple[str, str, bytes]] = []
         self.pressed: list[str] = []
         self.read_count = 0
+        self.signal_reads = 0
         self.screenshots = 0
         self.closed = False
 
@@ -349,10 +358,21 @@ class FakeBrowserSession(BrowserSessionPort):
             raise failure
         self.attached.append((handle, filename, content))
 
-    async def read_page_signals(self) -> PageSignals:
+    async def read_boundary_signals(self) -> PageSignals:
         if self.pressed and self._signals_after_press is not None:
             return self._signals_after_press
         return self._signals
+
+    async def read_page_signals(self) -> PortalPageSignals:
+        self.signal_reads += 1
+        return PortalPageSignals(
+            url=self._current_url,
+            field_labels=tuple(field.label for field in self._fields),
+            password_field_count=sum(
+                1 for field in self._fields if field.kind is FormFieldKind.PASSWORD
+            ),
+            fillable_field_count=len(self._fields),
+        )
 
     async def read_submit_controls(self) -> tuple[SubmitControl, ...]:
         return self._submit_controls
@@ -540,11 +560,24 @@ class ScriptedBrowserSession(BrowserSessionPort):
         self.read_fields_calls += 1
         return self._fields
 
+    async def read_boundary_signals(self) -> PageSignals:
+        """The other reading the port defines. Derived from the same scripted
+        signals rather than given its own knob: an inspection judges with
+        `HardStopDetector`, so a fake that could disagree with itself about
+        what is on the page would prove nothing."""
+        return PageSignals(url=self._signals.url, visible_text=self._signals.text)
+
     async def fill(self, handle: str, value: str) -> None:
         raise AssertionError("inspection must never write to a form")
 
     async def attach_file(self, handle: str, *, filename: str, content: bytes) -> None:
         raise AssertionError("inspection must never upload to a form")
+
+    async def read_submit_controls(self) -> tuple[SubmitControl, ...]:
+        raise AssertionError("inspection must never look for a submit button")
+
+    async def press_submit(self, handle: str) -> None:
+        raise AssertionError("inspection must never submit a form")
 
     async def screenshot(self) -> bytes:
         return b"png"
@@ -661,9 +694,7 @@ class InMemoryApplicationReviewRepository(ApplicationReviewRepository):
             and other.job_posting_id == review.job_posting_id
             for other in self.reviews.values()
         ):
-            raise AssertionError(
-                "a second open review was added for the same posting"
-            )
+            raise AssertionError("a second open review was added for the same posting")
         self.reviews[review.id] = review
 
     async def update(self, review: ApplicationReview) -> None:

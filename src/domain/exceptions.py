@@ -175,6 +175,22 @@ class PortalHandoffNotFoundError(DomainError):
         self.handoff_id = handoff_id
 
 
+class TrackedApplicationNotFoundError(DomainError):
+    """Raised when a logged application cannot be located by id.
+
+    Also what a caller gets for *another* candidate's application, rather
+    than a distinct "not yours" error: the two are deliberately
+    indistinguishable, so the API never confirms that an id it was handed
+    exists somewhere. Carries only the id — a role title and a company name
+    say who someone is applying to be, and that is not something an error
+    should leak sideways.
+    """
+
+    def __init__(self, application_id: str) -> None:
+        super().__init__(f"Tracked application '{application_id}' was not found.")
+        self.application_id = application_id
+
+
 class ProfileNotFoundError(DomainError):
     """Raised when a candidate profile cannot be located."""
 

@@ -27,12 +27,12 @@ from src.interfaces.http.controllers import (
     portal_handoff_controller,
     resume_controller,
     tailored_resume_controller,
+    tracked_application_controller,
 )
-<<<<<<< HEAD
-from src.interfaces.http.dependencies import shutdown_portal_automation
-=======
-from src.interfaces.http.dependencies import shutdown_browser_automation
->>>>>>> origin/main
+from src.interfaces.http.dependencies import (
+    shutdown_browser_automation,
+    shutdown_portal_automation,
+)
 
 
 @asynccontextmanager
@@ -78,15 +78,13 @@ def create_app() -> FastAPI:
     app.include_router(cover_letter_controller.router)
     app.include_router(document_revision_controller.router)
     app.include_router(application_document_controller.router)
-<<<<<<< HEAD
     # Two routers from one controller: the autofill lives under the posting it
     # is for, while a parked review is its own resource with its own lifetime.
     app.include_router(application_autofill_controller.autofill_router)
     app.include_router(application_autofill_controller.review_router)
-=======
     app.include_router(portal_handoff_controller.router)
     app.include_router(application_review_controller.router)
->>>>>>> origin/main
+    app.include_router(tracked_application_controller.router)
     return app
 
 

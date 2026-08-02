@@ -4,6 +4,7 @@ import { hasAccessToken } from './api/accessToken';
 import { AccessTokenField } from './components/AccessTokenField';
 import { ApplicationForm } from './components/ApplicationForm';
 import { ApplicationList } from './components/ApplicationList';
+import { ApplicationTracker } from './components/ApplicationTracker';
 import { JobMatchList } from './components/JobMatchList';
 import { StatusBanner } from './components/StatusBanner';
 import { TailoringReview } from './components/TailoringReview';
@@ -126,6 +127,12 @@ export function App() {
 
           <ApplicationForm onCreate={handleCreate} />
           <ApplicationList applications={applications} onSubmit={handleSubmit} />
+
+          {/* The tracker sits above the matched roles deliberately: the
+              matched list already has the roles here suppressed from it, so
+              reading "what I have sent" first is what makes the shorter list
+              below make sense. */}
+          <ApplicationTracker authGeneration={authGeneration} />
 
           <h2>Matched Roles</h2>
           {matchesError && <p className="error">{matchesError}</p>}
