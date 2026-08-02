@@ -21,6 +21,7 @@ import type {
   SubmittedApplicationReview,
   TailoredResume,
   TrackedApplication,
+  TrackedApplicationList,
   TrackedApplicationStatus,
 } from '../types';
 
@@ -152,58 +153,6 @@ export const applyFlowApi = {
   },
 
   /**
-   * Open the posting's application portal and report what it presents. A
-   * portal with a hard boundary comes back with `is_handed_off: true` and no
-   * fields — that is a normal 200, not a failure: ApplyFlow stopped where it
-   * should.
-   */
-  inspectPortal(jobPostingId: string): Promise<PortalInspection> {
-    return request<PortalInspection>('/api/portal/inspections', {
-      method: 'POST',
-      body: JSON.stringify({ job_posting_id: jobPostingId }),
-    });
-  },
-
-  listPortalHandoffs(openOnly = false, limit = 100): Promise<PortalHandoffList> {
-    return request<PortalHandoffList>(
-      `/api/portal/handoffs?open_only=${openOnly}&limit=${limit}`,
-    );
-  },
-
-  /**
-   * Tell ApplyFlow the human-only step is done. This records the candidate's
-   * word for it — the next inspection is what re-reads the portal, and raises
-   * a fresh hand-off if the boundary is still there.
-   */
-  resumePortalHandoff(handoffId: string, note = ''): Promise<PortalHandoff> {
-    return request<PortalHandoff>(`/api/portal/handoffs/${handoffId}/resume`, {
-      method: 'POST',
-      body: JSON.stringify({ note }),
-    });
-  },
-
-  /** The candidate is finishing this application themselves. */
-  abandonPortalHandoff(handoffId: string, note = ''): Promise<PortalHandoff> {
-    return request<PortalHandoff>(`/api/portal/handoffs/${handoffId}/abandon`, {
-      method: 'POST',
-      body: JSON.stringify({ note }),
-    });
-  },
-
-  /**
-   * Fill this posting's application form and open a review over it. Supersedes
-   * any review still in progress for the job. A portal with a hard boundary
-   * comes back with `review: null` and the hand-off attached — a normal 200,
-   * because stopping there is correct.
-   */
-  openApplicationReview(jobPostingId: string): Promise<OpenApplicationReview> {
-    return request<OpenApplicationReview>(
-      `/api/job-postings/${jobPostingId}/review`,
-      { method: 'POST' },
-    );
-  },
-
-  /**
    * Fill this posting's application form in a real browser and park it for
    * review. Never submits: sending is a separate call the candidate makes
    * (`submitAutofilledApplication`).
@@ -212,27 +161,6 @@ export const applyFlowApi = {
     return request<ApplicationAutofillReport>(
       `/api/job-postings/${jobPostingId}/autofill`,
       { method: 'POST' },
-    );
-  },
-
-  /** The review in progress for this posting, if there is one (404 if not). */
-  getApplicationReview(jobPostingId: string): Promise<ApplicationReview> {
-    return request<ApplicationReview>(`/api/job-postings/${jobPostingId}/review`);
-  },
-
-  /**
-   * Write an answer, approve the one that is there, or decline the field.
-   * Returns the whole review: one decision can change what is blocking submit.
-   */
-  reviseReviewedAnswer(
-    reviewId: string,
-    fieldKey: string,
-    action: AnswerAction,
-    value = '',
-  ): Promise<ApplicationReview> {
-    return request<ApplicationReview>(
-      `/api/application-reviews/${reviewId}/answers/${encodeURIComponent(fieldKey)}`,
-      { method: 'POST', body: JSON.stringify({ action, value }) },
     );
   },
 
@@ -294,6 +222,79 @@ export const applyFlowApi = {
   },
 
   /**
+   * Open the posting's application portal and report what it presents. A
+   * portal with a hard boundary comes back with `is_handed_off: true` and no
+   * fields — that is a normal 200, not a failure: ApplyFlow stopped where it
+   * should.
+   */
+  inspectPortal(jobPostingId: string): Promise<PortalInspection> {
+    return request<PortalInspection>('/api/portal/inspections', {
+      method: 'POST',
+      body: JSON.stringify({ job_posting_id: jobPostingId }),
+    });
+  },
+
+  listPortalHandoffs(openOnly = false, limit = 100): Promise<PortalHandoffList> {
+    return request<PortalHandoffList>(
+      `/api/portal/handoffs?open_only=${openOnly}&limit=${limit}`,
+    );
+  },
+
+  /**
+   * Tell ApplyFlow the human-only step is done. This records the candidate's
+   * word for it — the next inspection is what re-reads the portal, and raises
+   * a fresh hand-off if the boundary is still there.
+   */
+  resumePortalHandoff(handoffId: string, note = ''): Promise<PortalHandoff> {
+    return request<PortalHandoff>(`/api/portal/handoffs/${handoffId}/resume`, {
+      method: 'POST',
+      body: JSON.stringify({ note }),
+    });
+  },
+
+  /** The candidate is finishing this application themselves. */
+  abandonPortalHandoff(handoffId: string, note = ''): Promise<PortalHandoff> {
+    return request<PortalHandoff>(`/api/portal/handoffs/${handoffId}/abandon`, {
+      method: 'POST',
+      body: JSON.stringify({ note }),
+    });
+  },
+
+  /**
+   * Fill this posting's application form and open a review over it. Supersedes
+   * any review still in progress for the job. A portal with a hard boundary
+   * comes back with `review: null` and the hand-off attached — a normal 200,
+   * because stopping there is correct.
+   */
+  openApplicationReview(jobPostingId: string): Promise<OpenApplicationReview> {
+    return request<OpenApplicationReview>(
+      `/api/job-postings/${jobPostingId}/review`,
+      { method: 'POST' },
+    );
+  },
+
+  /** The review in progress for this posting, if there is one (404 if not). */
+  getApplicationReview(jobPostingId: string): Promise<ApplicationReview> {
+    return request<ApplicationReview>(`/api/job-postings/${jobPostingId}/review`);
+  },
+
+  /**
+   * Write an answer, approve the one that is there, or decline the field.
+   * Returns the whole review: one decision can change what is blocking submit.
+   */
+  reviseReviewedAnswer(
+    reviewId: string,
+    fieldKey: string,
+    action: AnswerAction,
+    value = '',
+  ): Promise<ApplicationReview> {
+    return request<ApplicationReview>(
+      `/api/application-reviews/${reviewId}/answers/${encodeURIComponent(fieldKey)}`,
+      { method: 'POST', body: JSON.stringify({ action, value }) },
+    );
+  },
+
+  /**
    * The candidate submits. Refused (409) while a blocker stands or if the
    * review was already submitted — ApplyFlow never reaches this on its own.
    */
@@ -326,10 +327,32 @@ export const applyFlowApi = {
   /**
    * The tracker: every application the candidate has sent, most recently
    * applied first, each carrying the exact documents that went out with it.
+   *
+   * `openOnly` asks the backend which are still live rather than filtering
+   * here — which statuses count as open is a domain rule, and a copy of it in
+   * this client would be one more place for it to fall out of step.
    */
-  listTrackedApplications(limit = 100): Promise<TrackedApplication[]> {
-    return request<TrackedApplication[]>(
-      `/api/tracked-applications?limit=${limit}`,
+  listTrackedApplications(
+    { openOnly = false, limit = 100 } = {},
+  ): Promise<TrackedApplicationList> {
+    const query = new URLSearchParams({
+      open_only: String(openOnly),
+      limit: String(limit),
+    });
+    return request<TrackedApplicationList>(`/api/tracked-applications?${query}`);
+  },
+
+  /** Every application this candidate sent to one posting — normally one. */
+  listApplicationsForJob(jobPostingId: string): Promise<TrackedApplicationList> {
+    return request<TrackedApplicationList>(
+      `/api/tracked-applications/by-job/${jobPostingId}`,
+    );
+  },
+
+  /** One sent application with its full status history. */
+  getTrackedApplication(applicationId: string): Promise<TrackedApplication> {
+    return request<TrackedApplication>(
+      `/api/tracked-applications/${applicationId}`,
     );
   },
 
@@ -338,14 +361,18 @@ export const applyFlowApi = {
    * including the next set of `allowed_next_statuses` — the transition just
    * changed which moves are legal, and the caller re-renders from what was
    * stored rather than from what it assumed.
+   *
+   * `note` is the candidate's own word on why; empty means they did not say,
+   * which is not the same as a note saying nothing.
    */
   updateApplicationStatus(
     applicationId: string,
     status: TrackedApplicationStatus,
+    note = '',
   ): Promise<TrackedApplication> {
     return request<TrackedApplication>(
       `/api/tracked-applications/${applicationId}/status`,
-      { method: 'PATCH', body: JSON.stringify({ status }) },
+      { method: 'PATCH', body: JSON.stringify({ status, note }) },
     );
   },
 };

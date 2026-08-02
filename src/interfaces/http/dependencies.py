@@ -56,12 +56,14 @@ from src.application.use_cases.get_latest_application_document import (
     GetLatestApplicationDocument,
 )
 from src.application.use_cases.get_resume import GetResume
+from src.application.use_cases.get_tracked_application import GetTrackedApplication
 from src.application.use_cases.inspect_application_portal import (
     InspectApplicationPortal,
 )
 from src.application.use_cases.list_application_documents import (
     ListApplicationDocuments,
 )
+from src.application.use_cases.list_applications_for_job import ListApplicationsForJob
 from src.application.use_cases.list_candidate_applications import (
     ListCandidateApplications,
 )
@@ -70,9 +72,7 @@ from src.application.use_cases.list_job_match_feedback import (
 )
 from src.application.use_cases.list_portal_handoffs import ListPortalHandoffs
 from src.application.use_cases.list_resumes import ListResumes
-from src.application.use_cases.list_tracked_applications import (
-    ListTrackedApplications,
-)
+from src.application.use_cases.list_tracked_applications import ListTrackedApplications
 from src.application.use_cases.open_application_review import OpenApplicationReview
 from src.application.use_cases.parse_resume import ParseResume
 from src.application.use_cases.rank_matched_job_postings import (
@@ -94,9 +94,7 @@ from src.application.use_cases.submit_job_application import (
 from src.application.use_cases.submit_job_match_feedback import (
     SubmitJobMatchFeedback,
 )
-from src.application.use_cases.update_tracked_application_status import (
-    UpdateTrackedApplicationStatus,
-)
+from src.application.use_cases.update_application_status import UpdateApplicationStatus
 from src.application.use_cases.upload_resume import UploadResume
 from src.domain.services.application_ranking_service import (
     ApplicationRankingService,
@@ -456,40 +454,6 @@ def get_list_application_documents_use_case(
     return ListApplicationDocuments(repository=repository)
 
 
-def get_list_tracked_applications_use_case(
-    tracked_application_repository: SqlAlchemyTrackedApplicationRepository = Depends(
-        _tracked_application_repository
-    ),
-    document_repository: SqlAlchemyApplicationDocumentRepository = Depends(
-        _application_document_repository
-    ),
-) -> ListTrackedApplications:
-    """The tracker feed takes the document store as well as the tracker,
-    because a row's whole point is the snapshots it references — but only to
-    *read* them by id. No archive is wired in: nothing on the tracker's read
-    path can write a document, and nothing can generate one."""
-    return ListTrackedApplications(
-        tracked_application_repository=tracked_application_repository,
-        document_repository=document_repository,
-    )
-
-
-def get_update_tracked_application_status_use_case(
-    tracked_application_repository: SqlAlchemyTrackedApplicationRepository = Depends(
-        _tracked_application_repository
-    ),
-    document_repository: SqlAlchemyApplicationDocumentRepository = Depends(
-        _application_document_repository
-    ),
-) -> UpdateTrackedApplicationStatus:
-    """Same two stores, and the document one is still read-only here: a status
-    change must not be able to touch what was sent."""
-    return UpdateTrackedApplicationStatus(
-        tracked_application_repository=tracked_application_repository,
-        document_repository=document_repository,
-    )
-
-
 def _job_match_feedback_repository(
     session: AsyncSession = Depends(get_session),
 ) -> SqlAlchemyJobMatchFeedbackRepository:
@@ -554,7 +518,13 @@ def get_browser_automation() -> PlaywrightBrowserAutomation:
 
 
 def _browser_automation() -> PlaywrightBrowserAutomation:
-    """`Depends(...)` spelling of `get_browser_automation` — same instance."""
+    """The same single browser as `get_browser_automation`, under the name the
+    portal-inspection providers below declare as a FastAPI dependency.
+
+    Deliberately a delegation rather than a second singleton: the autofill flow
+    and the inspection flow each used to keep their own, which put two Chromium
+    processes in one API process — the cost both were written to avoid.
+    """
     return get_browser_automation()
 
 
@@ -576,19 +546,28 @@ async def shutdown_portal_automation() -> None:
     their contexts are disposed while the browser is still alive, then the
     browser, which is the backstop for anything that escaped.
     """
-    await get_review_sessions().close_all()
-    await get_browser_automation().shutdown()
+    if get_review_sessions.cache_info().currsize:
+        await get_review_sessions().close_all()
+    await shutdown_browser_automation()
 
 
 async def shutdown_browser_automation() -> None:
-    """Release the shared browser, if one was ever launched.
+    """Release the shared browser, if one was ever launched. Idempotent.
 
-    Idempotent, and deliberately still called from the lifespan after
-    `shutdown_portal_automation`: the inspect/review path parks no reviews, so
-    this is the backstop that keeps a browser process from outliving the API
-    even if nothing ever opened a parked review.
+    Checks the cache before reading it: calling `get_browser_automation()`
+    here would *launch* a Chromium in order to shut it down, on every process
+    that never opened a portal.
+
+    Still called from the lifespan after `shutdown_portal_automation`, even
+    though that already calls it: the inspect/review path parks no reviews, so
+    this is the backstop that keeps a browser from outliving the API when
+    nothing ever opened a parked review.
     """
-    await get_browser_automation().shutdown()
+    if not get_browser_automation.cache_info().currsize:
+        return
+    harness = get_browser_automation()
+    get_browser_automation.cache_clear()
+    await harness.shutdown()
 
 
 def _portal_handoff_repository(
@@ -650,7 +629,6 @@ def get_autofill_application_form_use_case(
     document_repository: SqlAlchemyApplicationDocumentRepository = Depends(
         _application_document_repository
     ),
-    browser_automation: PlaywrightBrowserAutomation = Depends(_browser_automation),
 ) -> AutofillApplicationForm:
     """The field planner is a pure default the use case builds itself, so no
     wiring mistake here can put a different set of mapping rules — or a
@@ -661,7 +639,7 @@ def get_autofill_application_form_use_case(
         job_posting_repository,
         profile_repository,
         document_repository,
-        browser_automation,
+        get_browser_automation(),
         AtsSafePdfRenderer(),
         get_review_sessions(),
     )
@@ -754,6 +732,73 @@ def get_submit_application_review_use_case(
             job_posting_repository=job_posting_repository,
             id_generator=UuidIdGenerator(),
         ),
+    )
+
+
+# -- Application tracking (Epic 06) ------------------------------------------
+#
+# All four take the tracker store and the document store, and nothing else.
+# Worth noticing what is absent: no browser, no generator, no LLM client. A
+# status change records what an employer did, so there is no path from one to
+# producing a document or touching a portal — and there is no wiring here that
+# could create one.
+#
+# The document store is read-only on these paths by construction: they reach it
+# only through `SentDocumentResolver`, which can look a snapshot up by id and
+# do nothing else. In particular it cannot ask for the *latest* document for a
+# job, which is what would let the tracker show something the employer never
+# received.
+
+
+def get_update_application_status_use_case(
+    repository: SqlAlchemyTrackedApplicationRepository = Depends(
+        _tracked_application_repository
+    ),
+    document_repository: SqlAlchemyApplicationDocumentRepository = Depends(
+        _application_document_repository
+    ),
+) -> UpdateApplicationStatus:
+    return UpdateApplicationStatus(
+        repository=repository, document_repository=document_repository
+    )
+
+
+def get_tracked_application_use_case(
+    repository: SqlAlchemyTrackedApplicationRepository = Depends(
+        _tracked_application_repository
+    ),
+    document_repository: SqlAlchemyApplicationDocumentRepository = Depends(
+        _application_document_repository
+    ),
+) -> GetTrackedApplication:
+    return GetTrackedApplication(
+        repository=repository, document_repository=document_repository
+    )
+
+
+def get_list_tracked_applications_use_case(
+    repository: SqlAlchemyTrackedApplicationRepository = Depends(
+        _tracked_application_repository
+    ),
+    document_repository: SqlAlchemyApplicationDocumentRepository = Depends(
+        _application_document_repository
+    ),
+) -> ListTrackedApplications:
+    return ListTrackedApplications(
+        repository=repository, document_repository=document_repository
+    )
+
+
+def get_list_applications_for_job_use_case(
+    repository: SqlAlchemyTrackedApplicationRepository = Depends(
+        _tracked_application_repository
+    ),
+    document_repository: SqlAlchemyApplicationDocumentRepository = Depends(
+        _application_document_repository
+    ),
+) -> ListApplicationsForJob:
+    return ListApplicationsForJob(
+        repository=repository, document_repository=document_repository
     )
 
 

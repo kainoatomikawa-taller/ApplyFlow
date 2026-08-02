@@ -1,45 +1,25 @@
-"""ListTrackedApplications use case — the tracker's feed: every application
-the candidate has sent, most recently applied first, each with the exact
-documents that went out with it.
+"""ListTrackedApplications use case — a candidate's sent applications, most
+recently applied first, optionally narrowed to a set of statuses.
 
-Why it resolves the document references
----------------------------------------
-The row stores ids (see `TrackedApplication` for why it must). This use case
-follows them, so one request answers "what did I send to whom, and when" —
-the question the tracker screen exists to answer. Leaving the client to
-resolve them would be two extra round trips per row.
+Each row carries the exact documents that went out with it, resolved from the
+ids frozen onto the row at send time (see `SentDocumentResolver`) — which is
+what makes the feed answer "what did I send to whom, and when" in one request.
 
-Resolved by id, and *not* by "the latest document for this job"
----------------------------------------------------------------
-The distinction is the whole ticket. `get_latest` answers "the newest resume
-produced for this job", which is the right question at send time and the
-wrong one afterwards: a candidate who revises their resume and applies
-somewhere else has a newer version, and reading it here would restate history
-— the tracker would show a document the employer never received. So this
-follows the ids frozen onto the row at send time, whatever has been produced
-since.
+The tracker's feed, and the thing that makes status worth storing: "what is
+still live", "what did I get offers on", "everything I have sent". The filter
+runs in the query rather than over the results, because discarding most of a
+candidate's applications in Python gets slower exactly as their search gets
+longer — see the repository interface.
 
-A reference that no longer resolves is reported, not raised
------------------------------------------------------------
-The write path refuses to create one (`TrackedApplicationReferenceError`) and
-the schema's `ON DELETE RESTRICT` refuses to break one, so a `None` here means
-something has gone wrong beneath both. It still comes back as a row with an
-empty document reference rather than an exception, because the alternative is
-one unreadable row hiding the candidate's entire application history. What
-they sent is missing; *that they applied* is not, and that is the part the
-suppression rule depends on.
-
-Documents are read once per distinct id
----------------------------------------
-Two applications to the same posting reference the same snapshots, and a
-candidate who re-applies to a role has several. Caching within the call keeps
-a thirty-row feed from re-reading the same document thirty times; it is
-per-call, so nothing here can serve a stale snapshot.
+Which statuses count as "open" is not decided here
+-------------------------------------------------
+`open_only` is resolved from `ApplicationStatus.is_terminal`, the domain's own
+rule. This use case does not carry a list of live statuses, so adding a status
+to the lifecycle cannot leave a stale copy of that judgement behind in the
+application layer.
 """
 
 from __future__ import annotations
-
-import logging
 
 from src.application.dtos.tracked_application_dtos import (
     ListTrackedApplicationsInput,
@@ -48,58 +28,84 @@ from src.application.dtos.tracked_application_dtos import (
 from src.application.mappers.tracked_application_mapper import (
     TrackedApplicationMapper,
 )
-from src.domain.entities.application_document import ApplicationDocument
+from src.application.services.sent_document_resolver import SentDocumentResolver
+from src.domain.exceptions import InvalidValueError
 from src.domain.repositories.application_document_repository import (
     ApplicationDocumentRepository,
 )
 from src.domain.repositories.tracked_application_repository import (
     TrackedApplicationRepository,
 )
-
-logger = logging.getLogger(__name__)
+from src.domain.value_objects.application_status import ApplicationStatus
 
 
 class ListTrackedApplications:
     def __init__(
         self,
-        tracked_application_repository: TrackedApplicationRepository,
+        repository: TrackedApplicationRepository,
         document_repository: ApplicationDocumentRepository,
     ) -> None:
-        self._applications = tracked_application_repository
+        self._repository = repository
         self._documents = document_repository
 
     async def execute(
         self, dto: ListTrackedApplicationsInput
     ) -> list[TrackedApplicationOutput]:
-        applications = await self._applications.list_by_user_id(
-            dto.user_id, limit=dto.limit
+        """Return this candidate's applications, newest first.
+
+        Raises:
+            InvalidValueError: if `statuses` holds something that is not an
+                application status, or if it is combined with `open_only` —
+                which is a contradiction, not an intersection.
+        """
+        if dto.open_only and dto.statuses is not None:
+            raise InvalidValueError(
+                "Ask for open applications or for specific statuses, not both: "
+                "'open_only' already names a set of statuses, and combining "
+                "the two hides whichever of them the caller did not mean."
+            )
+
+        statuses = self._resolve(dto.statuses) if dto.statuses is not None else None
+        if dto.open_only:
+            statuses = tuple(
+                status
+                for status in ApplicationStatus
+                if not status.is_terminal and status is not ApplicationStatus.DRAFT
+            )
+
+        applications = await self._repository.list_by_user_id(
+            dto.user_id, statuses=statuses, limit=dto.limit
         )
-
-        resolved: dict[str, ApplicationDocument | None] = {}
-
-        async def snapshot(document_id: str | None) -> ApplicationDocument | None:
-            if document_id is None:
-                return None
-            if document_id not in resolved:
-                resolved[document_id] = await self._documents.get_by_id(document_id)
-            return resolved[document_id]
-
+        # One resolver for the whole feed, so two applications to the same
+        # posting cost one document read rather than two.
+        resolver = SentDocumentResolver(self._documents)
         outputs: list[TrackedApplicationOutput] = []
         for application in applications:
-            resume = await snapshot(application.resume_document_id)
-            if resume is None:
-                # Ids only: the row is not sensitive, the document's text is.
-                logger.error(
-                    "tracked application=%s references resume document=%s, "
-                    "which no longer resolves; reporting the application "
-                    "without it",
-                    application.id,
-                    application.resume_document_id,
-                )
-            cover_letter = await snapshot(application.cover_letter_document_id)
+            resume, cover_letter = await resolver.resolve(application)
             outputs.append(
                 TrackedApplicationMapper.to_output(
                     application, resume=resume, cover_letter=cover_letter
                 )
             )
         return outputs
+
+    @staticmethod
+    def _resolve(statuses: tuple[str, ...]) -> tuple[ApplicationStatus, ...]:
+        resolved: list[ApplicationStatus] = []
+        for status in statuses:
+            try:
+                resolved.append(ApplicationStatus(status))
+            except ValueError as exc:
+                allowed = ", ".join(
+                    candidate.value
+                    for candidate in ApplicationStatus
+                    if candidate is not ApplicationStatus.DRAFT
+                )
+                raise InvalidValueError(
+                    f"'{status}' is not an application status. Expected one "
+                    f"of: {allowed}."
+                ) from exc
+        # De-duplicated, so repeating a status in the query string cannot
+        # change the SQL. Order is irrelevant to an `IN`, and the rows come
+        # back ordered by date regardless.
+        return tuple(dict.fromkeys(resolved))

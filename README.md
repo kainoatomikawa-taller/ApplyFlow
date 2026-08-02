@@ -627,7 +627,8 @@ went out with it.
   interviewing. Unlike the document store, this repository has an `update`:
   following an application through its lifecycle is the point. It has no
   `delete` — erasing a candidate's data is Epic 07's deliberate, user-scoped
-  purge, not an ambient capability.
+  purge, not an ambient capability. Every move is also *recorded* — see
+  "Status lifecycle and history" below.
 - **Every foreign key is `ON DELETE RESTRICT`,** matching
   `application_documents` rather than the CASCADE on `application_reviews` and
   `portal_handoffs`. That is the same distinction those tables draw: in-flight
@@ -684,6 +685,77 @@ skips (instead of failing) when nothing is reachable at `DATABASE_URL`.
 
 The migration is `migrations/versions/0017_create_tracked_applications.py`.
 
+### Status lifecycle and history
+
+An application's status changes over time, and the tracker keeps the whole
+sequence rather than only where it ended up. `applied → interviewing → rejected`
+is preserved as three recorded moves, because the questions the tracker exists
+to answer are about *when* things changed: "applied three weeks ago, still no
+reply" is a follow-up, and "the recruiter screen already happened" is interview
+prep. Neither is answerable from a single status column.
+
+- **The history is part of the aggregate.** `ApplicationStatusChange` is a value
+  object; `TrackedApplication.status_history` is the list of them, oldest first.
+  The invariant is that `status_history[-1].status` *is* `status`, checked on
+  construction — a row where those disagree is one that two different queries
+  would answer differently. `change_status` appends and reassigns in one step,
+  so it is not possible to move an application without recording that it moved,
+  and a refused transition raises before anything is recorded.
+- **One transaction, one store.** `application_status_events` is a child table
+  of `tracked_applications`, written by the same repository in the same commit.
+  A separate history store with its own repository could commit the status
+  without its entry, leaving a record whose present and past disagree
+  permanently.
+- **Append-only.** Nothing in the data-access layer updates or deletes an event
+  row; `update` inserts the entries whose `sequence` is beyond what is stored.
+  The primary key is (`tracked_application_id`, `sequence`) — no surrogate id,
+  because a status change has no identity beyond its position in one
+  application's history — and that key is what makes appending the same entry
+  twice a constraint violation rather than a duplicated step.
+- **Each entry names where it came from.** `previous_status` is redundant with
+  the preceding row's `status` on purpose: it makes one row self-describing
+  ("rejected after interviewing") and makes a corrupt history *detectable*
+  rather than merely wrong. It is NULL for exactly one entry — `sequence` 0, the
+  application being sent.
+- **`ON DELETE CASCADE`,** the only one on the tracker. This is the one
+  genuinely part-of relationship here: history without its application is
+  unreadable. The application is still protected from a posting being pruned by
+  the RESTRICT on `tracked_applications` itself.
+- **Rows written before history existed are seeded, not guessed.** A row that
+  knows its status and when it was sent *is* a one-entry history, so migration
+  `0019` backfills exactly that (dated `applied_at`, no previous status), and
+  the entity does the same for any row that still arrives with an empty history.
+- **Status is queryable.** `list_by_user_id(statuses=...)` filters in SQL
+  against the existing (`user_id`, `status`) index, so the tracker's views do
+  not get slower as a search gets longer. An empty collection matches nothing —
+  the honest reading of "none of these statuses", distinct from no filter at
+  all. `open_only` on the use case resolves the live statuses from
+  `ApplicationStatus.is_terminal` rather than keeping a second list of them.
+- **Notes are the candidate's own words.** Optional free text per change
+  ("recruiter screen booked for the 14th"), capped at 1000 characters. Not
+  sensitive the way a document is, but it is whatever they typed, so it stays
+  out of logs — status transitions are logged by status and id only.
+
+The HTTP surface is `tracked_application_controller`:
+
+| Route | What it does |
+| --- | --- |
+| `GET /api/tracked-applications` | The feed, newest first. `?status=` (repeatable) or `?open_only=true`. |
+| `GET /api/tracked-applications/{id}` | One application with its full history. |
+| `PATCH /api/tracked-applications/{id}/status` | Move it, with an optional note. |
+| `GET /api/tracked-applications/by-job/{job_posting_id}` | Every application sent to one posting. |
+
+A refused transition is a **409** — well-formed, but the lifecycle does not
+allow it. An unknown status name, or `draft`, is a **422**. An application that
+does not exist *or* belongs to another candidate is a **404** in both cases:
+distinguishing them would confirm that someone else's application exists under a
+guessed id. The status route returns the whole application rather than the new
+status alone, because one move also changes `current_status_since`, can close
+the application (`is_open`), and always appends to the history.
+
+The migration is
+`migrations/versions/0020_create_application_status_events.py`.
+
 ### Already-applied jobs stop being suggested
 
 The tracker feeds back into matching, so a role the candidate has applied to
@@ -737,51 +809,53 @@ identity rule is verified against the dedup key it has to agree with —
 including the case where Epic 02 keeps two rows (same role, two sources) and
 matching suppresses both anyway.
 
-### Reading the tracker, and keeping it current
+### What each row says about the documents that went out
 
-Two routes, and deliberately no more: `GET /api/tracked-applications` and
-`PATCH /api/tracked-applications/{id}/status`.
+Every tracker read — the feed, one application, one posting's applications, and
+the response to a status change — carries the exact resume and cover letter the
+employer received, resolved from the ids frozen onto the row at send time.
 
-- **There is no route that creates one.** A record exists because an
-  application was *sent*, so it is written by the flow that sends one. A route
-  that accepted a tracked application would let a caller assert that an
-  employer received a document, which is the one thing this table must never
-  be able to say untruthfully. There is no `DELETE` either — see the
-  repository's note on Epic 07's purge.
-- **The feed resolves the document references.** `ListTrackedApplications`
-  follows `resume_document_id` and `cover_letter_document_id` so one request
-  answers "what did I send to whom, and when". It resolves them **by id**, not
-  through `get_latest`: the latter is the right question at send time and the
-  wrong one afterwards, because a candidate who revises their resume has a
-  newer version stored against the same job, and reading it would show the
-  tracker a document the employer never received.
-- **Without the document text.** The feed carries `content_sha256` and not
-  `content` — the same line `ApplicationDocumentSummaryOutput` draws. A list
-  view never displays a resume, the text is the most PII-dense content in the
-  system, and a caller that wants it asks for one document by id. The digest
-  is what keeps the reference checkable without shipping it.
+- **Resolved by id, never by "the newest document for this job".**
+  `SentDocumentResolver` can look a snapshot up by id and do nothing else. It
+  deliberately cannot call `get_latest`, which is the right question at *send*
+  time (it is what `SubmittedApplicationLog` asks) and the wrong one
+  afterwards: a candidate who revises their resume has a newer version stored
+  against the same job, and reading it here would make the tracker restate
+  history — showing a document the employer never received, with nothing to
+  indicate anything had changed.
+- **Carried twice, by id and resolved.** `resume_document_id` /
+  `cover_letter_document_id` are always present and are what a caller fetches
+  with; `resume` / `cover_letter` are those same references already resolved to
+  version, digest, and date, so a thirty-row feed does not cost sixty extra
+  requests to label.
+- **Never the text.** The same line `ApplicationDocumentSummaryOutput` draws: a
+  list view never displays a resume, the text is the most PII-dense content in
+  the system, and a caller that wants it asks for one document by id.
+  `content_sha256` is what keeps the reference checkable without shipping it.
 - **A reference that no longer resolves is reported, not raised.** The write
   path refuses to create one and `ON DELETE RESTRICT` refuses to break one, so
   a null here means something has gone wrong beneath both. The row still comes
-  back, with an empty reference and an ERROR log: one unreadable row must not
-  hide the candidate's whole history, and *that they applied* is the fact
-  suppression depends on.
-- **The status choices come from the domain.**
-  `ApplicationStatus.allowed_transitions` is passed through as
-  `allowed_next_statuses`, so a client offers exactly the moves the route
-  accepts. A control that computed its own would eventually offer one
-  `change_status` refuses, and the candidate would meet the refusal only after
-  choosing. An empty list means the application has settled.
-- **Two different refusals, two different codes.** A value that is not a
-  status is `422`; a real status the lifecycle forbids (`rejected` back to
-  `interviewing`, or a sent application back to `draft`) is `409`, and nothing
-  is written — the domain refuses before the repository is reached.
-- **Another candidate's application is `404`, never `403`.** The two are
-  indistinguishable on purpose, so the API never confirms that an id it was
-  handed is real.
+  back, with an empty reference and an ERROR log naming the ids: one unreadable
+  row must not hide the candidate's whole history, and *that they applied* is
+  the fact suppression depends on.
+- **One read per distinct document.** A candidate who re-applied to a role has
+  several rows pointing at the same snapshots, so the resolver caches within a
+  request — and only within one, so nothing can serve a stale snapshot.
+- **Nothing on these paths can write a document.** No archive and no generator
+  is wired into any of the four use cases; the only thing they hold besides the
+  tracker store is a resolver that reads by id.
 
-`frontend/src/components/ApplicationTracker.tsx` renders it, and binds its
-status control to `allowed_next_statuses` rather than to a list of its own.
+Alongside that, `allowed_next_statuses` on every row is
+`ApplicationStatus.allowed_transitions` passed straight through, so a status
+control offers exactly the moves the PATCH will accept. A control that computed
+its own would eventually offer one `change_status` refuses, and the candidate
+would meet the refusal only after choosing. An empty list means the application
+has settled.
+
+`frontend/src/components/ApplicationTracker.tsx` renders all of it — the sent
+documents by version and digest, the status control bound to
+`allowed_next_statuses`, and the history behind a disclosure once an
+application has moved.
 
 ### Acceptance check
 
@@ -790,9 +864,10 @@ status control to `allowed_next_statuses` rather than to a list of its own.
 database and the real HTTP app: a submission is logged with the exact
 documents that went out (checked by *following* the references back to the
 archived bytes, and against a newer revision archived afterwards that must not
-appear), the status is driven through its lifecycle and re-read from the route
-the UI renders from, and the applied-to role leaves the matched list and stays
-gone after the application is rejected.
+appear), the status is driven through its lifecycle — recording each move in
+the history, refusing the ones the lifecycle forbids — and re-read from the
+route the UI renders from, and the applied-to role leaves the matched list and
+stays gone after the application is rejected.
 
 ---
 
@@ -1558,8 +1633,10 @@ All `/api/applications*` and `/api/resumes*` routes require
 | GET    | `/api/job-postings/{id}/review`     | The review in progress for this posting, with the submit gate | Yes |
 | POST   | `/api/application-reviews/{id}/answers/{field_key}` | One decision about one field: `set` a value, `confirm` it, or `decline` it | Yes |
 | POST   | `/api/application-reviews/{id}/submit` | **The candidate submits.** Refused while any blocker stands; returns the portal URL to finish on | Yes |
-| GET    | `/api/tracked-applications`         | The tracker: every application sent, newest first, each with the exact documents that went out | Yes |
-| PATCH  | `/api/tracked-applications/{id}/status` | Record what became of one application. 409 for a move the lifecycle forbids, 422 for a value that is not a status | Yes |
+| GET    | `/api/tracked-applications`         | The tracker: every application sent, newest first, each with the exact documents that went out. `?status=` (repeatable) or `?open_only=true` | Yes |
+| GET    | `/api/tracked-applications/{id}`    | One application with its full status history | Yes |
+| GET    | `/api/tracked-applications/by-job/{job_posting_id}` | Every application this candidate sent to one posting | Yes |
+| PATCH  | `/api/tracked-applications/{id}/status` | Record what became of one application, with an optional note. 409 for a move the lifecycle forbids, 422 for a value that is not a status (or is `draft`) | Yes |
 
 ---
 

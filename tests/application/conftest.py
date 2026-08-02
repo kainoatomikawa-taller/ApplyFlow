@@ -15,6 +15,7 @@ identical to each other:
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from datetime import date, datetime
 from types import TracebackType
 
@@ -64,6 +65,7 @@ from src.domain.repositories.profile_repository import ProfileRepository
 from src.domain.repositories.tracked_application_repository import (
     TrackedApplicationRepository,
 )
+from src.domain.value_objects.application_status import ApplicationStatus
 from src.domain.value_objects.canonical_job_identity import CanonicalJobIdentity
 from src.domain.value_objects.email_address import EmailAddress
 from src.domain.value_objects.generated_document_kind import GeneratedDocumentKind
@@ -359,11 +361,26 @@ class FakeBrowserSession(BrowserSessionPort):
         self.attached.append((handle, filename, content))
 
     async def read_boundary_signals(self) -> PageSignals:
+        """The reading `detect_application_boundaries` judges.
+
+        Answers differently once something has been pressed, when the test
+        supplied `signals_after_press` — a challenge raised *on submit* is the
+        case the submit flow has to notice, and a fake that returned the
+        pre-press page forever could not exercise it.
+        """
         if self.pressed and self._signals_after_press is not None:
             return self._signals_after_press
         return self._signals
 
     async def read_page_signals(self) -> PortalPageSignals:
+        """The other of the port's two readings — the one `HardStopDetector`
+        judges (see `BrowserSessionPort`).
+
+        Derived from the fields this fake holds rather than hardcoded clean, so
+        a fake form containing a password box reads as one. A double that
+        always reported a boundary-free page would let a caller pass a
+        hard-stop check that no real portal would.
+        """
         self.signal_reads += 1
         return PortalPageSignals(
             url=self._current_url,
@@ -556,16 +573,21 @@ class ScriptedBrowserSession(BrowserSessionPort):
             raise self._signals_error
         return self._signals
 
+    async def read_boundary_signals(self) -> PageSignals:
+        """The port's *other* reading (see `BrowserSessionPort`). Derived from
+        the same scripted page rather than invented, so the two readings of one
+        portal cannot describe different pages."""
+        return PageSignals(
+            url=self._signals.url,
+            visible_text=self._signals.readable_text,
+            frame_urls=self._signals.frame_urls,
+            script_urls=self._signals.script_urls,
+            element_markers=self._signals.element_hints,
+        )
+
     async def read_fields(self) -> tuple[FormField, ...]:
         self.read_fields_calls += 1
         return self._fields
-
-    async def read_boundary_signals(self) -> PageSignals:
-        """The other reading the port defines. Derived from the same scripted
-        signals rather than given its own knob: an inspection judges with
-        `HardStopDetector`, so a fake that could disagree with itself about
-        what is on the page would prove nothing."""
-        return PageSignals(url=self._signals.url, visible_text=self._signals.text)
 
     async def fill(self, handle: str, value: str) -> None:
         raise AssertionError("inspection must never write to a form")
@@ -574,7 +596,12 @@ class ScriptedBrowserSession(BrowserSessionPort):
         raise AssertionError("inspection must never upload to a form")
 
     async def read_submit_controls(self) -> tuple[SubmitControl, ...]:
-        raise AssertionError("inspection must never look for a submit button")
+        # Nothing is scripted to press: inspection reads a portal, and the
+        # submit path runs against `FakeBrowserSession` instead. Returning
+        # nothing rather than raising, because *looking* for a submit control
+        # is a reasonable thing for a caller to do; pressing one is not, and
+        # that is what `press_submit` below refuses.
+        return ()
 
     async def press_submit(self, handle: str) -> None:
         raise AssertionError("inspection must never submit a form")
@@ -754,6 +781,7 @@ class InMemoryTrackedApplicationRepository(TrackedApplicationRepository):
             application.id: application for application in applications or []
         }
         self.add_calls = 0
+        self.update_calls = 0
 
     async def add(self, application: TrackedApplication) -> None:
         self.add_calls += 1
@@ -783,12 +811,23 @@ class InMemoryTrackedApplicationRepository(TrackedApplicationRepository):
         return None
 
     async def update(self, application: TrackedApplication) -> None:
+        self.update_calls += 1
         self.rows[application.id] = application
 
     async def list_by_user_id(
-        self, user_id: str, *, limit: int = 100
+        self,
+        user_id: str,
+        *,
+        statuses: Collection[ApplicationStatus] | None = None,
+        limit: int = 100,
     ) -> list[TrackedApplication]:
         owned = [r for r in self.rows.values() if r.user_id == user_id]
+        if statuses is not None:
+            # An empty collection matches nothing, exactly as `IN ()` does —
+            # a fake that treated it as "no filter" would let a test pass that
+            # the database answers differently.
+            allowed = set(statuses)
+            owned = [r for r in owned if r.status in allowed]
         owned.sort(key=lambda application: application.applied_at, reverse=True)
         return owned[:limit]
 

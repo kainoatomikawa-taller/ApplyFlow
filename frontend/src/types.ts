@@ -418,13 +418,28 @@ export interface SentDocument {
   created_at: string;
 }
 
+/** One recorded move in an application's history. `previous_status` is null
+ *  for exactly one entry: the first, recorded when the application was sent. */
+export interface ApplicationStatusChange {
+  status: TrackedApplicationStatus;
+  changed_at: string;
+  previous_status: TrackedApplicationStatus | null;
+  note: string;
+}
+
 /**
- * One logged application: what was sent, and where it stands.
+ * One logged application: what was sent, where it stands, and how it got
+ * there.
  *
  * `allowed_next_statuses` comes from the backend's own state machine. A
  * status control renders exactly these and nothing else — options computed
  * here would eventually offer a move the update route refuses, and the
  * candidate would meet the refusal only after choosing.
+ *
+ * The documents appear twice on purpose. The `*_document_id` fields name the
+ * snapshots and are always present; `resume` / `cover_letter` are those same
+ * references already resolved, so a row can show which version went out
+ * without a request per row. Neither carries the text.
  */
 export interface TrackedApplication {
   id: string;
@@ -436,11 +451,23 @@ export interface TrackedApplication {
   status: TrackedApplicationStatus;
   /** False once the application has settled. */
   is_open: boolean;
+  /** When it entered the status it is in now — what a follow-up view sorts on. */
+  current_status_since: string;
   allowed_next_statuses: TrackedApplicationStatus[];
+  resume_document_id: string;
+  cover_letter_document_id: string | null;
   /** Null only if the stored reference no longer resolves. */
   resume: SentDocument | null;
   /** Absent when the form never asked for one. */
   cover_letter: SentDocument | null;
+  status_history: ApplicationStatusChange[];
   created_at: string | null;
   updated_at: string | null;
+}
+
+/** `open_count` is the whole candidate's live total, not a count of this
+ *  page — a `limit`-ed page cannot be counted client-side. */
+export interface TrackedApplicationList {
+  applications: TrackedApplication[];
+  open_count: number;
 }

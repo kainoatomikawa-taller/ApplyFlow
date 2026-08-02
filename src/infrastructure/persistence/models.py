@@ -97,9 +97,7 @@ class JobPostingModel(Base):
     # Epic 03's structured requirement extraction result — NULL until that
     # pass has run for this posting (see `list_missing_requirements`, the
     # query the extraction sweep uses to find postings still needing it).
-    requirements: Mapped[dict[str, object] | None] = mapped_column(
-        JSON, nullable=True
-    )
+    requirements: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
 
 
 class ResolvedCompanyBoardModel(Base):
@@ -131,9 +129,7 @@ class UserProfileModel(Base):
     # Provenance for full_name/email/phone/headline/location as a bundle —
     # see UserProfile's module docstring for why. Always required: those
     # fields are always present once a profile exists.
-    contact_source: Mapped[str] = mapped_column(
-        String(16), comment=_PROVENANCE_COMMENT
-    )
+    contact_source: Mapped[str] = mapped_column(String(16), comment=_PROVENANCE_COMMENT)
     phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     headline: Mapped[str | None] = mapped_column(String(255), nullable=True)
     location: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -459,6 +455,93 @@ class TrackedApplicationModel(Base):
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ApplicationStatusEventModel(Base):
+    """One recorded status change on a tracked application — see
+    `ApplicationStatusChange`.
+
+    A child table rather than a JSON column on `tracked_applications`, because
+    this history is queried, not just displayed: "which applications reached an
+    interview?" and "how long do replies take?" are both aggregate questions
+    over these rows, and neither is expressible against a JSON blob without
+    reading every application first.
+
+    Keyed by (`tracked_application_id`, `sequence`) with no surrogate id. A
+    status change has no identity of its own — it is identified by the
+    application it belongs to and its position in that application's history,
+    which is exactly what the domain's value object models. `sequence` is
+    0-based and gap-free, so the primary key doubles as the ordering: two
+    changes recorded in the same clock tick still have a definite order, which
+    `changed_at` alone could not give them.
+
+    `ON DELETE CASCADE`, unlike every other foreign key on the tracker. This is
+    the one relationship here that is genuinely a part-of rather than a
+    reference-to: history without its application is unreadable, so it goes
+    when the application does. The application itself is still protected from a
+    posting being pruned by the RESTRICT on `tracked_applications`.
+
+    Append-only in practice. Nothing in the data-access layer updates or
+    deletes a row here — `SqlAlchemyTrackedApplicationRepository.update`
+    inserts the entries it has not yet stored and leaves the rest untouched —
+    because a status change is a thing that happened.
+    """
+
+    __tablename__ = "application_status_events"
+    __table_args__ = (
+        # The history of one application, in order — the read behind every
+        # tracker detail view. Also the pair the repository appends against.
+        Index(
+            "ix_application_status_events_application_sequence",
+            "tracked_application_id",
+            "sequence",
+        ),
+        # "Which applications ever reached this status, and when?" — the funnel
+        # questions scan by status and date rather than by application.
+        Index(
+            "ix_application_status_events_status_changed_at",
+            "status",
+            "changed_at",
+        ),
+    )
+
+    tracked_application_id: Mapped[str] = mapped_column(
+        ForeignKey("tracked_applications.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    #: This entry's 0-based position in the application's history. Part of the
+    #: primary key, which is what makes appending the same entry twice a
+    #: constraint violation rather than a duplicated step.
+    sequence: Mapped[int] = mapped_column(Integer, primary_key=True)
+    status: Mapped[str] = mapped_column(
+        String(32),
+        comment=(
+            "The status moved to: applied | interviewing | offer | rejected | "
+            "withdrawn. Never 'draft'. See "
+            "src/domain/value_objects/application_status.py."
+        ),
+    )
+    #: The status moved *from* — NULL for `sequence` 0 only, which records the
+    #: application being sent. Redundant with the previous row's `status` by
+    #: design: it makes one row self-describing ("rejected after interviewing")
+    #: and makes a corrupt history detectable rather than merely wrong.
+    previous_status: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+        comment=(
+            "The status moved from; NULL only for sequence 0, the entry "
+            "recorded when the application was sent."
+        ),
+    )
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    #: Free text the candidate wrote about this change. Not sensitive the way a
+    #: document is, but it is whatever they typed, so it is kept out of logs —
+    #: see `ApplicationStatusChange.note`.
+    note: Mapped[str] = mapped_column(
+        Text,
+        default="",
+        comment="The candidate's own note about this change. Do not log.",
+    )
 
 
 class ApplicationReviewModel(Base):

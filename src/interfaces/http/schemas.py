@@ -596,13 +596,55 @@ class SentDocumentResponse(BaseModel):
     created_at: datetime
 
 
-class TrackedApplicationResponse(BaseModel):
-    """One logged application: what was sent, and where it stands.
+class UpdateApplicationStatusRequest(BaseModel):
+    """Move a tracked application to a new status.
 
-    `allowed_next_statuses` is the domain's own answer
-    (`ApplicationStatus.allowed_transitions`), sent so a status control offers
-    exactly the transitions the update route will accept. Empty means the
-    application has settled and there is nothing left to choose."""
+    `status` is validated as a non-empty string here and resolved against the
+    lifecycle by the use case — the set of statuses and the legal moves between
+    them are domain rules, and a `Literal` here would be a second copy of the
+    first that could fall out of step with it.
+    """
+
+    status: str = Field(min_length=1)
+    # Capped at the value object's own limit
+    # (`ApplicationStatusChange.MAX_NOTE_LENGTH`) so an over-long note is a 422
+    # here rather than a domain error deeper in.
+    note: str = Field(default="", max_length=1000)
+
+
+class ApplicationStatusChangeResponse(BaseModel):
+    """One recorded move in an application's history.
+
+    `previous_status` is null for exactly one entry: the first, recorded when
+    the application was sent.
+    """
+
+    status: str
+    changed_at: datetime
+    previous_status: str | None = None
+    note: str = ""
+
+
+class TrackedApplicationResponse(BaseModel):
+    """One application the candidate sent, where it stands, and how it got
+    there.
+
+    `current_status_since` is what a follow-up view reads: it equals
+    `applied_at` until the application first moves, and afterwards says how long
+    it has been where it is. `is_open` comes from the domain's own
+    terminal-status rule rather than being re-derived from `status` by each
+    client, and `allowed_next_statuses` is that same domain's
+    `ApplicationStatus.allowed_transitions` — sent so a status control offers
+    exactly the moves the PATCH will accept. Empty means the application has
+    settled and there is nothing left to choose.
+
+    The documents appear twice, and both are useful. `resume_document_id` /
+    `cover_letter_document_id` name the exact snapshots the employer received
+    (see `ApplicationDocument`). `resume` / `cover_letter` are those same
+    references already resolved — version, digest, and date — so a tracker row
+    can say *which* document went out without a request per row. Neither
+    carries the text: a client that wants it asks the documents endpoint.
+    """
 
     id: str
     job_posting_id: str
@@ -611,20 +653,25 @@ class TrackedApplicationResponse(BaseModel):
     applied_at: datetime
     status: str
     is_open: bool
-    allowed_next_statuses: list[str] = Field(default_factory=list)
+    current_status_since: datetime
+    resume_document_id: str
+    cover_letter_document_id: str | None = None
     job_location: str | None = None
+    allowed_next_statuses: list[str] = Field(default_factory=list)
     resume: SentDocumentResponse | None = None
     cover_letter: SentDocumentResponse | None = None
+    status_history: list[ApplicationStatusChangeResponse] = Field(default_factory=list)
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
 
-class UpdateApplicationStatusRequest(BaseModel):
-    """Move one logged application to a new status.
+class TrackedApplicationListResponse(BaseModel):
+    """A candidate's applications, most recently applied first.
 
-    Validated as a non-empty string here and resolved to an
-    `ApplicationStatus` by the use case, so the list of statuses lives in the
-    domain rather than being restated as a `Literal` that would drift from
-    it."""
+    `open_count` is included because "how many are still live?" is the number
+    the tracker's header shows, and counting it client-side over a `limit`-ed
+    page would be wrong as soon as the page did not hold everything.
+    """
 
-    status: str = Field(min_length=1)
+    applications: list[TrackedApplicationResponse] = Field(default_factory=list)
+    open_count: int = 0

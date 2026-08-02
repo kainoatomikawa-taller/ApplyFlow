@@ -398,7 +398,8 @@ async def test_epic06_definition_of_done(schema_ready: None) -> None:
         # -- 1. The control: nothing sent, nothing suppressed ----------------
         empty = await http_client.get("/api/tracked-applications", headers=auth)
         assert empty.status_code == 200, empty.text
-        assert empty.json() == []
+        assert empty.json()["applications"] == []
+        assert empty.json()["open_count"] == 0
 
         before = await http_client.get("/api/job-postings/matches", headers=auth)
         assert before.status_code == 200, before.text
@@ -440,7 +441,7 @@ async def test_epic06_definition_of_done(schema_ready: None) -> None:
         # -- 4. The tracker logged it, with the documents that went out ------
         feed = await http_client.get("/api/tracked-applications", headers=auth)
         assert feed.status_code == 200, feed.text
-        rows = feed.json()
+        rows = feed.json()["applications"]
         assert len(rows) == 1, "one submission, one tracked application"
         (row,) = rows
 
@@ -465,6 +466,13 @@ async def test_epic06_definition_of_done(schema_ready: None) -> None:
         assert row["cover_letter"]["document_kind"] == "cover_letter"
         # The feed identifies documents; it never carries their text.
         assert "content" not in row["resume"]
+
+        # A sent application starts with a one-entry history: it was applied
+        # to, and nothing has happened since. `previous_status` is null for
+        # exactly that first entry.
+        assert [entry["status"] for entry in row["status_history"]] == ["applied"]
+        assert row["status_history"][0]["previous_status"] is None
+        assert row["current_status_since"][:19] == submitted_at[:19]
 
         # And the reference resolves to the bytes that were archived — the
         # claim "these are the exact sent documents", followed all the way
@@ -492,7 +500,7 @@ async def test_epic06_definition_of_done(schema_ready: None) -> None:
 
         moved = await http_client.patch(
             f"/api/tracked-applications/{application_id}/status",
-            json={"status": "interviewing"},
+            json={"status": "interviewing", "note": "recruiter reached out"},
             headers=auth,
         )
         assert moved.status_code == 200, moved.text
@@ -504,12 +512,20 @@ async def test_epic06_definition_of_done(schema_ready: None) -> None:
             "rejected",
             "withdrawn",
         ]
+        # The move was recorded, not just applied: the history grew by one
+        # entry that names where it came from and carries the candidate's own
+        # note, and `current_status_since` moved off the submission date.
+        history = moved.json()["status_history"]
+        assert [entry["status"] for entry in history] == ["applied", "interviewing"]
+        assert history[-1]["previous_status"] == "applied"
+        assert history[-1]["note"] == "recruiter reached out"
+        assert moved.json()["current_status_since"] > moved.json()["applied_at"]
 
         # It reflects in what the UI reads — the same route the tracker screen
         # renders from, not the response of the write.
         reread = (
             await http_client.get("/api/tracked-applications", headers=auth)
-        ).json()
+        ).json()["applications"]
         assert reread[0]["status"] == "interviewing"
         # And the change did not disturb what was sent.
         assert reread[0]["resume"]["id"] == sent_resume.id
@@ -532,16 +548,20 @@ async def test_epic06_definition_of_done(schema_ready: None) -> None:
         assert backwards.status_code == 409
         unchanged = (
             await http_client.get("/api/tracked-applications", headers=auth)
-        ).json()
+        ).json()["applications"]
         assert unchanged[0]["status"] == "interviewing"
 
-        # A sent application can never become a draft again.
+        # A sent application can never become a draft again. A 422 rather than
+        # a 409: `draft` is a real status, but not one this record can ever
+        # hold, so the answer is "that is not a value for this field" and the
+        # message names what to do instead (open an ApplicationReview).
         undo = await http_client.patch(
             f"/api/tracked-applications/{application_id}/status",
             json={"status": "draft"},
             headers=auth,
         )
-        assert undo.status_code == 409
+        assert undo.status_code == 422
+        assert "ApplicationReview" in undo.json()["detail"]
 
         # Through to a terminal status, which offers nothing further.
         rejected = await http_client.patch(
@@ -553,6 +573,14 @@ async def test_epic06_definition_of_done(schema_ready: None) -> None:
         assert rejected.json()["status"] == "rejected"
         assert rejected.json()["is_open"] is False
         assert rejected.json()["allowed_next_statuses"] == []
+        # Every step the application took is still on the record. A tracker
+        # that only kept the current status could not answer "how long was I
+        # in play before they passed?".
+        assert [entry["status"] for entry in rejected.json()["status_history"]] == [
+            "applied",
+            "interviewing",
+            "rejected",
+        ]
 
         # -- 6. The role is not nudged for re-application (criterion 3) ------
         after = await http_client.get("/api/job-postings/matches", headers=auth)
@@ -590,7 +618,7 @@ async def test_epic06_definition_of_done(schema_ready: None) -> None:
         assert again.status_code == 409, again.text
         still_one = (
             await http_client.get("/api/tracked-applications", headers=auth)
-        ).json()
+        ).json()["applications"]
         assert len(still_one) == 1
         # The replay moved neither the recorded date nor the status the
         # candidate has since set.
@@ -600,7 +628,7 @@ async def test_epic06_definition_of_done(schema_ready: None) -> None:
         # -- 8. Another candidate sees none of it ----------------------------
         theirs = await http_client.get("/api/tracked-applications", headers=other_auth)
         assert theirs.status_code == 200, theirs.text
-        assert theirs.json() == []
+        assert theirs.json()["applications"] == []
         # And cannot move someone else's application. A 404, not a 403: the
         # API must not confirm that an id it was handed is real.
         not_theirs = await http_client.patch(

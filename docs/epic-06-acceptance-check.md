@@ -105,7 +105,10 @@ returns exactly one row, and it is checked field by field:
   `content_sha256` matches the archived document — and it is asserted
   explicitly *not* to be the v2 revision archived in step 3;
 - `cover_letter` is the archived letter;
-- the row carries no document text at all.
+- the row carries no document text at all;
+- `status_history` holds exactly one entry — `applied`, with a null
+  `previous_status` — because nothing has happened to it yet, and
+  `current_status_since` equals the submission time.
 
 Then the references are **followed**: each id is read back through
 `GET /api/application-documents/{id}`, and the returned `content` is compared
@@ -117,8 +120,11 @@ the bytes that went out, so the check resolves it.
 **5. The status is maintainable** (criterion 2). `PATCH
 /api/tracked-applications/{id}/status`:
 
-- `applied → interviewing` returns `200`, and the response carries the *next*
-  set of `allowed_next_statuses` (`offer`, `rejected`, `withdrawn`);
+- `applied → interviewing`, with the candidate's own note, returns `200`. The
+  response carries the *next* set of `allowed_next_statuses` (`offer`,
+  `rejected`, `withdrawn`), and the move is **recorded rather than merely
+  applied**: `status_history` grows by an entry naming where it came from and
+  carrying the note, and `current_status_since` moves off the submission date;
 - the change is then re-read through `GET /api/tracked-applications` — the
   same route the tracker screen renders from — because a write that only
   reports success has not been shown to reflect anywhere;
@@ -127,10 +133,15 @@ the bytes that went out, so the check resolves it.
 - `"ghosted"` is `422`: not a status at all;
 - `interviewing → applied` is `409`: a real status, not a legal move, and the
   re-read confirms nothing was written;
-- `→ draft` is `409`: a sent application cannot become a draft again;
+- `→ draft` is `422`, not `409`: `draft` is a real status but not one this
+  record can ever hold, so the answer is "that is not a value for this field",
+  and the message names what to do instead (a draft is an `ApplicationReview`);
 - `→ rejected` returns `200`, `is_open` becomes false, and
   `allowed_next_statuses` is empty — which is how a client knows to render the
-  status as settled rather than as a control that cannot do anything.
+  status as settled rather than as a control that cannot do anything. The whole
+  path it took (`applied → interviewing → rejected`) is still on the record: a
+  tracker that kept only the current status could not answer "how long was I in
+  play before they passed?".
 
 **6. The role is not nudged again** (criterion 3).
 `GET /api/job-postings/matches` no longer contains the applied-to posting, and
@@ -170,7 +181,8 @@ design is ever quietly undone.
 ## The UI, and what "reflects correctly" is checked against
 
 `frontend/src/components/ApplicationTracker.tsx` renders the feed: one row per
-application, the sent documents by version and digest, and a status control.
+application, the sent documents by version and digest, a status control, and
+the status history behind a disclosure once an application has moved.
 
 The check proves criterion 2 through the API rather than through the screen,
 because that is where the rule lives — and the component is written so those
@@ -232,5 +244,11 @@ states about its review screen.
 - **The tracker against a real database** — a status transition, a dangling
   reference refused at write time, and a delete of an applied-to posting
   refused: `tests/infrastructure/test_tracked_application_persistence_smoke.py`.
+- **The status lifecycle in isolation** — every transition, the history it
+  builds up, the `statuses` / `open_only` filters being pushed into the query
+  rather than applied over the results, and ownership on every read:
+  `tests/application/test_application_status_tracking.py`. What the reads say
+  about the *documents* is the complement, in
+  `tests/application/test_tracked_application_use_cases.py`.
 - **Every route refusal in isolation** —
   `tests/interfaces/http/test_tracked_application_controller.py`.

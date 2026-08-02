@@ -80,6 +80,10 @@ function SentDocumentLine({ label, document }: { label: string; document: SentDo
  */
 export function ApplicationTracker({ authGeneration = 0 }: Props) {
   const [applications, setApplications] = useState<TrackedApplication[]>([]);
+  // The candidate's live total, from the backend. Not counted from the rows
+  // below: they are one `limit`-ed page, so a client-side count would start
+  // understating as soon as the page stopped holding everything.
+  const [openCount, setOpenCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
@@ -87,7 +91,9 @@ export function ApplicationTracker({ authGeneration = 0 }: Props) {
   const load = useCallback(async () => {
     try {
       setError(null);
-      setApplications(await applyFlowApi.listTrackedApplications());
+      const feed = await applyFlowApi.listTrackedApplications();
+      setApplications(feed.applications);
+      setOpenCount(feed.open_count);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
@@ -136,7 +142,12 @@ export function ApplicationTracker({ authGeneration = 0 }: Props) {
 
   return (
     <section className="card">
-      <h2>Applications sent</h2>
+      <h2>
+        Applications sent{' '}
+        <span className="quiet">
+          ({openCount} still live of {applications.length})
+        </span>
+      </h2>
       {error && <p className="error">{error}</p>}
 
       <ul className="tracked-applications">
@@ -164,6 +175,25 @@ export function ApplicationTracker({ authGeneration = 0 }: Props) {
                   />
                 )}
               </ul>
+
+              {application.status_history.length > 1 && (
+                <details className="status-history">
+                  <summary className="quiet">
+                    {application.status_history.length} status changes
+                  </summary>
+                  <ol>
+                    {application.status_history.map((change) => (
+                      <li key={`${change.status}-${change.changed_at}`}>
+                        <span className={`pill status-${change.status}`}>
+                          {STATUS_LABELS[change.status]}
+                        </span>{' '}
+                        <span className="quiet">{formatDate(change.changed_at)}</span>
+                        {change.note && <span> — {change.note}</span>}
+                      </li>
+                    ))}
+                  </ol>
+                </details>
+              )}
 
               <div className="tracked-application-status">
                 <span className={`pill status-${application.status}`}>

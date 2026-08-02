@@ -56,10 +56,30 @@ were applied through is pruned, relisted under a new id, or picked up again
 from a different aggregator. A join would lose the answer in exactly the cases
 the suppression exists for.
 
+Why the status history is part of this aggregate
+-----------------------------------------------
+`status` and `status_history` are two views of one fact, so they are loaded,
+validated, and saved together. The alternative — a separate history table with
+its own repository — would let the two be written independently, and the first
+partial failure would leave an application whose current status is `offer` and
+whose history ends at `applied`. Which of those a reader trusted would then
+depend on which query it ran.
+
+Keeping them together means the invariant can simply be enforced:
+`status_history[-1].status` *is* `status`, checked on construction (see
+`_validate_history`). `change_status` is the only way to move an application,
+and it appends and reassigns in one step, so the two cannot drift apart.
+
+The history is append-only. There is no operation here that edits or removes an
+entry, because a status change is something that happened — and a tracker whose
+history could be rewritten would be no better evidence of a search than memory.
+
 Not sensitive. A role title, a company name, and a status carry nothing that
 `WorkAuthorization` or `AnswerMemory` do; the sensitive material lives in the
 documents this row references, behind their own flags. So this entity is safe
-to log — and logging it is the reason its document fields are ids.
+to log — and logging it is the reason its document fields are ids. The one
+exception is the free-text note on a status change; see
+`ApplicationStatusChange.note`.
 """
 
 from __future__ import annotations
@@ -72,6 +92,7 @@ from src.domain.entities.application_document import ApplicationDocument
 from src.domain.entities.job_posting import JobPosting
 from src.domain.exceptions import InvalidValueError
 from src.domain.value_objects.application_status import ApplicationStatus
+from src.domain.value_objects.application_status_change import ApplicationStatusChange
 from src.domain.value_objects.canonical_job_identity import CanonicalJobIdentity
 
 
@@ -118,6 +139,12 @@ class TrackedApplication:
     #: worse than an honest absence.
     cover_letter_document_id: str | None = None
     status: ApplicationStatus = ApplicationStatus.APPLIED
+    #: Every status this application has held, oldest first, ending at the one
+    #: it holds now. Append-only, and never empty once constructed: an empty
+    #: history is seeded with the entry for `status` at `applied_at`, which is
+    #: what lets a row written before the tracker recorded history still be
+    #: read as the one-entry history it truthfully is.
+    status_history: list[ApplicationStatusChange] = field(default_factory=list)
     created_at: datetime = field(default_factory=_utcnow)
     updated_at: datetime = field(default_factory=_utcnow)
 
@@ -173,6 +200,75 @@ class TrackedApplication:
             raise InvalidValueError(
                 "TrackedApplication.applied_at must be timezone-aware so "
                 "applications order correctly across regions."
+            )
+        self._validate_history()
+
+    # ---- History -------------------------------------------------------------
+
+    def _validate_history(self) -> None:
+        """Seed an empty history, and refuse one that contradicts `status`.
+
+        Seeding is what makes rows that predate status-history tracking
+        readable: such a row knows its status and when it was sent, which is
+        exactly a one-entry history, so it is loaded as one rather than as an
+        application that has never been anywhere.
+        """
+        if not self.status_history:
+            self.status_history = [
+                ApplicationStatusChange(
+                    status=self.status,
+                    changed_at=self.applied_at,
+                    previous_status=None,
+                )
+            ]
+            return
+
+        if not all(
+            isinstance(entry, ApplicationStatusChange) for entry in self.status_history
+        ):
+            raise InvalidValueError(
+                "TrackedApplication.status_history must contain only "
+                "ApplicationStatusChange values."
+            )
+        # Only the first entry may have nothing before it, and it must.
+        # Otherwise the history has either two beginnings or none, and in both
+        # cases "what did this application do first?" has no answer.
+        if not self.status_history[0].is_initial:
+            raise InvalidValueError(
+                "TrackedApplication.status_history must begin with the entry "
+                "recorded when the application was sent, which has no previous "
+                "status."
+            )
+        for earlier, later in zip(
+            self.status_history, self.status_history[1:], strict=False
+        ):
+            if later.is_initial:
+                raise InvalidValueError(
+                    "TrackedApplication.status_history can only have one "
+                    "initial entry — every later change records what it moved "
+                    "from."
+                )
+            if later.previous_status is not earlier.status:
+                raise InvalidValueError(
+                    f"TrackedApplication.status_history is inconsistent: an "
+                    f"entry moving from '{later.previous_status}' follows one "
+                    f"that left the application at '{earlier.status.value}'."
+                )
+            if later.changed_at < earlier.changed_at:
+                raise InvalidValueError(
+                    "TrackedApplication.status_history must run oldest first — "
+                    "an application cannot change status before the change "
+                    "that preceded it."
+                )
+        # The invariant the whole aggregate exists to keep: the current status
+        # is the one the history ends at. A row where these disagree is one
+        # that two different queries would answer differently.
+        if self.status_history[-1].status is not self.status:
+            raise InvalidValueError(
+                f"TrackedApplication.status is '{self.status.value}' but its "
+                f"history ends at "
+                f"'{self.status_history[-1].status.value}' — a tracked "
+                "application's status is the one its history arrived at."
             )
 
     # ---- Construction --------------------------------------------------------
@@ -249,16 +345,51 @@ class TrackedApplication:
             location=self.job_location,
         )
 
-    def change_status(self, target: ApplicationStatus) -> None:
-        """Move the application to a new status, enforcing valid transitions.
+    def change_status(
+        self,
+        target: ApplicationStatus,
+        *,
+        note: str = "",
+        changed_at: datetime | None = None,
+    ) -> ApplicationStatusChange:
+        """Move the application to a new status and record the move.
 
         The transition rules are `ApplicationStatus`'s own — reused rather
         than restated, so the tracker and the rest of the system cannot come
         to different conclusions about whether a rejected application can go
-        back to interviewing.
+        back to interviewing. A refused transition raises before anything is
+        recorded, so a rejected move leaves no trace in the history.
+
+        Appending and reassigning happen together, and that is the point: it
+        is not possible to move this application without recording that it
+        moved. Returns the entry it recorded, so a caller that wants to report
+        or log the transition does not have to re-read the history to find it.
+
+        `changed_at` exists for backfills and for callers that already observed
+        the time; it defaults to now. It cannot predate the change before it —
+        the history has to stay ordered, so an out-of-order backfill is
+        refused rather than quietly sorted into place.
         """
-        self.status = self.status.transition_to(target)
+        # `transition_to` raises on an invalid move, including a move to the
+        # status it already holds.
+        next_status = self.status.transition_to(target)
+        occurred_at = changed_at if changed_at is not None else _utcnow()
+        entry = ApplicationStatusChange(
+            status=next_status,
+            changed_at=occurred_at,
+            previous_status=self.status,
+            note=note,
+        )
+        if occurred_at < self.status_history[-1].changed_at:
+            raise InvalidValueError(
+                "A status change cannot be recorded earlier than the change "
+                "before it — this application's history already reaches "
+                f"{self.status_history[-1].changed_at.isoformat()}."
+            )
+        self.status_history.append(entry)
+        self.status = next_status
         self._touch()
+        return entry
 
     def attach_cover_letter(self, document: ApplicationDocument) -> None:
         """Record that this application also went out with `document`.
@@ -289,6 +420,33 @@ class TrackedApplication:
         """Whether this application is still live — i.e. not in a terminal
         status. What the tracker's "active applications" view reads."""
         return not self.status.is_terminal
+
+    @property
+    def current_status_since(self) -> datetime:
+        """When the application entered the status it is in now.
+
+        The field a follow-up view sorts on: "applied three weeks ago, still
+        `applied`" is the case worth surfacing, and `applied_at` cannot express
+        it once an application has moved at all.
+        """
+        return self.status_history[-1].changed_at
+
+    @property
+    def last_status_change(self) -> ApplicationStatusChange:
+        """The most recent entry in the history. Never None — a constructed
+        application always has at least the entry for being sent."""
+        return self.status_history[-1]
+
+    def has_held_status(self, status: ApplicationStatus) -> bool:
+        """Whether this application was ever in `status`.
+
+        Reads the history rather than the current status, which is the only way
+        to answer questions like "how many of my applications reached an
+        interview?" — an application rejected after two rounds is `rejected`
+        now, and counting it as never having interviewed would understate
+        every funnel it appears in.
+        """
+        return any(entry.status is status for entry in self.status_history)
 
     # ---- Internals -----------------------------------------------------------
 
