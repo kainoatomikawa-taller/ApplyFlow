@@ -37,10 +37,22 @@ from src.infrastructure.persistence.database import (
 from src.infrastructure.persistence.job_posting_repository_impl import (
     SqlAlchemyJobPostingRepository,
 )
+from src.infrastructure.security.field_cipher import get_field_cipher
+from src.infrastructure.security.sensitive_access import SensitiveDataAccess
 
 _RESUME_V1 = "EXPERIENCE\nBackend Engineer at Acme Corp (2019-2022)"
 _RESUME_V2 = "EXPERIENCE\nBackend Engineer at Acme Corp\nSKILLS\nPython"
 _LETTER = "Dear Hiring Manager,\n\nI led a team of 5 engineers.\n\nSincerely,"
+
+
+@pytest.fixture(autouse=True)
+def _sensitive_access(sensitive_access: SensitiveDataAccess) -> None:
+    """Every test in this file round-trips at least one encrypted column, so the
+    whole module runs inside a sensitive-data access scope — standing in for the
+    authorized entry point a repository is always called from in production (Epic
+    07). See `tests/conftest.py` for the shared fixture, and
+    `test_encryption_at_rest.py` for the tests that assert the refusal when no
+    scope is open."""
 
 
 @pytest.fixture
@@ -224,7 +236,17 @@ async def test_content_edited_out_of_band_is_refused_on_read(
     schema_ready: None,
 ) -> None:
     """Stands in for a manual UPDATE or a bad migration: the row's digest no
-    longer describes its content, so it is not served as the sent document."""
+    longer describes its content, so it is not served as the sent document.
+
+    The out-of-band edit is written as valid ciphertext, not as plaintext. That
+    is deliberately the harder case now that `content` is encrypted (Epic 07):
+    plaintext in that column is caught by the cipher before the digest is ever
+    consulted, which would make this test pass for the wrong reason and stop
+    saying anything about the integrity check. Substituting something that
+    decrypts cleanly and simply is not what was stored is what the digest exists
+    to catch — and it is what a bad migration re-encrypting the wrong value
+    would actually produce.
+    """
     posting = await _job_posting()
     user_id = f"smoke-user-{uuid.uuid4()}"
     document = _snapshot(
@@ -242,7 +264,10 @@ async def test_content_edited_out_of_band_is_refused_on_read(
         await session.execute(
             text("UPDATE application_documents SET content = :content WHERE id = :id"),
             {
-                "content": "PhD in Distributed Systems, Initech Institute",
+                "content": get_field_cipher().encrypt(
+                    "PhD in Distributed Systems, Initech Institute",
+                    purpose="application_documents.content",
+                ),
                 "id": document.id,
             },
         )

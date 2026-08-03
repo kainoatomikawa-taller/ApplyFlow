@@ -35,8 +35,7 @@ class ProfileMapper:
                 for entry in profile.work_history
             ],
             education=[
-                ProfileMapper._education_to_output(entry)
-                for entry in profile.education
+                ProfileMapper._education_to_output(entry) for entry in profile.education
             ],
             skills=[ProfileMapper._skill_to_output(skill) for skill in profile.skills],
         )

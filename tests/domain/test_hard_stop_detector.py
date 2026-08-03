@@ -84,7 +84,7 @@ def test_an_ordinary_application_form_is_not_a_hard_stop(detector):
 
 
 def test_an_attestation_checkbox_is_not_a_signature(detector):
-    """"I certify that the above is true" appears on nearly every ATS form.
+    """ "I certify that the above is true" appears on nearly every ATS form.
     Reading it as an e-signature would hand off every application."""
     signals = _signals(
         text="I certify that the information above is accurate. I agree to the terms.",
@@ -171,7 +171,7 @@ def test_a_challenge_recognized_only_from_its_prose_is_caught(detector):
 
 
 def test_only_the_most_specific_vendor_match_is_reported(detector):
-    """"recaptcha" also contains "captcha". The candidate is shown the entry
+    """ "recaptcha" also contains "captcha". The candidate is shown the entry
     that names the provider, not a generic substring of it."""
     signals = _signals(script_urls=("https://www.google.com/recaptcha/api.js",))
 

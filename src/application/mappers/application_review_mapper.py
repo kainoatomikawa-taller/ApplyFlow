@@ -79,9 +79,7 @@ class ApplicationReviewMapper:
             slot=_slot(item.slot),
             sensitivity=_sensitivity(item.sensitivity),
             required=item.required,
-            origin=(
-                AnswerOrigin.AUTOFILLED if answered else AnswerOrigin.UNANSWERED
-            ),
+            origin=(AnswerOrigin.AUTOFILLED if answered else AnswerOrigin.UNANSWERED),
             explanation=_explanation(item),
         )
 

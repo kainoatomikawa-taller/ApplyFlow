@@ -154,7 +154,7 @@ def test_resuming_records_the_candidates_assertion_and_closes_the_handoff():
 
 
 def test_abandoning_is_a_legitimate_ending():
-    """"I will finish this one myself" is an answer, not a failure — and it is
+    """ "I will finish this one myself" is an answer, not a failure — and it is
     what stops a hand-off from being stuck open forever on a portal that will
     always require an account."""
     abandoned = _handoff(hard_stops=(_WALL,)).abandon(note="Applying by hand")

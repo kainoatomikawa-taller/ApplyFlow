@@ -7,6 +7,11 @@ from src.infrastructure.config import ConfigurationError, Settings, get_settings
 
 ENV_EXAMPLE = Path(__file__).resolve().parent.parent.parent / ".env.example"
 
+#: A syntactically valid 32-byte AES-256 key (base64), for the settings that
+#: require one. Not a key anything is encrypted with — these tests never reach
+#: the cipher, they only check that configuration is accepted or refused.
+_BASE64_KEY = "YXBwbHlmbG93LXRlc3Qta2V5LTMyLWJ5dGVzLSEhISE="
+
 
 def test_defaults_load_without_any_env_vars():
     settings = Settings(_env_file=None)
@@ -76,12 +81,53 @@ def test_get_settings_wraps_invalid_config_in_a_clear_error(monkeypatch):
         get_settings.cache_clear()
 
 
+def test_missing_field_encryption_keys_fails_fast_outside_development():
+    """The one required secret whose absence would not stop the app: without it
+    the encryption layer silently falls back to a key committed to this
+    repository, so refusing to boot is the only way the mistake is visible."""
+    with pytest.raises(ValidationError, match="FIELD_ENCRYPTION_KEYS"):
+        Settings(
+            _env_file=None,
+            environment="production",
+            openai_api_key=SecretStr("sk-real-key"),
+            supabase_jwt_secret=SecretStr("jwt-secret"),
+            anthropic_api_key=SecretStr("sk-ant-real-key"),
+            field_blind_index_key=SecretStr(_BASE64_KEY),
+        )
+
+
+def test_missing_blind_index_key_fails_fast_outside_development():
+    with pytest.raises(ValidationError, match="FIELD_BLIND_INDEX_KEY"):
+        Settings(
+            _env_file=None,
+            environment="production",
+            openai_api_key=SecretStr("sk-real-key"),
+            supabase_jwt_secret=SecretStr("jwt-secret"),
+            anthropic_api_key=SecretStr("sk-ant-real-key"),
+            field_encryption_keys=SecretStr(f"2026-08:{_BASE64_KEY}"),
+        )
+
+
+def test_encryption_keys_are_never_exposed_via_repr_or_str():
+    settings = Settings(
+        _env_file=None,
+        field_encryption_keys=SecretStr(f"2026-08:{_BASE64_KEY}"),
+        field_blind_index_key=SecretStr(_BASE64_KEY),
+    )
+    assert _BASE64_KEY not in repr(settings)
+    assert _BASE64_KEY not in str(settings)
+    assert _BASE64_KEY not in repr(settings.field_encryption_keys)
+    assert _BASE64_KEY not in repr(settings.field_blind_index_key)
+
+
 def test_all_required_secrets_present_satisfies_non_development_requirement():
     settings = Settings(
         _env_file=None,
         environment="production",
         openai_api_key=SecretStr("sk-real-key"),
         supabase_jwt_secret=SecretStr("jwt-secret"),
+        field_encryption_keys=SecretStr(f"2026-08:{_BASE64_KEY}"),
+        field_blind_index_key=SecretStr(_BASE64_KEY),
         anthropic_api_key=SecretStr("sk-ant-real-key"),
     )
     assert settings.environment == "production"

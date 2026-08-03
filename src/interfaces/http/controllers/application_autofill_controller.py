@@ -128,9 +128,7 @@ review_router = APIRouter(
 async def autofill_application_form(
     job_posting_id: str,
     user: AuthenticatedUserDTO = Depends(get_current_user),
-    use_case: AutofillApplicationForm = Depends(
-        get_autofill_application_form_use_case
-    ),
+    use_case: AutofillApplicationForm = Depends(get_autofill_application_form_use_case),
 ) -> ApplicationAutofillResponse:
     """Fill the posting's application form and hand back the filled form.
 
@@ -311,9 +309,7 @@ def _to_autofill_response(
         ats_provider=output.ats_provider,
         fields=[_to_field_response(item) for item in output.fields],
         screenshot_png_base64=_encode(output.screenshot_png),
-        boundaries=[
-            _to_boundary_response(boundary) for boundary in output.boundaries
-        ],
+        boundaries=[_to_boundary_response(boundary) for boundary in output.boundaries],
         review_session_id=output.review_session_id,
         review_expires_at=output.review_expires_at,
         requires_handoff=output.requires_handoff,

@@ -46,6 +46,31 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_jwt_secret: SecretStr = SecretStr("")
 
+    # Encryption at rest for sensitive fields (Epic 07 —
+    # src/infrastructure/security/). Contact details, citizenship, work
+    # authorization, and EEO self-identification are encrypted in the columns
+    # that hold them; these are the only two places the keys come from.
+    #
+    # `field_encryption_keys` is a comma-separated list of `key_id:base64_key`
+    # pairs, MOST RECENT FIRST — the first entry signs new writes and the rest
+    # stay readable, which is what makes a key rotation possible without
+    # rewriting every row. Each key is 32 bytes (AES-256), base64-encoded:
+    # `openssl rand -base64 32`. See
+    # src/infrastructure/security/encryption_keyring.py for the full format.
+    #
+    # `field_blind_index_key` keys the deterministic digest that keeps
+    # `job_applications.candidate_email` searchable while encrypted. It is
+    # deliberately NOT part of the rotating keyring above: rotating it
+    # invalidates every digest already stored, so it is a data migration rather
+    # than a config change.
+    #
+    # Both are empty by default, which falls back to an in-repository
+    # development key (see `EncryptionKeyring.for_development`) so a fresh
+    # clone runs. The validator below refuses that fallback outside
+    # `development`.
+    field_encryption_keys: SecretStr = SecretStr("")
+    field_blind_index_key: SecretStr = SecretStr("")
+
     # Redis / Celery
     redis_url: str = "redis://localhost:6379/0"
     celery_broker_url: str = "redis://localhost:6379/1"
@@ -237,6 +262,26 @@ class Settings(BaseSettings):
             raise ValueError(
                 "ANTHROPIC_API_KEY is required when ENVIRONMENT is "
                 f"'{self.environment}'."
+            )
+        # Refused rather than defaulted, unlike most settings here. The
+        # fallback for an unset encryption key is a key committed to this
+        # repository (see `EncryptionKeyring.for_development`), so booting
+        # without one outside development would encrypt a real candidate's
+        # citizenship and EEO answers under a public key — worse than not
+        # booting, and invisible afterwards.
+        if not self.field_encryption_keys.get_secret_value().strip():
+            raise ValueError(
+                "FIELD_ENCRYPTION_KEYS is required when ENVIRONMENT is "
+                f"'{self.environment}' — sensitive fields would otherwise be "
+                "encrypted under the in-repository development key. Generate "
+                "one with `openssl rand -base64 32` and set it as "
+                "'<key_id>:<base64_key>'."
+            )
+        if not self.field_blind_index_key.get_secret_value().strip():
+            raise ValueError(
+                "FIELD_BLIND_INDEX_KEY is required when ENVIRONMENT is "
+                f"'{self.environment}' — see FIELD_ENCRYPTION_KEYS above for "
+                "why the development fallback is refused here."
             )
         return self
 

@@ -343,8 +343,11 @@ async def test_an_answer_replaces_the_field_in_place_and_keeps_page_order() -> N
     sessions = registry()
     review, _ = await park(
         sessions,
-        fields=[field("f-1", label="First"), field("f-2", label="Second"),
-                field("f-3", label="Third")],
+        fields=[
+            field("f-1", label="First"),
+            field("f-2", label="Second"),
+            field("f-3", label="Third"),
+        ],
     )
 
     review.record_answer("f-2", "answered")

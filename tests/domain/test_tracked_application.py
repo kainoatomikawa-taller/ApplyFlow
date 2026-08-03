@@ -602,6 +602,7 @@ def test_record_sent_produces_an_application_with_its_first_entry() -> None:
     assert initial.status is ApplicationStatus.APPLIED
     assert initial.changed_at == tracked.applied_at
 
+
 # ---- canonical identity (what matching suppresses on) -----------------------
 
 

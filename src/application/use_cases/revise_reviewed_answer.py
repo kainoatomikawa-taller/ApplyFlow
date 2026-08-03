@@ -54,9 +54,7 @@ class ReviseReviewedAnswer:
         self._review_repository = review_repository
         self._handoff_repository = handoff_repository
 
-    async def execute(
-        self, dto: ReviseReviewedAnswerInput
-    ) -> ApplicationReviewOutput:
+    async def execute(self, dto: ReviseReviewedAnswerInput) -> ApplicationReviewOutput:
         review = await self._review_repository.get_by_id(dto.review_id)
         if review is None or review.user_id != dto.user_id:
             # Somebody else's review reads as absent rather than forbidden, so

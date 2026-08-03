@@ -414,7 +414,7 @@ async def test_a_required_field_the_portal_refused_still_blocks_submission() -> 
 
 
 async def test_a_form_offering_two_submissions_will_not_be_guessed_at() -> None:
-    """"Submit application" and "Submit and create an account" are both
+    """ "Submit application" and "Submit and create an account" are both
     submissions. Choosing would pick a side effect nobody agreed to."""
     session = FakeBrowserSession(
         submit_controls=(

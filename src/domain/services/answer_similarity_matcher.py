@@ -70,9 +70,7 @@ class AnswerSimilarityMatcher:
         """Return the highest-scoring candidate at or above `threshold`,
         or `None` if no candidate clears it (including when there are no
         candidates at all)."""
-        effective_threshold = (
-            self.DEFAULT_THRESHOLD if threshold is None else threshold
-        )
+        effective_threshold = self.DEFAULT_THRESHOLD if threshold is None else threshold
         best: AnswerMatch | None = None
         for candidate in candidates:
             score = self.cosine_similarity(question_embedding, candidate.embedding)

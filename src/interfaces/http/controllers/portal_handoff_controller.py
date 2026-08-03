@@ -89,9 +89,7 @@ async def inspect_application_portal(
     except BrowserAutomationError as exc:
         # The browser itself could not do its job (no Chromium on the host, a
         # page that crashed). Ours to fix, so 500 rather than 502.
-        raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR, str(exc)
-        ) from exc
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(exc)) from exc
     return InspectPortalResponse(**asdict(output))
 
 
@@ -104,9 +102,7 @@ async def list_portal_handoffs(
 ) -> PortalHandoffListResponse:
     """What is waiting on the candidate, and what recently was."""
     output = await use_case.execute(
-        ListPortalHandoffsInput(
-            user_id=user.subject, open_only=open_only, limit=limit
-        )
+        ListPortalHandoffsInput(user_id=user.subject, open_only=open_only, limit=limit)
     )
     return PortalHandoffListResponse(**asdict(output))
 
@@ -121,9 +117,7 @@ async def resume_portal_handoff(
     """The candidate did the human-only step; ApplyFlow may work this portal
     again. Records their assertion — it does not claim the boundary is gone
     (see `ResumePortalHandoff`)."""
-    output = await _resolve(
-        use_case, handoff_id=handoff_id, user=user, note=body.note
-    )
+    output = await _resolve(use_case, handoff_id=handoff_id, user=user, note=body.note)
     return PortalHandoffResponse(**asdict(output))
 
 
@@ -136,9 +130,7 @@ async def abandon_portal_handoff(
 ) -> PortalHandoffResponse:
     """The candidate is finishing this application themselves; ApplyFlow stops
     waiting on it."""
-    output = await _resolve(
-        use_case, handoff_id=handoff_id, user=user, note=body.note
-    )
+    output = await _resolve(use_case, handoff_id=handoff_id, user=user, note=body.note)
     return PortalHandoffResponse(**asdict(output))
 
 

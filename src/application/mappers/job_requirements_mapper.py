@@ -13,9 +13,7 @@ class JobRequirementsMapper:
     def to_output(requirements: JobRequirements) -> JobRequirementsOutput:
         return JobRequirementsOutput(
             degree_level=(
-                requirements.degree_level.value
-                if requirements.degree_level
-                else None
+                requirements.degree_level.value if requirements.degree_level else None
             ),
             degree_required=requirements.degree_required,
             clearance_level=(

@@ -47,6 +47,4 @@ class SalaryRange:
             and self.max_amount is not None
             and self.min_amount > self.max_amount
         ):
-            raise InvalidValueError(
-                "SalaryRange.min_amount cannot exceed max_amount."
-            )
+            raise InvalidValueError("SalaryRange.min_amount cannot exceed max_amount.")

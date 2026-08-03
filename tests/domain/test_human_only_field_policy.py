@@ -75,8 +75,7 @@ def test_a_control_naming_both_reads_as_the_challenge():
     the write is refused; the boundary reported has to be the right one so
     the candidate is told to do the right thing."""
     assert (
-        boundary_for(kind_name="text", name="captcha_signature")
-        is HardStopKind.CAPTCHA
+        boundary_for(kind_name="text", name="captcha_signature") is HardStopKind.CAPTCHA
     )
 
 

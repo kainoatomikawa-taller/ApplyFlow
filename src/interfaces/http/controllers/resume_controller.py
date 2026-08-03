@@ -62,13 +62,9 @@ async def upload_resume(
             )
         )
     except UnsupportedFileFormatError as exc:
-        raise HTTPException(
-            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, str(exc)
-        ) from exc
+        raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, str(exc)) from exc
     except FileTooLargeError as exc:
-        raise HTTPException(
-            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, str(exc)
-        ) from exc
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, str(exc)) from exc
     except TextExtractionError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     return ResumeResponse(**output.__dict__)

@@ -122,9 +122,7 @@ class AtsListingResolver(ListingResolverPort):
                 count=self._result_count,
             )
         except ExternalServiceError as exc:
-            logger.warning(
-                "search API request failed for company=%r: %s", company, exc
-            )
+            logger.warning("search API request failed for company=%r: %s", company, exc)
             return None
 
         for result in results:

@@ -28,9 +28,7 @@ def _settings(**overrides: object) -> Settings:
     return Settings(**defaults)
 
 
-def _client_with_handler(
-    handler, **settings_overrides: object
-) -> BraveSearchClient:
+def _client_with_handler(handler, **settings_overrides: object) -> BraveSearchClient:
     transport = httpx.MockTransport(handler)
     http_client = httpx.AsyncClient(transport=transport)
     return BraveSearchClient(_settings(**settings_overrides), http_client=http_client)

@@ -38,8 +38,7 @@ def test_valid_resume_constructs():
 def test_docx_and_plain_text_are_supported_formats():
     _resume(
         content_type=(
-            "application/vnd.openxmlformats-officedocument"
-            ".wordprocessingml.document"
+            "application/vnd.openxmlformats-officedocument" ".wordprocessingml.document"
         )
     )
     _resume(content_type="text/plain")

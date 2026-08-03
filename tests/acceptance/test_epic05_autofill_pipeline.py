@@ -377,9 +377,7 @@ class PortalServer:
 
             if method == "POST":
                 self.submissions.append(
-                    _parse_submission(
-                        path, headers.get("content-type", ""), body
-                    )
+                    _parse_submission(path, headers.get("content-type", ""), body)
                 )
                 status, page = 303, THANKS_HTML
                 head = (
@@ -539,9 +537,9 @@ def _seed_posting(*, job_id: str, apply_url: str) -> JobPosting:
     )
 
 
-def _seed_documents(*, run_id: uuid.UUID, user_id: str, job_id: str) -> list[
-    ApplicationDocument
-]:
+def _seed_documents(
+    *, run_id: uuid.UUID, user_id: str, job_id: str
+) -> list[ApplicationDocument]:
     return [
         ApplicationDocument(
             id=f"epic05-resume-{run_id}",
@@ -852,8 +850,7 @@ async def test_epic05_definition_of_done(schema_ready: None) -> None:
         login_report = login.json()
         assert login_report["requires_handoff"] is True
         assert login_report["fields"] == [], (
-            "a sign-in page is not the application form; nothing on it may be "
-            "filled"
+            "a sign-in page is not the application form; nothing on it may be " "filled"
         )
         assert login_report["review_session_id"] is None
         assert login_report["can_be_submitted_here"] is False
@@ -885,9 +882,7 @@ async def test_epic05_definition_of_done(schema_ready: None) -> None:
             f"/api/autofill-sessions/{captcha_report['review_session_id']}/submit",
             headers=auth,
             json={
-                "confirmed_field_ids": captcha_report[
-                    "fields_awaiting_confirmation"
-                ]
+                "confirmed_field_ids": captcha_report["fields_awaiting_confirmation"]
             },
         )
         assert captcha_submit.status_code == 409, captcha_submit.text
@@ -921,8 +916,7 @@ async def test_epic05_definition_of_done(schema_ready: None) -> None:
         )
         assert signature_submit.status_code == 409, signature_submit.text
         assert [
-            item["kind"]
-            for item in signature_submit.json()["detail"]["boundaries"]
+            item["kind"] for item in signature_submit.json()["detail"]["boundaries"]
         ] == ["signature"]
         assert portal.submissions_to("/globex/jobs/4004/submit") == []
 

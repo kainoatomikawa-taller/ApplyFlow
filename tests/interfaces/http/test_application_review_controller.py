@@ -216,9 +216,7 @@ def test_every_review_route_requires_authentication():
         == 401
     )
     assert (
-        client.post(
-            "/api/application-reviews/review-1/submit", json={}
-        ).status_code
+        client.post("/api/application-reviews/review-1/submit", json={}).status_code
         == 401
     )
 

@@ -109,9 +109,7 @@ async def open_application_review(
     inspect: InspectApplicationPortal = Depends(
         get_inspect_application_portal_use_case
     ),
-    autofill: AutofillApplicationForm = Depends(
-        get_autofill_application_form_use_case
-    ),
+    autofill: AutofillApplicationForm = Depends(get_autofill_application_form_use_case),
     open_review: OpenApplicationReview = Depends(get_open_application_review_use_case),
 ) -> OpenApplicationReviewResponse:
     """Fill this posting's application form and open a review over it.
@@ -154,21 +152,15 @@ async def open_application_review(
     except (JobPostingNotFoundError, ProfileNotFoundError) as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     except UnsupportedAtsFormError as exc:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)
-        ) from exc
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     except UseCaseError as exc:
         # A form that presented no fields, or a mismatched report — neither is
         # something a retry fixes, and both are explained in the message.
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)
-        ) from exc
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     except BrowserNavigationError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
     except BrowserAutomationError as exc:
-        raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR, str(exc)
-        ) from exc
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(exc)) from exc
 
     return OpenApplicationReviewResponse(
         job_posting_id=output.job_posting_id,
@@ -240,9 +232,7 @@ async def revise_reviewed_answer(
         # what was sent and no longer editable.
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     except UseCaseError as exc:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)
-        ) from exc
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     return _review_response(output)
 
 

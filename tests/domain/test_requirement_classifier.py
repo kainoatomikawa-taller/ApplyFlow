@@ -70,9 +70,7 @@ def test_required_clearance_is_hard():
 
 def test_clearance_a_plus_is_soft():
     result = _classify(
-        JobRequirements(
-            clearance_level=ClearanceLevel.SECRET, clearance_required=False
-        )
+        JobRequirements(clearance_level=ClearanceLevel.SECRET, clearance_required=False)
     )
     assert result.hard == ()
     assert result.soft[0].category == RequirementCategory.CLEARANCE
@@ -101,9 +99,7 @@ def test_hybrid_location_preference_is_soft():
 
 def test_remote_location_preference_is_soft():
     result = _classify(
-        JobRequirements(
-            remote_type=RemoteType.REMOTE, locations=("United States",)
-        )
+        JobRequirements(remote_type=RemoteType.REMOTE, locations=("United States",))
     )
     assert result.hard == ()
     assert result.soft[0].category == RequirementCategory.LOCATION
@@ -134,9 +130,7 @@ def test_citizenship_requirement_is_hard():
 
 def test_permanent_residency_requirement_is_hard():
     result = _classify(
-        JobRequirements(
-            work_authorization=WorkAuthorizationStatus.PERMANENT_RESIDENT
-        )
+        JobRequirements(work_authorization=WorkAuthorizationStatus.PERMANENT_RESIDENT)
     )
     assert result.hard[0].category == RequirementCategory.WORK_AUTHORIZATION
     assert result.soft == ()
@@ -144,9 +138,7 @@ def test_permanent_residency_requirement_is_hard():
 
 def test_sponsorship_availability_is_soft_not_a_disqualifier():
     result = _classify(
-        JobRequirements(
-            work_authorization=WorkAuthorizationStatus.REQUIRES_SPONSORSHIP
-        )
+        JobRequirements(work_authorization=WorkAuthorizationStatus.REQUIRES_SPONSORSHIP)
     )
     assert result.hard == ()
     assert result.soft[0].category == RequirementCategory.WORK_AUTHORIZATION
@@ -164,9 +156,7 @@ def test_visa_holder_accepted_is_soft():
 
 
 def test_years_of_experience_is_always_soft():
-    result = _classify(
-        JobRequirements(min_years_experience=5, max_years_experience=8)
-    )
+    result = _classify(JobRequirements(min_years_experience=5, max_years_experience=8))
     assert result.hard == ()
     assert result.soft[0].category == RequirementCategory.EXPERIENCE
     assert result.soft[0].description == "5-8 years of experience"
@@ -178,9 +168,7 @@ def test_min_only_experience_reads_as_a_floor():
 
 
 def test_required_skills_are_always_soft():
-    result = _classify(
-        JobRequirements(required_skills=("Python", "Kubernetes", "SQL"))
-    )
+    result = _classify(JobRequirements(required_skills=("Python", "Kubernetes", "SQL")))
     assert result.hard == ()
     assert [item.category for item in result.soft] == [RequirementCategory.SKILL] * 3
     assert [item.description for item in result.soft] == [
@@ -197,9 +185,7 @@ def test_preferred_skills_are_soft_and_labeled():
 
 
 def test_free_text_preferences_are_soft():
-    result = _classify(
-        JobRequirements(preferences=("Startup experience a plus",))
-    )
+    result = _classify(JobRequirements(preferences=("Startup experience a plus",)))
     assert result.hard == ()
     assert result.soft[0].category == RequirementCategory.PREFERENCE
     assert result.soft[0].description == "Startup experience a plus"

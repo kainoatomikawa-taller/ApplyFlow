@@ -69,9 +69,7 @@ class BraveSearchClient:
         """Return up to `count` organic web results for `query`, in ranking
         order. An empty list means Brave returned no results — never an
         error."""
-        data = await self._get_with_retry(
-            self._base_url, {"q": query, "count": count}
-        )
+        data = await self._get_with_retry(self._base_url, {"q": query, "count": count})
 
         results = ((data.get("web") or {}).get("results")) or []
         if not isinstance(results, list):

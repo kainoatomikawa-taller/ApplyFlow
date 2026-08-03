@@ -383,15 +383,15 @@ async def test_epic04_definition_of_done(schema_ready: None) -> None:
         )
         assert first_pass.status_code == 200, first_pass.text
         first_pass_body = first_pass.json()
-        assert first_pass_body["already_answered"] == [], (
-            "a candidate who has answered nothing has nothing to suppress"
-        )
+        assert (
+            first_pass_body["already_answered"] == []
+        ), "a candidate who has answered nothing has nothing to suppress"
         questions = {
             item["gap"]: item["question"] for item in first_pass_body["questions"]
         }
-        assert set(questions) == set(gaps), (
-            "every detected gap must produce a question, in input order"
-        )
+        assert set(questions) == set(
+            gaps
+        ), "every detected gap must produce a question, in input order"
         assert [item["gap"] for item in first_pass_body["questions"]] == gaps
         for gap, question in questions.items():
             assert question.strip(), f"empty question generated for gap {gap!r}"
@@ -426,9 +426,9 @@ async def test_epic04_definition_of_done(schema_ready: None) -> None:
             )
             assert declined.status_code == 200, declined.text
             declined_body = declined.json()
-            assert declined_body["captured"] is False, (
-                f"a decline must not be captured as experience: {gap!r}"
-            )
+            assert (
+                declined_body["captured"] is False
+            ), f"a decline must not be captured as experience: {gap!r}"
             assert declined_body["answer_memory_id"] is None
 
         # A declined gap leaves NO trace — not an empty answer, not a
@@ -463,9 +463,9 @@ async def test_epic04_definition_of_done(schema_ready: None) -> None:
         assert suppressed[answerable_gap]["answer_memory_id"] == answer_memory_id
         assert suppressed[answerable_gap]["similarity_score"] >= 0.85
         still_asked = {item["gap"] for item in second_pass_body["questions"]}
-        assert declined_gap in still_asked, (
-            "a declined gap is unresolved, not answered, and must still be asked"
-        )
+        assert (
+            declined_gap in still_asked
+        ), "a declined gap is unresolved, not answered, and must still be asked"
 
         # The corpus the generated documents may draw on, assembled the same
         # way the generation flows assemble it — with the captured answer now
@@ -477,9 +477,9 @@ async def test_epic04_definition_of_done(schema_ready: None) -> None:
                 profile_repository=SqlAlchemyProfileRepository(session),
                 answer_memory_repository=SqlAlchemyAnswerMemoryRepository(session),
             ).assemble(user_id)
-        assert any(fact.source is ProvenanceSource.ANSWER for fact in facts), (
-            "the captured answer must be part of what may be asserted"
-        )
+        assert any(
+            fact.source is ProvenanceSource.ANSWER for fact in facts
+        ), "the captured answer must be part of what may be asserted"
 
         def assert_every_line_is_attested(content: str, *, label: str) -> None:
             """Re-validate finished content against the candidate's facts.
@@ -518,17 +518,17 @@ async def test_epic04_definition_of_done(schema_ready: None) -> None:
         assert set(resume_document["backing_sources"]) <= {
             source.value for source in ProvenanceSource
         }
-        assert resume_document["backing_sources"], (
-            "a resume with no backing provenance is not something to hand over"
-        )
+        assert resume_document[
+            "backing_sources"
+        ], "a resume with no backing provenance is not something to hand over"
         assert_every_line_is_attested(resume_content, label="the tailored resume")
 
         # The fabrication canary: the posting demands this skill, so the
         # model was under real pressure to claim it, and the candidate
         # declined it. It must appear nowhere.
-        assert _DECLINED_SKILL.lower() not in resume_content.lower(), (
-            f"the resume claims {_DECLINED_SKILL}, which the candidate declined"
-        )
+        assert (
+            _DECLINED_SKILL.lower() not in resume_content.lower()
+        ), f"the resume claims {_DECLINED_SKILL}, which the candidate declined"
         # Conversely, if it draws on the answered gap, that claim traces to
         # the answer the candidate gave — never to the posting's wish list.
         if _ANSWERABLE_SKILL.lower() in resume_content.lower():
@@ -537,9 +537,9 @@ async def test_epic04_definition_of_done(schema_ready: None) -> None:
         # ATS safety: the flow's own report, then the same rules re-checked
         # here in full (the resume is the document the heading/section rules
         # are written for).
-        assert resume_body["ats_safety_violations"] == [], (
-            "the formatter let an ATS-hostile construct through"
-        )
+        assert (
+            resume_body["ats_safety_violations"] == []
+        ), "the formatter let an ATS-hostile construct through"
         assert AtsSafetyValidator().validate(resume_content).is_safe
         _assert_plain_text_is_ats_safe(resume_content, label="the tailored resume")
 
@@ -550,12 +550,12 @@ async def test_epic04_definition_of_done(schema_ready: None) -> None:
         assert exports["contact_lines"], "an ATS reads the contact block first"
         assert exports["sections"], "an ATS reads the resume as named sections"
         for section in exports["sections"]:
-            assert is_standard_section_heading(section["heading"]), (
-                f'{section["heading"]!r} is a heading an ATS will file under "other"'
-            )
-            assert section["lines"], (
-                f"section {section['heading']!r} is a heading over nothing"
-            )
+            assert is_standard_section_heading(
+                section["heading"]
+            ), f'{section["heading"]!r} is a heading an ATS will file under "other"'
+            assert section[
+                "lines"
+            ], f"section {section['heading']!r} is a heading over nothing"
         pdf_bytes = base64.b64decode(exports["pdf_base64"])
         assert pdf_bytes.startswith(b"%PDF"), "the PDF export is not a PDF file"
         assert exports["pdf_byte_size"] == len(pdf_bytes)
@@ -575,9 +575,9 @@ async def test_epic04_definition_of_done(schema_ready: None) -> None:
         assert letter_content.strip()
         assert letter_document["backing_sources"]
         assert_every_line_is_attested(letter_content, label="the cover letter")
-        assert _DECLINED_SKILL.lower() not in letter_content.lower(), (
-            f"the letter claims {_DECLINED_SKILL}, which the candidate declined"
-        )
+        assert (
+            _DECLINED_SKILL.lower() not in letter_content.lower()
+        ), f"the letter claims {_DECLINED_SKILL}, which the candidate declined"
         if _ANSWERABLE_SKILL.lower() in letter_content.lower():
             assert ProvenanceSource.ANSWER.value in letter_document["backing_sources"]
         _assert_plain_text_is_ats_safe(letter_content, label="the cover letter")
@@ -594,9 +594,9 @@ async def test_epic04_definition_of_done(schema_ready: None) -> None:
         )
         assert job_documents.status_code == 200, job_documents.text
         summaries = {entry["document_kind"]: entry for entry in job_documents.json()}
-        assert set(summaries) == set(expected), (
-            f"both documents must be recorded for this job; got {list(summaries)}"
-        )
+        assert set(summaries) == set(
+            expected
+        ), f"both documents must be recorded for this job; got {list(summaries)}"
 
         for kind, (document, content) in expected.items():
             digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -615,9 +615,9 @@ async def test_epic04_definition_of_done(schema_ready: None) -> None:
             )
             assert latest.status_code == 200, latest.text
             latest_body = latest.json()
-            assert latest_body["content"] == content, (
-                f"the stored {kind} is not the text that was returned"
-            )
+            assert (
+                latest_body["content"] == content
+            ), f"the stored {kind} is not the text that was returned"
             assert latest_body["content_sha256"] == digest
             assert latest_body["id"] == document["document_id"]
             assert latest_body["version"] == 1

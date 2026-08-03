@@ -84,9 +84,7 @@ def test_salary_range_rejects_min_greater_than_max():
 
 
 def test_salary_range_accepts_a_single_amount():
-    salary = SalaryRange(
-        currency="USD", period=SalaryPeriod.HOURLY, min_amount=75
-    )
+    salary = SalaryRange(currency="USD", period=SalaryPeriod.HOURLY, min_amount=75)
     assert salary.max_amount is None
 
 

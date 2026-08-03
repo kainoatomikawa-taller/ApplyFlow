@@ -170,9 +170,7 @@ class AutofillApplicationForm:
                     item.kind is FormFieldKind.PASSWORD for item in fields
                 ),
             )
-            blocking = [
-                boundary for boundary in boundaries if boundary.stops_autofill
-            ]
+            blocking = [boundary for boundary in boundaries if boundary.stops_autofill]
             if blocking:
                 # Reported, not raised. The candidate asked what ApplyFlow
                 # could do with this form and the answer — "nothing, and here

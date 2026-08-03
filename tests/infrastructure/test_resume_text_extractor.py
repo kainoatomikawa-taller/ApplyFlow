@@ -32,7 +32,9 @@ def _minimal_pdf_bytes(text: str) -> bytes:
     ]
     stream = f"BT /F1 12 Tf 10 100 Td ({text}) Tj ET".encode()
     objects.append(
-        b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n"
+        b"<< /Length "
+        + str(len(stream)).encode()
+        + b" >>\nstream\n"
         + stream
         + b"\nendstream"
     )

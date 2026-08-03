@@ -157,9 +157,7 @@ class InspectApplicationPortal:
             )
             await self._handoff_repository.add(handoff)
         else:
-            handoff = existing.redetected(
-                hard_stops=hard_stops, paused_url=landed_url
-            )
+            handoff = existing.redetected(hard_stops=hard_stops, paused_url=landed_url)
             await self._handoff_repository.update(handoff)
 
         # Logged because a hand-off is a flow that stopped, and an operator

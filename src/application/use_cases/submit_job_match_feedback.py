@@ -36,9 +36,7 @@ class SubmitJobMatchFeedback:
         self._job_posting_repository = job_posting_repository
         self._id_generator = id_generator
 
-    async def execute(
-        self, dto: SubmitJobMatchFeedbackInput
-    ) -> JobMatchFeedbackOutput:
+    async def execute(self, dto: SubmitJobMatchFeedbackInput) -> JobMatchFeedbackOutput:
         posting = await self._job_posting_repository.get_by_id(dto.job_posting_id)
         if posting is None:
             raise JobPostingNotFoundError(dto.job_posting_id)

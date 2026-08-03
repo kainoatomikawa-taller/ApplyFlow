@@ -85,9 +85,7 @@ async def test_extracts_and_persists_requirements_on_the_posting():
     extractor = FakeExtractor(requirements)
     use_case = ExtractJobRequirements(repository=repository, extractor=extractor)
 
-    result = await use_case.execute(
-        ExtractJobRequirementsInput(job_posting_id="job-1")
-    )
+    result = await use_case.execute(ExtractJobRequirementsInput(job_posting_id="job-1"))
 
     assert extractor.calls == [posting.description]
     assert posting.requirements is requirements

@@ -40,6 +40,4 @@ class EducationEntry:
         ):
             raise InvalidValueError("end_date cannot be before start_date.")
         if not isinstance(self.source, ProvenanceSource):
-            raise InvalidValueError(
-                "EducationEntry requires a valid ProvenanceSource."
-            )
+            raise InvalidValueError("EducationEntry requires a valid ProvenanceSource.")

@@ -51,9 +51,7 @@ async def test_save_and_read_round_trip_against_a_real_database(
         repository = SqlAlchemyResolvedCompanyBoardRepository(session)
         await repository.save(board)
 
-        fetched = await repository.get_by_normalized_company(
-            board.normalized_company
-        )
+        fetched = await repository.get_by_normalized_company(board.normalized_company)
         assert fetched is not None
         assert fetched.company == unique_company
         assert fetched.provider == AtsProvider.GREENHOUSE

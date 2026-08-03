@@ -37,6 +37,7 @@ from src.infrastructure.persistence.job_posting_repository_impl import (
 from src.infrastructure.persistence.portal_handoff_repository_impl import (
     SqlAlchemyPortalHandoffRepository,
 )
+from src.infrastructure.security.sensitive_access import SensitiveDataAccess
 
 _CAPTCHA = HardStop(
     kind=HardStopKind.CAPTCHA,
@@ -49,6 +50,16 @@ _WALL = HardStop(
     kind=HardStopKind.ACCOUNT_WALL,
     evidence=("the form presents 1 password field",),
 )
+
+
+@pytest.fixture(autouse=True)
+def _sensitive_access(sensitive_access: SensitiveDataAccess) -> None:
+    """Every test in this file round-trips at least one encrypted column, so the
+    whole module runs inside a sensitive-data access scope — standing in for the
+    authorized entry point a repository is always called from in production (Epic
+    07). See `tests/conftest.py` for the shared fixture, and
+    `test_encryption_at_rest.py` for the tests that assert the refusal when no
+    scope is open."""
 
 
 @pytest.fixture
@@ -221,9 +232,7 @@ async def test_updating_a_hand_off_that_no_longer_exists_is_refused(
     """A blind merge would insert here, resurrecting a hand-off as if it were
     still waiting on the candidate."""
     posting = await _job_posting()
-    handoff = _handoff(
-        user_id=f"smoke-user-{uuid.uuid4()}", job_posting_id=posting.id
-    )
+    handoff = _handoff(user_id=f"smoke-user-{uuid.uuid4()}", job_posting_id=posting.id)
 
     async with async_session_factory() as session:
         repository = SqlAlchemyPortalHandoffRepository(session)

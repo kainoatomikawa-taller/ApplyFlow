@@ -120,9 +120,11 @@ class RequirementClassifier:
         label = _DEGREE_LABELS[requirements.degree_level]
         item = ClassifiedRequirement(
             category=RequirementCategory.DEGREE,
-            description=f"{label} required"
-            if requirements.degree_required
-            else f"{label} preferred",
+            description=(
+                f"{label} required"
+                if requirements.degree_required
+                else f"{label} preferred"
+            ),
         )
         (hard if requirements.degree_required else soft).append(item)
 
@@ -137,9 +139,11 @@ class RequirementClassifier:
         label = _CLEARANCE_LABELS[requirements.clearance_level]
         item = ClassifiedRequirement(
             category=RequirementCategory.CLEARANCE,
-            description=f"{label} required"
-            if requirements.clearance_required
-            else f"{label} preferred",
+            description=(
+                f"{label} required"
+                if requirements.clearance_required
+                else f"{label} preferred"
+            ),
         )
         (hard if requirements.clearance_required else soft).append(item)
 

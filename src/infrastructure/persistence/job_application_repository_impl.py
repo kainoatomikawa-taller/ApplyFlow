@@ -1,6 +1,14 @@
 """SQLAlchemy implementation of the JobApplicationRepository interface.
 
 Maps DB rows <-> domain entities. Never leaks ORM types outward.
+
+`candidate_email` is encrypted at rest (Epic 07), which costs this repository
+its only value-based query: ciphertext is randomized, so
+`WHERE candidate_email = ?` can never match. `list_by_candidate` compares the
+column's blind index instead — a keyed digest of the same address, stored
+beside it and indexed (see `FieldCipher.blind_index`). The two are written
+together in `_to_model`/`_apply_entity_to_model` and derived from the same
+`EmailAddress`, so they cannot drift apart.
 """
 
 from __future__ import annotations
@@ -16,6 +24,13 @@ from src.domain.value_objects.application_status import ApplicationStatus
 from src.domain.value_objects.email_address import EmailAddress
 from src.domain.value_objects.match_score import MatchScore
 from src.infrastructure.persistence.models import JobApplicationModel
+from src.infrastructure.security.field_cipher import get_field_cipher
+
+#: The purpose the blind index is keyed with. Must match the encrypted column's
+#: purpose so the digest and the ciphertext are talking about the same column;
+#: it is a literal here for the same reason it is one in the model — it is part
+#: of the stored format, and changing it strands every row already written.
+_EMAIL_BLIND_INDEX_PURPOSE = "job_applications.candidate_email"
 
 
 class SqlAlchemyJobApplicationRepository(JobApplicationRepository):
@@ -44,7 +59,8 @@ class SqlAlchemyJobApplicationRepository(JobApplicationRepository):
     async def list_by_candidate(self, candidate_email: str) -> list[JobApplication]:
         result = await self._session.execute(
             select(JobApplicationModel).where(
-                JobApplicationModel.candidate_email == candidate_email.lower()
+                JobApplicationModel.candidate_email_bidx
+                == email_blind_index(candidate_email)
             )
         )
         return [self._to_entity(m) for m in result.scalars().all()]
@@ -62,6 +78,7 @@ class SqlAlchemyJobApplicationRepository(JobApplicationRepository):
         return JobApplicationModel(
             id=entity.id,
             candidate_email=str(entity.candidate_email),
+            candidate_email_bidx=email_blind_index(str(entity.candidate_email)),
             company_name=entity.company_name,
             role_title=entity.role_title,
             job_description=entity.job_description,
@@ -79,6 +96,7 @@ class SqlAlchemyJobApplicationRepository(JobApplicationRepository):
         entity: JobApplication, model: JobApplicationModel
     ) -> None:
         model.candidate_email = str(entity.candidate_email)
+        model.candidate_email_bidx = email_blind_index(str(entity.candidate_email))
         model.company_name = entity.company_name
         model.role_title = entity.role_title
         model.job_description = entity.job_description
@@ -105,3 +123,19 @@ class SqlAlchemyJobApplicationRepository(JobApplicationRepository):
             created_at=model.created_at,
             updated_at=model.updated_at,
         )
+
+
+def email_blind_index(candidate_email: str) -> str:
+    """The lookup digest for an address.
+
+    Normalizes exactly as `EmailAddress` does, so an address written through the
+    domain value object and one passed straight to `list_by_candidate` as a
+    string produce the same digest. Without this the query would be
+    case-sensitive against a column that is stored case-folded — the old
+    `.lower()` on the query side existed for the same reason, and now has to
+    apply on the write side too, since a digest cannot be normalized after the
+    fact.
+    """
+    return get_field_cipher().blind_index(
+        candidate_email.strip().lower(), purpose=_EMAIL_BLIND_INDEX_PURPOSE
+    )

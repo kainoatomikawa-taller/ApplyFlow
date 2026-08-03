@@ -9,6 +9,7 @@ application-layer types — never on infrastructure directly.
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from functools import lru_cache
 from pathlib import Path
 
@@ -155,6 +156,7 @@ from src.infrastructure.persistence.resume_repository_impl import (
 from src.infrastructure.persistence.tracked_application_repository_impl import (
     SqlAlchemyTrackedApplicationRepository,
 )
+from src.infrastructure.security.sensitive_access import sensitive_data_access
 from src.infrastructure.services.uuid_id_generator import UuidIdGenerator
 from src.infrastructure.storage.local_file_storage import LocalFileStorage
 from src.infrastructure.text_extraction.resume_text_extractor import (
@@ -806,17 +808,37 @@ def _auth_verifier() -> AuthVerifierPort:
     return SupabaseJwtVerifier(get_settings())
 
 
-def get_current_user(
+async def get_current_user(
     authorization: str | None = Header(default=None),
     verifier: AuthVerifierPort = Depends(_auth_verifier),
-) -> AuthenticatedUserDTO:
-    """Resolve the bearer token on the request to the single authenticated user."""
+) -> AsyncGenerator[AuthenticatedUserDTO, None]:
+    """Resolve the bearer token on the request to the single authenticated user,
+    and open that user's sensitive-data access scope for the request.
+
+    This is the HTTP layer's one authorized decryption path (Epic 07). The scope
+    opens only after the token has verified, so an unauthenticated request never
+    gets one — and every controller in this app depends on this function, which
+    is what makes "authenticated request" and "may decrypt" the same thing here
+    without each controller having to remember. See
+    `src/infrastructure/security/sensitive_access.py` for what the scope does
+    and, just as importantly, what it does not do (it is not row-level
+    authorization; repositories still filter on `user_id`).
+
+    A generator dependency rather than a plain one because the scope has to be
+    torn down when the request ends, and `async` rather than sync because a sync
+    dependency runs in a worker thread whose context changes do not propagate
+    back to the endpoint — the scope would be set somewhere nothing could see it.
+    """
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED, "Missing or malformed Authorization header."
         )
     token = authorization.split(" ", 1)[1]
     try:
-        return verifier.verify(token)
+        user = verifier.verify(token)
     except AuthenticationError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
+    with sensitive_data_access(
+        subject=user.subject, reason="authenticated HTTP request"
+    ):
+        yield user

@@ -157,12 +157,18 @@ def test_permanent_resident_requirement_satisfied_by_citizen_or_pr():
     requirements = JobRequirements(
         work_authorization=WorkAuthorizationStatus.PERMANENT_RESIDENT
     )
-    assert _evaluate(
-        _with_work_auth(WorkAuthorizationStatus.CITIZEN), requirements
-    ).qualifies is True
-    assert _evaluate(
-        _with_work_auth(WorkAuthorizationStatus.PERMANENT_RESIDENT), requirements
-    ).qualifies is True
+    assert (
+        _evaluate(
+            _with_work_auth(WorkAuthorizationStatus.CITIZEN), requirements
+        ).qualifies
+        is True
+    )
+    assert (
+        _evaluate(
+            _with_work_auth(WorkAuthorizationStatus.PERMANENT_RESIDENT), requirements
+        ).qualifies
+        is True
+    )
 
 
 def test_permanent_resident_requirement_not_satisfied_by_visa_holder():

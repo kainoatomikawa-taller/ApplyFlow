@@ -21,6 +21,7 @@ from src.infrastructure.persistence.database import async_session_factory
 from src.infrastructure.persistence.job_application_repository_impl import (
     SqlAlchemyJobApplicationRepository,
 )
+from src.infrastructure.security.sensitive_access import sensitive_data_access
 from src.infrastructure.tasks.celery_app import celery_app
 
 
@@ -39,13 +40,22 @@ def analyze_application_task(
 
 async def _run_analysis(application_id: str, resume_text: str) -> dict[str, Any]:
     settings = get_settings()
-    async with async_session_factory() as session:
-        repository = SqlAlchemyJobApplicationRepository(session)
-        analyzer = LangChainResumeAnalyzer(settings)
-        use_case = AnalyzeJobApplication(repository=repository, analyzer=analyzer)
-        result = await use_case.execute(
-            AnalyzeApplicationInput(
-                application_id=application_id, resume_text=resume_text
+    # An authorized decryption path (Epic 07): loading the application row
+    # decrypts its `candidate_email`, and a background worker has no request to
+    # inherit a scope from, so it declares one. Scoped to the application it was
+    # queued for rather than to a user id, because that is the only identity
+    # this message carries — the queued work is the authorization.
+    with sensitive_data_access(
+        subject=f"job_application:{application_id}",
+        reason="background resume/job analysis for one application",
+    ):
+        async with async_session_factory() as session:
+            repository = SqlAlchemyJobApplicationRepository(session)
+            analyzer = LangChainResumeAnalyzer(settings)
+            use_case = AnalyzeJobApplication(repository=repository, analyzer=analyzer)
+            result = await use_case.execute(
+                AnalyzeApplicationInput(
+                    application_id=application_id, resume_text=resume_text
+                )
             )
-        )
-        return {"id": result.id, "match_score": result.match_score}
+            return {"id": result.id, "match_score": result.match_score}

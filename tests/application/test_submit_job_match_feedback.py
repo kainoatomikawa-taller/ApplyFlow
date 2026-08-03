@@ -92,9 +92,9 @@ class SequentialIdGenerator(IdGeneratorPort):
         return f"feedback-{self._next}"
 
 
-def _use_case(postings: list[JobPosting]) -> tuple[
-    SubmitJobMatchFeedback, FakeJobMatchFeedbackRepository
-]:
+def _use_case(
+    postings: list[JobPosting],
+) -> tuple[SubmitJobMatchFeedback, FakeJobMatchFeedbackRepository]:
     feedback_repository = FakeJobMatchFeedbackRepository()
     use_case = SubmitJobMatchFeedback(
         feedback_repository=feedback_repository,

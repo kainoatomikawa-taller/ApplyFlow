@@ -323,9 +323,7 @@ async def test_sensitive_fields_arrive_undecided_and_block_submission(
     assert output.review.can_submit is False
     pending = [a.key for a in output.review.answers if a.needs_decision]
     assert len(pending) == 2
-    assert {b.kind for b in output.review.blockers} == {
-        "pending_sensitive_decision"
-    }
+    assert {b.kind for b in output.review.blockers} == {"pending_sensitive_decision"}
     # The EEO question is flagged as never-autofilled, not merely unanswered.
     eeo = output.review.answers[2]
     assert eeo.sensitivity == "voluntary_self_id"

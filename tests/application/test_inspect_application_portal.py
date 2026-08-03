@@ -300,9 +300,7 @@ async def test_an_inspection_that_finds_no_boundary_clears_an_open_hand_off(
     raised_id = next(iter(handoff_repository.handoffs))
 
     output = await _use_case(
-        harness=ScriptedBrowserAutomation(
-            signals=_CLEAN_SIGNALS, fields=_CLEAN_FIELDS
-        ),
+        harness=ScriptedBrowserAutomation(signals=_CLEAN_SIGNALS, fields=_CLEAN_FIELDS),
         handoff_repository=handoff_repository,
     ).execute(_input())
 
@@ -371,9 +369,9 @@ async def test_a_portal_that_will_not_load_raises_and_records_nothing(
     )
 
     with pytest.raises(BrowserNavigationError):
-        await _use_case(
-            harness=harness, handoff_repository=handoff_repository
-        ).execute(_input())
+        await _use_case(harness=harness, handoff_repository=handoff_repository).execute(
+            _input()
+        )
 
     assert handoff_repository.handoffs == {}
 
@@ -387,9 +385,9 @@ async def test_the_session_is_closed_even_when_the_reading_fails(handoff_reposit
     )
 
     with pytest.raises(RuntimeError):
-        await _use_case(
-            harness=harness, handoff_repository=handoff_repository
-        ).execute(_input())
+        await _use_case(harness=harness, handoff_repository=handoff_repository).execute(
+            _input()
+        )
 
     assert harness.sessions[0].closed is True
 

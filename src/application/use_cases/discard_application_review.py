@@ -36,9 +36,7 @@ class DiscardApplicationReview:
         as anywhere: discard must not be usable to close someone else's
         session, or to find out whether theirs exists.
         """
-        await self._review_sessions.release(
-            dto.review_session_id, user_id=dto.user_id
-        )
+        await self._review_sessions.release(dto.review_session_id, user_id=dto.user_id)
         logger.info(
             "Discarded an application review without submitting (review_id=%s).",
             dto.review_session_id,

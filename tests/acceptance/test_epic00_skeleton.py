@@ -241,9 +241,7 @@ async def test_epic00_definition_of_done(schema_ready: None, caplog) -> None:
     finally:
         if application_id is not None:
             async with async_session_factory() as session:
-                await SqlAlchemyJobApplicationRepository(session).delete(
-                    application_id
-                )
+                await SqlAlchemyJobApplicationRepository(session).delete(application_id)
         # The two llm_usage_records rows are left in place deliberately —
         # they're the artifact this check exists to prove exists, and
         # `docs/epic-00-acceptance-check.md` documents how to inspect them.

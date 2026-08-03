@@ -43,9 +43,7 @@ class GenerateJobFitRationale:
         self._classifier = classifier or RequirementClassifier()
         self._soft_evaluator = soft_evaluator or SoftPreferenceEvaluator()
 
-    async def execute(
-        self, dto: GenerateJobFitRationaleInput
-    ) -> JobFitRationaleOutput:
+    async def execute(self, dto: GenerateJobFitRationaleInput) -> JobFitRationaleOutput:
         posting = await self._job_posting_repository.get_by_id(dto.job_posting_id)
         if posting is None:
             raise JobPostingNotFoundError(dto.job_posting_id)

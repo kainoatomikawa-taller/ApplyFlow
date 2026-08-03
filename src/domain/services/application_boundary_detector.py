@@ -226,9 +226,7 @@ def _detect_login(
     page asked for a password" needs no further argument.
     """
     if has_password_field:
-        return _boundary(
-            ApplicationBoundaryKind.LOGIN, "the page asks for a password"
-        )
+        return _boundary(ApplicationBoundaryKind.LOGIN, "the page asks for a password")
 
     path = _path_of(url).casefold()
     hit = _first_hit(_LOGIN_PATH_MARKERS, path)

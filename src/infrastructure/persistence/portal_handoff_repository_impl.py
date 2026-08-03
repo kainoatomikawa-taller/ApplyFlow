@@ -153,11 +153,11 @@ def _hard_stops_from_json(handoff_id: str, stored: object) -> tuple[HardStop, ..
         stops.append(
             HardStop(
                 kind=hard_stop_kind,
-                evidence=tuple(
-                    str(line) for line in evidence if str(line).strip()
-                )
-                if isinstance(evidence, list)
-                else (),
+                evidence=(
+                    tuple(str(line) for line in evidence if str(line).strip())
+                    if isinstance(evidence, list)
+                    else ()
+                ),
             )
         )
     return tuple(stops)

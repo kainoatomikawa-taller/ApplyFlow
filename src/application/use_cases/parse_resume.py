@@ -107,9 +107,7 @@ class ParseResume:
                 )
             )
 
-    def _merge_education(
-        self, profile: UserProfile, parsed: ParsedResumeData
-    ) -> None:
+    def _merge_education(self, profile: UserProfile, parsed: ParsedResumeData) -> None:
         for entry in parsed.education:
             institution_name = _clean(entry.institution_name)
             degree = _clean(entry.degree)

@@ -177,7 +177,7 @@ def test_the_candidate_can_answer_a_field_applyflow_left_alone():
 
 
 def test_emptying_a_field_is_recorded_as_a_decline_not_as_a_blank():
-    """"Blank because I said so" and "blank because nobody has answered" are
+    """ "Blank because I said so" and "blank because nobody has answered" are
     different states, and only one of them settles a sensitive field."""
     subject = review(filled("f0", value="Dana Reyes"))
 
@@ -295,9 +295,7 @@ def test_submitting_through_a_walled_portal_is_refused():
 def test_an_unanswered_required_field_is_a_warning_not_a_blocker():
     """`required` is only as trustworthy as the portal's markup, so it must not
     lock a candidate out of recording their own submission."""
-    subject = review(
-        filled("f0"), answer("f1", label="Start date", required=True)
-    )
+    subject = review(filled("f0"), answer("f1", label="Start date", required=True))
 
     assert [item.key for item in subject.unanswered_required_answers] == ["f1"]
     assert subject.blockers(has_open_handoff=False) == ()

@@ -135,9 +135,7 @@ async def test_upload_resume_rejects_oversized_file_before_extracting():
             storage=storage,
             text_extractor=FailingTextExtractor(),
             id_generator=SequentialIdGenerator(),
-        ).execute(
-            _upload_input(content=b"x" * (Resume.MAX_SIZE_BYTES + 1))
-        )
+        ).execute(_upload_input(content=b"x" * (Resume.MAX_SIZE_BYTES + 1)))
 
     assert storage.saved == {}
     assert repo.store == {}

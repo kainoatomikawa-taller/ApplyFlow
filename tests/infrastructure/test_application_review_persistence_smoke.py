@@ -40,6 +40,7 @@ from src.infrastructure.persistence.database import (
 from src.infrastructure.persistence.job_posting_repository_impl import (
     SqlAlchemyJobPostingRepository,
 )
+from src.infrastructure.security.sensitive_access import SensitiveDataAccess
 
 _ANSWERS = (
     ReviewedAnswer(
@@ -70,6 +71,16 @@ _ANSWERS = (
         explanation="ApplyFlow never answers this one.",
     ),
 )
+
+
+@pytest.fixture(autouse=True)
+def _sensitive_access(sensitive_access: SensitiveDataAccess) -> None:
+    """Every test in this file round-trips at least one encrypted column, so the
+    whole module runs inside a sensitive-data access scope — standing in for the
+    authorized entry point a repository is always called from in production (Epic
+    07). See `tests/conftest.py` for the shared fixture, and
+    `test_encryption_at_rest.py` for the tests that assert the refusal when no
+    scope is open."""
 
 
 @pytest.fixture
@@ -215,9 +226,7 @@ async def test_superseding_replaces_a_draft_and_spares_a_submission(
 
         draft = _review(user_id=user_id, job_posting_id=posting.id)
         await repository.add(draft)
-        await repository.supersede_active(
-            user_id=user_id, job_posting_id=posting.id
-        )
+        await repository.supersede_active(user_id=user_id, job_posting_id=posting.id)
 
         assert await repository.get_by_id(draft.id) is None
         surviving = await repository.get_by_id(first.id)
@@ -257,9 +266,7 @@ async def test_updating_a_review_that_no_longer_exists_is_refused(
     schema_ready: None,
 ) -> None:
     posting = await _job_posting()
-    review = _review(
-        user_id=f"smoke-user-{uuid.uuid4()}", job_posting_id=posting.id
-    )
+    review = _review(user_id=f"smoke-user-{uuid.uuid4()}", job_posting_id=posting.id)
 
     async with async_session_factory() as session:
         repository = SqlAlchemyApplicationReviewRepository(session)

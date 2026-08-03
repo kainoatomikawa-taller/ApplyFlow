@@ -62,9 +62,7 @@ class FakeSearchClient:
         self._error = error
         self.queries: list[str] = []
 
-    async def search_many(
-        self, query: str, count: int = 5
-    ) -> list[BraveSearchResult]:
+    async def search_many(self, query: str, count: int = 5) -> list[BraveSearchResult]:
         self.queries.append(query)
         if self._error is not None:
             raise self._error

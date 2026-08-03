@@ -28,24 +28,33 @@ from src.infrastructure.persistence.job_application_repository_impl import (
 from src.infrastructure.persistence.job_posting_repository_impl import (
     SqlAlchemyJobPostingRepository,
 )
+from src.infrastructure.security.sensitive_access import sensitive_data_access
 from src.infrastructure.services.uuid_id_generator import UuidIdGenerator
 
 
 async def _create(args: argparse.Namespace) -> None:
-    async with async_session_factory() as session:
-        use_case = CreateJobApplication(
-            repository=SqlAlchemyJobApplicationRepository(session),
-            id_generator=UuidIdGenerator(),
-        )
-        output = await use_case.execute(
-            CreateJobApplicationInput(
-                candidate_email=args.email,
-                company_name=args.company,
-                role_title=args.role,
-                job_description=args.description,
+    # An authorized decryption path (Epic 07): the local operator running this
+    # command supplied the address themselves, and the use case reads back the
+    # row it wrote. The subject is the address rather than a user id because the
+    # CLI has no authenticated session — it is trusted by virtue of being a
+    # local process, and the scope records what it acted on.
+    with sensitive_data_access(
+        subject=args.email, reason="applyflow create (local CLI operator)"
+    ):
+        async with async_session_factory() as session:
+            use_case = CreateJobApplication(
+                repository=SqlAlchemyJobApplicationRepository(session),
+                id_generator=UuidIdGenerator(),
             )
-        )
-        print(f"Created application {output.id} ({output.status})")
+            output = await use_case.execute(
+                CreateJobApplicationInput(
+                    candidate_email=args.email,
+                    company_name=args.company,
+                    role_title=args.role,
+                    job_description=args.description,
+                )
+            )
+            print(f"Created application {output.id} ({output.status})")
 
 
 async def _ingest_adzuna(args: argparse.Namespace) -> None:

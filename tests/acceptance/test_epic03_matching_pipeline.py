@@ -216,17 +216,15 @@ async def test_epic03_definition_of_done(schema_ready: None) -> None:
         matches = matches_response.json()
 
         matched_ids = {entry["job_posting"]["id"] for entry in matches}
-        assert doctorate_job_id not in matched_ids, (
-            "a genuine hard disqualifier (PhD required) must be filtered out"
-        )
-        assert reachable_job_id in matched_ids, (
-            "a reachable role (PhD merely preferred) must not be over-filtered"
-        )
+        assert (
+            doctorate_job_id not in matched_ids
+        ), "a genuine hard disqualifier (PhD required) must be filtered out"
+        assert (
+            reachable_job_id in matched_ids
+        ), "a reachable role (PhD merely preferred) must not be over-filtered"
 
         reachable_entry = next(
-            entry
-            for entry in matches
-            if entry["job_posting"]["id"] == reachable_job_id
+            entry for entry in matches if entry["job_posting"]["id"] == reachable_job_id
         )
         assert isinstance(reachable_entry["score"], int)
         assert 0 <= reachable_entry["score"] <= 100

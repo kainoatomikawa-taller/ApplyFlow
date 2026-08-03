@@ -175,9 +175,7 @@ def test_no_skills_on_profile_means_every_required_skill_is_a_gap():
 
 def test_experience_met_when_total_tenure_meets_the_floor():
     requirements = JobRequirements(min_years_experience=5)
-    profile = _profile(
-        work_history=[_work_history(date(2018, 1, 1), date(2026, 1, 1))]
-    )
+    profile = _profile(work_history=[_work_history(date(2018, 1, 1), date(2026, 1, 1))])
     result = _evaluate(profile, requirements)
     assert len(result.met) == 1
     assert result.gaps == ()
@@ -185,9 +183,7 @@ def test_experience_met_when_total_tenure_meets_the_floor():
 
 def test_experience_gap_when_total_tenure_falls_short():
     requirements = JobRequirements(min_years_experience=8)
-    profile = _profile(
-        work_history=[_work_history(date(2023, 1, 1), date(2026, 1, 1))]
-    )
+    profile = _profile(work_history=[_work_history(date(2023, 1, 1), date(2026, 1, 1))])
     result = _evaluate(profile, requirements)
     assert result.met == ()
     assert len(result.gaps) == 1

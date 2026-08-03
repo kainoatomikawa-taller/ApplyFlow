@@ -41,6 +41,4 @@ class ClassifyJobRequirements:
 
         requirements = job_posting.requirements or JobRequirements()
         classification = self._classifier.classify(requirements)
-        return RequirementClassificationMapper.to_output(
-            job_posting.id, classification
-        )
+        return RequirementClassificationMapper.to_output(job_posting.id, classification)

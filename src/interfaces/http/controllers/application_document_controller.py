@@ -148,9 +148,7 @@ async def get_application_document(
     """One stored snapshot by id, with its exact text."""
     try:
         output = await use_case.execute(
-            GetApplicationDocumentInput(
-                user_id=user.subject, document_id=document_id
-            )
+            GetApplicationDocumentInput(user_id=user.subject, document_id=document_id)
         )
     except ApplicationDocumentNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc

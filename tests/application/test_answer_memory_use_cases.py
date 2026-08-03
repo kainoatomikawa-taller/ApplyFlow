@@ -96,9 +96,7 @@ async def test_store_answer_embeds_the_question_text_not_the_answer():
         embedding_client=embedding_client,
         id_generator=SequentialIdGenerator(),
     ).execute(
-        _store_input(
-            question_text="What's your desired salary?", answer_text="$150k"
-        )
+        _store_input(question_text="What's your desired salary?", answer_text="$150k")
     )
 
     assert embedding_client.calls == ["What's your desired salary?"]

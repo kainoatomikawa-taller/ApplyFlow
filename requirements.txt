@@ -12,6 +12,10 @@ langchain>=0.2
 langchain-core>=0.2
 langchain-openai>=0.1
 pyjwt>=2.8
+# AES-256-GCM for encryption at rest of sensitive fields
+# (src/infrastructure/security/). The only cryptographic primitive this
+# codebase uses directly; nothing here implements its own.
+cryptography>=43.0
 anthropic>=0.40
 httpx>=0.27
 python-multipart>=0.0.9

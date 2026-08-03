@@ -316,7 +316,6 @@ class ApplicationReview:
         )
 
 
-
 def _decision_prompt(answer: ReviewedAnswer) -> str:
     """What to ask the candidate about one undecided sensitive field.
 

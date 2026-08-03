@@ -38,9 +38,7 @@ class GetApplicationReview:
         self._review_repository = review_repository
         self._handoff_repository = handoff_repository
 
-    async def execute(
-        self, dto: GetApplicationReviewInput
-    ) -> ApplicationReviewOutput:
+    async def execute(self, dto: GetApplicationReviewInput) -> ApplicationReviewOutput:
         review = await self._review_repository.get_active_for_job(
             user_id=dto.user_id, job_posting_id=dto.job_posting_id
         )

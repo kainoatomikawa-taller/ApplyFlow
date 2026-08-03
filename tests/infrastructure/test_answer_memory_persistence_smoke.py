@@ -24,6 +24,17 @@ from src.infrastructure.persistence.database import (
     async_session_factory,
     engine,
 )
+from src.infrastructure.security.sensitive_access import SensitiveDataAccess
+
+
+@pytest.fixture(autouse=True)
+def _sensitive_access(sensitive_access: SensitiveDataAccess) -> None:
+    """Every test in this file round-trips at least one encrypted column, so the
+    whole module runs inside a sensitive-data access scope — standing in for the
+    authorized entry point a repository is always called from in production (Epic
+    07). See `tests/conftest.py` for the shared fixture, and
+    `test_encryption_at_rest.py` for the tests that assert the refusal when no
+    scope is open."""
 
 
 @pytest.fixture

@@ -2,6 +2,27 @@
 
 ORM models live in infrastructure and MUST NOT leak into domain or
 application. Mapping to/from domain entities happens in the repository.
+
+Encryption at rest (Epic 07)
+----------------------------
+Every column tagged `_SENSITIVE_COLUMN_INFO` below is declared with one of the
+encrypted column types from `encrypted_types.py`, so its value is AES-256-GCM
+ciphertext in the database and plaintext only in a Python process that has
+declared an access scope (see `security/sensitive_access.py`). The tag and the
+encryption are kept in lockstep by a test that walks this metadata
+(`tests/infrastructure/test_sensitive_column_coverage.py`) and fails if a
+sensitive-flagged column is stored in the clear — so adding a column here and
+flagging it is enough to be told that it also needs encrypting.
+
+Two consequences worth knowing before writing a query against one of these:
+
+- They cannot be filtered, ordered, or grouped by in SQL. The database holds
+  ciphertext and cannot compare it. `job_applications.candidate_email` is the
+  one column that still needs an equality lookup, and it has a blind-index
+  companion column for the database to compare instead.
+- They are stored as `Text` regardless of what they hold, because ciphertext
+  has no length or shape. The former `Boolean`/`JSON`/`String(n)` types survive
+  as Python-side types on the encrypted column, not as database constraints.
 """
 
 from __future__ import annotations
@@ -24,13 +45,22 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.infrastructure.persistence.database import Base
+from src.infrastructure.persistence.encrypted_types import (
+    EncryptedBoolean,
+    EncryptedJson,
+    EncryptedString,
+)
 
 # Mirrors the `SENSITIVE = True` flag on the domain value objects
-# (`WorkAuthorization`, `EeoSelfIdentification`) at the schema level, so
-# Epic 07 can find every column requiring encryption-at-rest/restricted
-# access without re-deriving the list from application code.
+# (`WorkAuthorization`, `EeoSelfIdentification`) at the schema level: the
+# machine-readable record of which columns hold data that must be encrypted at
+# rest and read only through an authorized path. `info=` is what the coverage
+# test queries; `comment=` is what someone reading `\d` or a migration sees.
 _SENSITIVE_COLUMN_INFO = {"sensitive": True}
-_SENSITIVE_COMMENT = "SENSITIVE: encrypt at rest / restrict access (Epic 07)."
+_SENSITIVE_COMMENT = (
+    "SENSITIVE: AES-256-GCM encrypted at rest (Epic 07). Not queryable by "
+    "value; decrypts only inside a declared access scope. Never log."
+)
 
 # Every stored fact carries a provenance tag mirroring the domain's
 # `ProvenanceSource` — see that module for the full Epic 04 contract.
@@ -42,10 +72,38 @@ _PROVENANCE_COMMENT = (
 
 
 class JobApplicationModel(Base):
+    """A candidate's application to one role.
+
+    SENSITIVE: `candidate_email` is contact information, and it is the one
+    encrypted column in this schema that still has to be looked up by exact
+    value (`list_by_candidate`). Encryption is randomized, so the ciphertext
+    cannot be compared — `candidate_email_bidx` carries a keyed digest of the
+    same address for the database to index and match on instead. The
+    repository maintains the pair; nothing else should write either column.
+    """
+
     __tablename__ = "job_applications"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    candidate_email: Mapped[str] = mapped_column(String(320), index=True)
+    candidate_email: Mapped[str] = mapped_column(
+        EncryptedString("job_applications.candidate_email"),
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
+    )
+    #: Keyed HMAC of the lowercased address — see `FieldCipher.blind_index`.
+    #: Indexed, and the only thing `WHERE candidate_email = ?` can become. Not
+    #: itself sensitive in the encrypt-at-rest sense: it is one-way and keyed,
+    #: so it reveals no address. What it does reveal is which rows share one,
+    #: which is the whole point of having it.
+    candidate_email_bidx: Mapped[str] = mapped_column(
+        String(64),
+        index=True,
+        comment=(
+            "Blind index (keyed HMAC-SHA256) of candidate_email — the lookup "
+            "key for the encrypted column. See "
+            "src/infrastructure/security/field_cipher.py."
+        ),
+    )
     company_name: Mapped[str] = mapped_column(String(255))
     role_title: Mapped[str] = mapped_column(String(255))
     job_description: Mapped[str] = mapped_column(Text)
@@ -120,33 +178,98 @@ class ResolvedCompanyBoardModel(Base):
 
 
 class UserProfileModel(Base):
+    """A candidate's profile row: contact details plus the provenance of each.
+
+    SENSITIVE: the contact columns — name, email, phone, location, and the
+    postal address — are encrypted at rest. Epic 01 left them unflagged while
+    flagging citizenship and EEO, on the reading that contact details are the
+    ordinary, freely-given part of a profile. Epic 07 flags them, because
+    "ordinary" describes how willingly a candidate hands them to an employer,
+    not what they are in a stolen database: a name, home address, phone number
+    and email for every candidate on the platform is the identifying half of
+    every other sensitive fact stored here, and the acceptance criteria for
+    this work name contact info first.
+
+    `user_id` stays in the clear, and has to: it is the tenancy key every
+    repository filters on and every index is built from, it is issued by the
+    auth provider rather than by the candidate, and it identifies a row without
+    describing a person. `headline` is also left in the clear — it is a
+    self-written professional tagline, the same category of data as the work
+    history and skills in the child tables, none of which this epic encrypts.
+    """
+
     __tablename__ = "user_profiles"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    full_name: Mapped[str] = mapped_column(String(255))
-    email: Mapped[str] = mapped_column(String(320))
+    full_name: Mapped[str] = mapped_column(
+        EncryptedString("user_profiles.full_name"),
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
+    )
+    email: Mapped[str] = mapped_column(
+        EncryptedString("user_profiles.email"),
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
+    )
     # Provenance for full_name/email/phone/headline/location as a bundle —
     # see UserProfile's module docstring for why. Always required: those
-    # fields are always present once a profile exists.
+    # fields are always present once a profile exists. Not itself sensitive:
+    # "the candidate typed this" describes the fact without disclosing it.
     contact_source: Mapped[str] = mapped_column(String(16), comment=_PROVENANCE_COMMENT)
-    phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    phone: Mapped[str | None] = mapped_column(
+        EncryptedString("user_profiles.phone"),
+        nullable=True,
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
+    )
     headline: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    location: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    location: Mapped[str | None] = mapped_column(
+        EncryptedString("user_profiles.location"),
+        nullable=True,
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
+    )
 
-    # Contact info — postal address. Not sensitive-flagged.
-    street_address: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    city: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    state_or_region: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    postal_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    country: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Contact info — postal address. Encrypted at rest per the class docstring.
+    street_address: Mapped[str | None] = mapped_column(
+        EncryptedString("user_profiles.street_address"),
+        nullable=True,
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
+    )
+    city: Mapped[str | None] = mapped_column(
+        EncryptedString("user_profiles.city"),
+        nullable=True,
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
+    )
+    state_or_region: Mapped[str | None] = mapped_column(
+        EncryptedString("user_profiles.state_or_region"),
+        nullable=True,
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
+    )
+    postal_code: Mapped[str | None] = mapped_column(
+        EncryptedString("user_profiles.postal_code"),
+        nullable=True,
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
+    )
+    country: Mapped[str | None] = mapped_column(
+        EncryptedString("user_profiles.country"),
+        nullable=True,
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
+    )
     # Nullable: only required once the address above actually has data —
     # enforced by UserProfile._validate_optional_source, not by the schema.
     address_source: Mapped[str | None] = mapped_column(
         String(16), nullable=True, comment=_PROVENANCE_COMMENT
     )
 
-    # Links — portfolio/LinkedIn/GitHub. Not sensitive-flagged.
+    # Links — portfolio/LinkedIn/GitHub. Not sensitive-flagged: each is a
+    # public profile the candidate publishes deliberately.
     portfolio_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     linkedin_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     github_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
@@ -194,8 +317,21 @@ class ResumeModel(Base):
 
     Raw file bytes live outside the database (see `FileStoragePort` /
     `LocalFileStorage`) — `storage_key` is the only link between this row
-    and the file on disk. `original_filename` and `extracted_text` may
-    contain PII, so never log them; log the row's `id` instead.
+    and the file on disk.
+
+    SENSITIVE: `extracted_text` is the candidate's whole resume as text, which
+    means it contains every contact detail on `user_profiles` and then some, and
+    `original_filename` is routinely the candidate's own name. Both are
+    encrypted at rest, on the same reasoning that encrypts
+    `application_documents.content`: the derived document is protected, so the
+    source it was derived from cannot be left in the clear beside it.
+
+    The bytes on disk are a separate matter and are NOT encrypted by this epic
+    — `LocalFileStorage` addresses them by an opaque server-generated key, so
+    the storage directory discloses nothing by itself, but a reader of that
+    directory reads resumes. Encrypting the blob store is the next increment;
+    it is called out in docs/decisions/0002-encryption-at-rest.md rather than
+    left implied.
     """
 
     __tablename__ = "resumes"
@@ -203,13 +339,17 @@ class ResumeModel(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), index=True)
     original_filename: Mapped[str] = mapped_column(
-        String(255), comment="May contain PII — never log."
+        EncryptedString("resumes.original_filename"),
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
     )
     content_type: Mapped[str] = mapped_column(String(128))
     size_bytes: Mapped[int] = mapped_column(Integer)
     storage_key: Mapped[str] = mapped_column(String(64), unique=True)
     extracted_text: Mapped[str] = mapped_column(
-        Text, comment="May contain PII — never log."
+        EncryptedString("resumes.extracted_text"),
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
@@ -236,17 +376,27 @@ class AnswerMemoryModel(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), index=True)
     question_text: Mapped[str] = mapped_column(
-        Text, info=_SENSITIVE_COLUMN_INFO, comment=_SENSITIVE_COMMENT
+        EncryptedString("answer_memories.question_text"),
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
     )
     answer_text: Mapped[str] = mapped_column(
-        Text, info=_SENSITIVE_COLUMN_INFO, comment=_SENSITIVE_COMMENT
+        EncryptedString("answer_memories.answer_text"),
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
     )
-    # A plain JSON array of floats rather than a pgvector column: this
+    # An encrypted JSON array of floats rather than a pgvector column: this
     # ticket only covers storage, not similarity search, and pgvector
     # isn't a dependency yet — a future retrieval epic can migrate this
-    # column once it needs indexed nearest-neighbor queries.
+    # column once it needs indexed nearest-neighbor queries. When it does,
+    # note that it will be choosing between an indexed nearest-neighbour
+    # search and this encryption: an embedding is a reversible-enough
+    # projection of the question text that indexing it in the clear
+    # partially undoes encrypting the text itself.
     embedding: Mapped[list[float]] = mapped_column(
-        JSON, info=_SENSITIVE_COLUMN_INFO, comment=_SENSITIVE_COMMENT
+        EncryptedJson("answer_memories.embedding"),
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
     )
     source: Mapped[str] = mapped_column(String(16), comment=_PROVENANCE_COMMENT)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -313,10 +463,17 @@ class ApplicationDocumentModel(Base):
         ),
     )
     content: Mapped[str] = mapped_column(
-        Text, info=_SENSITIVE_COLUMN_INFO, comment=_SENSITIVE_COMMENT
+        EncryptedString("application_documents.content"),
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
     )
-    #: Hex sha256 of `content` — integrity, not identity. Not sensitive: a
-    #: digest reveals nothing about the document it describes.
+    #: Hex sha256 of the *plaintext* `content` — integrity, not identity. Not
+    #: sensitive: a digest reveals nothing about the document it describes.
+    #: Deliberately still the digest of the plaintext now that the column is
+    #: encrypted, because what it exists to detect is content that changed
+    #: (a migration, a manual `UPDATE`, a mapping bug), and encryption is
+    #: randomized — digesting the ciphertext would differ on every rewrite of
+    #: identical content and match nothing on read.
     content_sha256: Mapped[str] = mapped_column(String(64))
     version: Mapped[int] = mapped_column(Integer)
     #: The provenance the content traces to, mirroring the domain's
@@ -615,12 +772,12 @@ class ApplicationReviewModel(Base):
     #: `[{"key", "label", "widget_kind", "value", "slot", "sensitivity",
     #: "required", "origin", "decided_by_candidate", "explanation"}]`.
     answers: Mapped[list[dict[str, object]]] = mapped_column(
-        JSON,
+        EncryptedJson("application_reviews.answers"),
         info=_SENSITIVE_COLUMN_INFO,
         comment=(
-            "SENSITIVE: the answers on a real application, plus their "
-            "provenance and the candidate's decisions. "
-            "See src/domain/value_objects/reviewed_answer.py."
+            "SENSITIVE: AES-256-GCM encrypted at rest (Epic 07) — the answers "
+            "on a real application, plus their provenance and the candidate's "
+            "decisions. See src/domain/value_objects/reviewed_answer.py."
         ),
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -630,8 +787,14 @@ class ApplicationReviewModel(Base):
     submitted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # The Python-side default is what writes the empty note; the column's old
+    # `server_default=''` was dropped in migration 0021, because a server-side
+    # default on an encrypted column inserts plaintext that nothing can decrypt.
     submission_note: Mapped[str] = mapped_column(
-        Text, default="", info=_SENSITIVE_COLUMN_INFO, comment=_SENSITIVE_COMMENT
+        EncryptedString("application_reviews.submission_note"),
+        default="",
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
     )
 
 
@@ -718,8 +881,10 @@ class PortalHandoffModel(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # `server_default=''` dropped in migration 0021 — see
+    # `ApplicationReviewModel.submission_note` for why.
     resolution_note: Mapped[str] = mapped_column(
-        Text,
+        EncryptedString("portal_handoffs.resolution_note"),
         default="",
         info=_SENSITIVE_COLUMN_INFO,
         comment=_SENSITIVE_COMMENT,
@@ -784,11 +949,20 @@ class WorkAuthorizationModel(Base):
     """A profile's work-authorization/citizenship data.
 
     Kept in its own one-to-one table (`profile_id` is both primary key and
-    foreign key) rather than columns on `user_profiles`, so Epic 07 can
-    apply encryption-at-rest and restricted access to this table without
-    touching the general profile row. Every column is flagged sensitive via
-    both `info=` (machine-readable) and `comment=` (visible in `\\d` /
-    migrations) — mirrors `WorkAuthorization.SENSITIVE` in the domain layer.
+    foreign key) rather than columns on `user_profiles`, so encryption-at-rest
+    and restricted access apply to this table without touching the general
+    profile row. Every column is flagged sensitive via both `info=`
+    (machine-readable) and `comment=` (visible in `\\d` / migrations) — mirrors
+    `WorkAuthorization.SENSITIVE` in the domain layer — and every one of them
+    is encrypted (Epic 07).
+
+    `status` was a `String(32)` holding a `WorkAuthorizationStatus` value and
+    `requires_sponsorship` was a real `Boolean`; both are now encrypted text.
+    The enum member and the boolean are still enforced on the Python side (by
+    `EncryptedBoolean` here and by `WorkAuthorization` in the domain), but the
+    database no longer constrains or aggregates them. Losing "how many
+    candidates need sponsorship?" as a SQL question is the intended trade:
+    that query is a report on exactly the data this table exists to protect.
     """
 
     __tablename__ = "work_authorizations"
@@ -797,28 +971,33 @@ class WorkAuthorizationModel(Base):
         ForeignKey("user_profiles.id", ondelete="CASCADE"), primary_key=True
     )
     status: Mapped[str] = mapped_column(
-        String(32), info=_SENSITIVE_COLUMN_INFO, comment=_SENSITIVE_COMMENT
+        EncryptedString("work_authorizations.status"),
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
     )
     citizenship_country: Mapped[str | None] = mapped_column(
-        String(255),
+        EncryptedString("work_authorizations.citizenship_country"),
         nullable=True,
         info=_SENSITIVE_COLUMN_INFO,
         comment=_SENSITIVE_COMMENT,
     )
     visa_type: Mapped[str | None] = mapped_column(
-        String(64),
+        EncryptedString("work_authorizations.visa_type"),
         nullable=True,
         info=_SENSITIVE_COLUMN_INFO,
         comment=_SENSITIVE_COMMENT,
     )
     requires_sponsorship: Mapped[bool | None] = mapped_column(
-        Boolean,
+        EncryptedBoolean("work_authorizations.requires_sponsorship"),
         nullable=True,
         info=_SENSITIVE_COLUMN_INFO,
         comment=_SENSITIVE_COMMENT,
     )
     details: Mapped[str | None] = mapped_column(
-        Text, nullable=True, info=_SENSITIVE_COLUMN_INFO, comment=_SENSITIVE_COMMENT
+        EncryptedString("work_authorizations.details"),
+        nullable=True,
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
     )
     # Provenance metadata, not itself sensitive PII — no _SENSITIVE_* tags.
     source: Mapped[str] = mapped_column(String(16), comment=_PROVENANCE_COMMENT)
@@ -832,10 +1011,19 @@ class EeoSelfIdentificationModel(Base):
     """A profile's voluntary EEO self-identification data.
 
     Optional one-to-one table, same rationale as `WorkAuthorizationModel`:
-    isolated for Epic 07's encryption/access-control work, every column
-    flagged sensitive. The absence of a row for a profile means "not
-    provided" — there is no code path that creates one except an explicit
-    candidate submission (see `UserProfile.set_eeo_self_identification`).
+    isolated so encryption and access control apply to it alone, every column
+    flagged sensitive and every column encrypted (Epic 07). The absence of a
+    row for a profile means "not provided" — there is no code path that creates
+    one except an explicit candidate submission (see
+    `UserProfile.set_eeo_self_identification`).
+
+    A NULL column here still means "this category was left unanswered", and it
+    stays a real NULL rather than encrypted emptiness (see
+    `_EncryptedColumn`) — so what remains visible at rest is which categories
+    were answered, never what the answers were. That is the right side of the
+    trade for this table: `DECLINE_TO_SELF_IDENTIFY` is itself one of the
+    answers, so "answered" and "declined" are both ciphertext and only
+    "skipped" is NULL.
     """
 
     __tablename__ = "eeo_self_identifications"
@@ -844,25 +1032,25 @@ class EeoSelfIdentificationModel(Base):
         ForeignKey("user_profiles.id", ondelete="CASCADE"), primary_key=True
     )
     gender_identity: Mapped[str | None] = mapped_column(
-        String(32),
+        EncryptedString("eeo_self_identifications.gender_identity"),
         nullable=True,
         info=_SENSITIVE_COLUMN_INFO,
         comment=_SENSITIVE_COMMENT,
     )
     race_ethnicity: Mapped[str | None] = mapped_column(
-        String(64),
+        EncryptedString("eeo_self_identifications.race_ethnicity"),
         nullable=True,
         info=_SENSITIVE_COLUMN_INFO,
         comment=_SENSITIVE_COMMENT,
     )
     veteran_status: Mapped[str | None] = mapped_column(
-        String(32),
+        EncryptedString("eeo_self_identifications.veteran_status"),
         nullable=True,
         info=_SENSITIVE_COLUMN_INFO,
         comment=_SENSITIVE_COMMENT,
     )
     disability_status: Mapped[str | None] = mapped_column(
-        String(32),
+        EncryptedString("eeo_self_identifications.disability_status"),
         nullable=True,
         info=_SENSITIVE_COLUMN_INFO,
         comment=_SENSITIVE_COMMENT,
