@@ -1,0 +1,6 @@
+# gotcha · 2
+
+> Section index — this project's **gotcha** memory. Open a concept below for the full detail.
+
+- [[gotcha/persistence-smoke-tests-touching-sensitive-flagg]] — Persistence smoke tests touching sensitive-flagged columns need an autouse…
+- [[gotcha/test-requirements-round-trip-against-a-real-data]] — test_requirements_round_trip_against_a_real_database in…
