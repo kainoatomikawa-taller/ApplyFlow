@@ -31,10 +31,25 @@ The single flow, in order:
      `SqlAlchemyUsageLogger` back out of `llm_usage_records` — proving
      token/cost logging is wired to the data-access layer, not just to
      stdout.
+
+NOT RUNNABLE YET — step 3's feature does not exist. There is no
+`llm_usage_logger_impl` module, no `LlmUsageRecordModel`, no
+`llm_usage_records` table, and `AnthropicLlmClient.__init__` takes only
+`settings` (no `usage_logger`/`id_generator`). Steps 1 and 2 are fully
+built; only the persisted token/cost log is outstanding.
+
+So this module self-skips on `_USAGE_LOGGING_BUILT` below, and the two
+names that don't resolve yet are imported inside the test rather than at
+module scope. That is deliberate: pytest imports every test module during
+collection, *before* any skip marker is consulted, so a module-level
+import of a missing name is a collection error that aborts the whole
+suite — not a skip. The check re-enables itself automatically once the
+usage-logging module lands; nothing here needs editing then.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import uuid
 
@@ -56,20 +71,38 @@ from src.infrastructure.persistence.database import (
 from src.infrastructure.persistence.job_application_repository_impl import (
     SqlAlchemyJobApplicationRepository,
 )
-from src.infrastructure.persistence.llm_usage_logger_impl import SqlAlchemyUsageLogger
-from src.infrastructure.persistence.models import LlmUsageRecordModel
 from src.infrastructure.services.uuid_id_generator import UuidIdGenerator
 from src.interfaces.http.app import create_app
 
-pytestmark = pytest.mark.skipif(
-    os.getenv("RUN_EPIC00_ACCEPTANCE_TEST") != "1",
-    reason=(
-        "opt-in: set RUN_EPIC00_ACCEPTANCE_TEST=1 with DATABASE_URL, "
-        "SUPABASE_JWT_SECRET, and ANTHROPIC_API_KEY configured to run the "
-        "Epic 00 Definition-of-Done check (see "
-        "docs/epic-00-acceptance-check.md)"
-    ),
+#: Step 3's feature — the persisted token/cost log. Absent for now (see the
+#: module docstring); this module's own gate, so the check turns itself back
+#: on when the module appears.
+_USAGE_LOGGING_BUILT = (
+    importlib.util.find_spec("src.infrastructure.persistence.llm_usage_logger_impl")
+    is not None
 )
+
+pytestmark = [
+    pytest.mark.skipif(
+        os.getenv("RUN_EPIC00_ACCEPTANCE_TEST") != "1",
+        reason=(
+            "opt-in: set RUN_EPIC00_ACCEPTANCE_TEST=1 with DATABASE_URL, "
+            "SUPABASE_JWT_SECRET, and ANTHROPIC_API_KEY configured to run the "
+            "Epic 00 Definition-of-Done check (see "
+            "docs/epic-00-acceptance-check.md)"
+        ),
+    ),
+    pytest.mark.skipif(
+        not _USAGE_LOGGING_BUILT,
+        reason=(
+            "Epic 00 step 3 is not built: no llm_usage_logger_impl module, no "
+            "LlmUsageRecordModel, no llm_usage_records table, and "
+            "AnthropicLlmClient takes no usage_logger. Steps 1-2 (auth + DB "
+            "read/write, routed and cached LLM call) are built; this check "
+            "re-enables itself once the usage log lands."
+        ),
+    ),
+]
 
 # Anthropic only creates a cache entry once a system prompt clears a
 # per-model minimum token count (2048 for Haiku). Padded well past that so
@@ -100,6 +133,15 @@ def _mint_bearer_token(secret: str) -> str:
 
 @pytest.mark.asyncio
 async def test_epic00_definition_of_done(schema_ready: None, caplog) -> None:
+    # Imported here, not at module scope: these two names do not exist until
+    # step 3's usage-logging feature is built, and a missing module-level
+    # import is a collection error that takes the entire suite down rather
+    # than the skip this check is supposed to produce.
+    from src.infrastructure.persistence.llm_usage_logger_impl import (
+        SqlAlchemyUsageLogger,
+    )
+    from src.infrastructure.persistence.models import LlmUsageRecordModel
+
     get_settings.cache_clear()
     settings = get_settings()
 
