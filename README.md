@@ -381,6 +381,111 @@ so it stays visible to whoever implements Epic 04.
 
 ---
 
+## The profile editor
+
+The profile is where everything ApplyFlow needs in order to fill an application
+comes from, and it is edited by the candidate directly. **A résumé is a shortcut,
+not a prerequisite** — `PUT /api/profile/contact` creates the profile from a name
+and an email, which are the record's only mandatory fields, and every other section
+unlocks once it is saved.
+
+Before this existed, a profile could only be *created* by parsing an uploaded
+résumé and could not be read back or corrected at all. That had a consequence
+larger than the missing screens: `work_authorizations` and
+`eeo_self_identifications` had **no write path in production**. The résumé parser
+deliberately does not produce them, so in a real deployment both tables were always
+empty — and the whole sensitive-field apparatus (the thirteen-case truth table in
+`decide_sensitive_field`, the encrypted tables, the greedy-label guards, the
+acceptance suite) was correct and inert. The editor is what makes it live.
+
+### Nine sections, nine saves
+
+Each section has its own endpoint and its own Save button. That is a privacy
+decision as much as an API one: correcting a phone number should not put the
+candidate's citizenship and demographic answers back on the wire. It also removes
+the lost-update problem two browser tabs would otherwise have, with no version
+token to invent.
+
+A `PUT` fully replaces its own section, so a field left out is cleared — that is
+how the candidate deletes one.
+
+The three list sections (work history, education, skills) are add/edit/delete **per
+entry** rather than re-submitting the whole list. The reason is provenance:
+rewriting a list would re-stamp every entry as something the candidate typed,
+including the ones a résumé parser produced and they never touched.
+
+### Provenance is the point, not decoration
+
+Every section is stamped `USER_ENTERED` when saved, and the UI shows which sections
+came from a résumé instead. For work authorization that distinction decides
+behaviour rather than presentation: `WorkAuthorization.ATTESTING_SOURCES` excludes
+`PARSED_RESUME`, because a model's reading of a visa mention is not a declaration
+anyone made — so only a record the candidate saved here can be asserted to an
+employer on their behalf. Saving a résumé-derived profile is how it becomes
+attested.
+
+### The two sensitive sections carry their own consent
+
+Work authorization and EEO self-identification are GDPR Art. 9 special-category
+data, whose lawful basis is *explicit* consent. Both `PUT`s require
+`consent_acknowledged: true` — a real checkbox rendered beside the notice text, not
+an inference from the request arriving — and record the consent grant against
+`SENSITIVE_ATTRIBUTE_STORAGE` **in the same request**. One form, one submit, and a
+ledger that can still demonstrate what was agreed and when.
+
+The grant is recorded *before* the profile is written. These are two commits, and
+the failure modes are not symmetric: a grant with no stored data is harmless, while
+stored special-category data with no record of permission is the case that matters.
+
+Clearing a section needs no acknowledgement, and does not withdraw consent —
+deleting data and revoking permission are different acts, and conflating them would
+force a candidate who fixed a typo to agree again.
+
+This is the first place in the codebase where a consent purpose is actually
+enforced rather than merely recorded (item 6 of the roadmap in
+[ADR 0004](docs/decisions/0004-gdpr-ccpa-groundwork.md)), scoped to the one purpose
+where the gate is unambiguous.
+
+### EEO is stored so the candidate can see it — never to fill a form
+
+ApplyFlow's refusal to auto-fill EEO answers is unconditional and unchanged by the
+fact that the data is now reachable. The record exists for exactly two purposes: the
+candidate seeing, correcting and withdrawing it, and the GDPR data export.
+
+It has its own endpoint, its own mapper and its own frontend component, all
+deliberately separate from the rest of the profile. A static guard
+(`test_the_eeo_record_is_unreachable_from_every_form_filling_module`) allows only a
+named list of modules to read the record at all; the profile editor's three were
+added to it with the reasoning written down, and the rule it enforces is unchanged:
+nothing on the way to an application form may touch it.
+
+### "No middle name" is an answer
+
+Two fields were added to answer the last two identity questions an ATS form asks
+(migration 0024, both encrypted like every other name):
+
+- **Middle name.** Blank means the candidate has none, so a form asking for one is
+  left empty rather than handed back on every application. The one case that
+  reading cannot cover is a field the portal marks *required*, where writing nothing
+  fails the portal's own validation — those are surfaced with their own reason.
+- **Preferred name.** Blank means "the same name I go by legally", so the slot falls
+  back to the *first* name split out of the full name. These boxes expect "Mike",
+  not "Michael Andrew Smith".
+
+### Résumé and manual entry combine
+
+Both paths are supported and meant to be mixed: type the jobs a résumé missed,
+upload the résumé for the rest. Parsing now skips entries the profile already holds,
+matched on normalized company + title + start date, which also fixes a pre-existing
+defect — uploading the same résumé twice used to double the candidate's employment
+history, and nothing could delete the copy.
+
+The match is an exact normalized one rather than the fuzzier `titles_match`:
+"Engineer" and "Senior Engineer" at one company are plausibly two real entries, and
+over-merging silently deletes history the candidate typed.
+
+---
+
 ## Resume upload & file handling
 
 `POST /api/resumes` accepts a resume file (PDF, DOCX, or plain text),
@@ -1611,6 +1716,16 @@ All `/api/applications*` and `/api/resumes*` routes require
 | POST   | `/api/resumes`                      | Upload a resume (PDF/DOCX/text); stores it and returns extracted text | Yes |
 | GET    | `/api/resumes/{id}`                 | Fetch one resume's metadata + extracted text | Yes   |
 | GET    | `/api/resumes`                      | List the current user's uploaded resumes | Yes       |
+| GET    | `/api/profile`                      | The current user's whole profile, minus the EEO record | Yes |
+| PUT    | `/api/profile/contact`              | Name, email, phone, middle/preferred name. **Creates the profile** if there is none — this is what makes a résumé optional | Yes |
+| PUT    | `/api/profile/address`              | Postal address. All-empty clears it | Yes |
+| PUT    | `/api/profile/links`                | Portfolio / LinkedIn / GitHub | Yes |
+| PUT    | `/api/profile/qualifications`       | Clearance and highest degree — used for matching, never to fill a form | Yes |
+| POST / PUT / DELETE | `/api/profile/work-history[/{entry_id}]` | Add, correct, or delete one job. Per entry, so a résumé-parsed entry keeps its own provenance | Yes |
+| POST / PUT / DELETE | `/api/profile/education[/{entry_id}]` | Same three for one qualification | Yes |
+| POST / PUT / DELETE | `/api/profile/skills[/{skill_id}]` | Same three for one skill. 409 on a duplicate name | Yes |
+| GET / PUT | `/api/profile/work-authorization` | The legal declarations. `PUT` needs `consent_acknowledged: true` and records the consent grant in the same request; `status: null` clears it | Yes |
+| GET / PUT | `/api/profile/eeo`                | Voluntary self-identification, for the candidate's own view. Never filled onto an application | Yes |
 | GET    | `/api/job-postings/matches?limit=&include_already_applied=` | Ranked, filtered, scored job matches for the current user; roles already applied to are excluded unless `include_already_applied=true`, which returns them flagged | Yes |
 | POST   | `/api/job-postings/{id}/feedback`   | Submit thumbs-up/down feedback on a match | Yes      |
 | GET    | `/api/job-postings/feedback`        | List the current user's feedback history | Yes       |

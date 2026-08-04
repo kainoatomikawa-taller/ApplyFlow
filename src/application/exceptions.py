@@ -517,3 +517,58 @@ class UnknownConsentPurposeError(ApplicationError):
             f"'{purpose}' is not a consent purpose this application asks "
             f"about. Available purposes: {listed}."
         )
+
+
+class UnknownProfileEnumValueError(ApplicationError):
+    """Raised when a profile field that is an enum was given a value that is not
+    one of its members.
+
+    Refused rather than dropped. A silently ignored proficiency or clearance
+    level would be stored as "not stated", which is a different claim from the
+    one the candidate made — and for `clearance_level` it is the claim the
+    matching layer reads when deciding whether a job is even shown.
+
+    Empty and whitespace-only input is *not* an error and never reaches here: a
+    `<select>` with nothing chosen submits an empty string, and treating that as
+    invalid would make clearing a value impossible from a browser. It means
+    "cleared".
+
+    Carries the accepted values so a stale client is told what to send rather
+    than only that it was wrong. Safe to log: a field label and an enum value
+    name a category, not a person.
+    """
+
+    def __init__(self, field_label: str, value: str, accepted: tuple[str, ...]) -> None:
+        self.field_label = field_label
+        self.value = value
+        self.accepted = accepted
+        listed = ", ".join(accepted)
+        super().__init__(
+            f"'{value}' is not a valid {field_label}. Accepted values: {listed}."
+        )
+
+
+class SensitiveStorageNotAcknowledgedError(ApplicationError):
+    """Raised when a sensitive profile section was submitted without the
+    candidate acknowledging what it stores.
+
+    Work authorization and EEO self-identification are GDPR Art. 9
+    special-category data. Their lawful basis is *explicit* consent, which means
+    a clear affirmative action — and a `PUT` arriving is not one. So the section
+    carries an acknowledgement alongside the data, the UI renders it as a box next
+    to the notice text, and saving records the consent grant in the same
+    operation (see `SaveWorkAuthorization`).
+
+    Raised only when data is being *stored*. Clearing a section needs no
+    acknowledgement: consent is required to hold this data, not to delete it.
+
+    Names the section rather than the fields, so it is safe to log.
+    """
+
+    def __init__(self, section: str) -> None:
+        self.section = section
+        super().__init__(
+            f"Saving your {section} needs your acknowledgement of what is "
+            "stored and why: this is special-category data, so it is kept only "
+            "with your explicit agreement. Tick the consent box and save again."
+        )

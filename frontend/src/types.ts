@@ -499,3 +499,155 @@ export interface TrackedApplicationList {
   applications: TrackedApplication[];
   open_count: number;
 }
+
+// ---- Profile editor --------------------------------------------------------
+//
+// The profile is edited a section at a time, so each section has its own payload
+// type. A `PUT` fully replaces its section: a field left out is cleared, which is
+// how the candidate deletes one.
+
+export interface ProfileAddress {
+  street_address: string | null;
+  city: string | null;
+  state_or_region: string | null;
+  postal_code: string | null;
+  country: string | null;
+  /** Null while the address is empty — nothing to attribute yet. */
+  source: string | null;
+}
+
+export interface ProfileLinks {
+  portfolio_url: string | null;
+  linkedin_url: string | null;
+  github_url: string | null;
+  source: string | null;
+}
+
+export interface ProfileQualifications {
+  clearance_level: string | null;
+  highest_degree: string | null;
+}
+
+export interface ProfileWorkHistoryEntry {
+  id: string;
+  company_name: string;
+  job_title: string;
+  start_date: string;
+  end_date: string | null;
+  location: string | null;
+  description: string | null;
+  source: string;
+}
+
+export interface ProfileEducationEntry {
+  id: string;
+  institution_name: string;
+  degree: string;
+  field_of_study: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  description: string | null;
+  source: string;
+}
+
+export interface ProfileSkill {
+  id: string;
+  name: string;
+  proficiency: string | null;
+  years_of_experience: number | null;
+  source: string;
+}
+
+/** The whole profile minus the EEO record, which has its own endpoint. */
+export interface Profile {
+  id: string;
+  user_id: string;
+  full_name: string;
+  email: string;
+  contact_source: string;
+  phone: string | null;
+  headline: string | null;
+  location: string | null;
+  /** Blank means something definite for each — see the contact section. */
+  middle_name: string | null;
+  preferred_name: string | null;
+  created_at: string;
+  updated_at: string;
+  address: ProfileAddress | null;
+  links: ProfileLinks | null;
+  qualifications: ProfileQualifications | null;
+  work_history: ProfileWorkHistoryEntry[];
+  education: ProfileEducationEntry[];
+  skills: ProfileSkill[];
+}
+
+export interface ContactDetailsInput {
+  full_name: string;
+  email: string;
+  phone?: string | null;
+  headline?: string | null;
+  location?: string | null;
+  middle_name?: string | null;
+  preferred_name?: string | null;
+}
+
+export type AddressInput = Omit<ProfileAddress, 'source'>;
+export type LinksInput = Omit<ProfileLinks, 'source'>;
+export type QualificationsInput = ProfileQualifications;
+
+export type WorkHistoryInput = Omit<ProfileWorkHistoryEntry, 'id' | 'source'>;
+export type EducationInput = Omit<ProfileEducationEntry, 'id' | 'source'>;
+export type SkillInput = Omit<ProfileSkill, 'id' | 'source'>;
+
+/**
+ * The legal declarations.
+ *
+ * `is_candidate_attested` is why a résumé-derived record still gets handed back
+ * on every form: only the candidate's own statement may be asserted to an
+ * employer on their behalf. `consent_granted` lets the form pre-tick the
+ * acknowledgement for someone who has already agreed.
+ */
+export interface WorkAuthorization {
+  status: string | null;
+  citizenship_country: string | null;
+  visa_type: string | null;
+  requires_sponsorship: boolean | null;
+  details: string | null;
+  source: string | null;
+  is_candidate_attested: boolean;
+  consent_granted: boolean;
+}
+
+export interface WorkAuthorizationInput {
+  status: string | null;
+  citizenship_country?: string | null;
+  visa_type?: string | null;
+  requires_sponsorship?: boolean | null;
+  details?: string | null;
+  /** Must be true to store anything. Not needed to clear. */
+  consent_acknowledged: boolean;
+}
+
+/**
+ * Voluntary self-identification.
+ *
+ * ApplyFlow never fills these onto an application — the refusal is
+ * unconditional. This exists so the candidate can see, correct and withdraw
+ * what is stored.
+ */
+export interface EeoSelfIdentification {
+  gender_identity: string | null;
+  race_ethnicity: string | null;
+  veteran_status: string | null;
+  disability_status: string | null;
+  source: string | null;
+  consent_granted: boolean;
+}
+
+export interface EeoSelfIdentificationInput {
+  gender_identity?: string | null;
+  race_ethnicity?: string | null;
+  veteran_status?: string | null;
+  disability_status?: string | null;
+  consent_acknowledged: boolean;
+}

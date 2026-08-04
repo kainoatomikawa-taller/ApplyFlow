@@ -5,6 +5,7 @@ import { AccessTokenField } from './components/AccessTokenField';
 import { ApplicationForm } from './components/ApplicationForm';
 import { ApplicationList } from './components/ApplicationList';
 import { ApplicationTracker } from './components/ApplicationTracker';
+import { ProfileEditor } from './components/ProfileEditor';
 import { JobMatchList } from './components/JobMatchList';
 import { StatusBanner } from './components/StatusBanner';
 import { TailoringReview } from './components/TailoringReview';
@@ -26,6 +27,10 @@ export function App() {
   >({});
   const [busyJobIds, setBusyJobIds] = useState<Set<string>>(new Set());
   const [tailoringJobId, setTailoringJobId] = useState<string | null>(null);
+  // Two top-level areas so far: the application flow and the profile. A tab
+  // switch rather than a router — four areas at most does not earn a dependency,
+  // and the review flow already takes over the page the same way.
+  const [tab, setTab] = useState<'applications' | 'profile'>('applications');
   // Bumped when the token changes, so the loaders below re-run against it.
   const [authGeneration, setAuthGeneration] = useState(0);
 
@@ -111,12 +116,36 @@ export function App() {
       <StatusBanner />
       <AccessTokenField onChange={() => setAuthGeneration((n) => n + 1)} />
 
+      {/* Hidden while a review is open, for the same reason the match list is:
+          reviewing an application is a focused task and navigating away from it
+          mid-way loses the decisions already made. */}
+      {tailoringJob === null ? (
+        <nav className="tabs">
+          <button
+            type="button"
+            className={tab === 'applications' ? 'tab tab-active' : 'tab'}
+            onClick={() => setTab('applications')}
+          >
+            Applications
+          </button>
+          <button
+            type="button"
+            className={tab === 'profile' ? 'tab tab-active' : 'tab'}
+            onClick={() => setTab('profile')}
+          >
+            Profile
+          </button>
+        </nav>
+      ) : null}
+
+      {tailoringJob === null && tab === 'profile' ? <ProfileEditor /> : null}
+
       {/* The review flow takes over the page while it is open: it is a
           focused task, and the match list behind it is what the candidate
           just chose from. */}
       {tailoringJob !== null ? (
         <TailoringReview job={tailoringJob} onClose={() => setTailoringJobId(null)} />
-      ) : (
+      ) : tab === 'applications' ? (
         <>
           {error && <p className="error">{error}</p>}
 
@@ -140,7 +169,7 @@ export function App() {
             onTailor={setTailoringJobId}
           />
         </>
-      )}
+      ) : null}
     </div>
   );
 }

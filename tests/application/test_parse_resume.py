@@ -22,6 +22,7 @@ from src.application.use_cases.parse_resume import ParseResume
 from src.application.use_cases.upload_resume import UploadResume
 from src.domain.entities.skill import Skill
 from src.domain.entities.user_profile import UserProfile
+from src.domain.entities.work_history_entry import WorkHistoryEntry
 from src.domain.exceptions import ProfileMissingContactInfoError, ResumeNotFoundError
 from src.domain.repositories.profile_repository import ProfileRepository
 from src.domain.repositories.resume_repository import ResumeRepository
@@ -308,3 +309,198 @@ async def test_parse_resume_raises_not_found_for_someone_elses_resume():
             resume_parser=parser,
             id_generator=SequentialIdGenerator(),
         ).execute(uploaded.id, "someone-else")
+
+
+# ---- Re-parsing must not duplicate history ----------------------------------
+#
+# Parsing is now one of two ways history gets onto a profile, and the two are meant
+# to be combinable: type in the jobs a résumé missed, upload the résumé for the
+# rest. That makes duplicate-on-merge a user-visible defect rather than a
+# theoretical one — and it was already a real one, since parsing appended
+# unconditionally and nothing could delete an entry.
+
+
+def _one_job(
+    *,
+    company: str = "Acme",
+    title: str = "Engineer",
+    start: date = date(2020, 1, 1),
+) -> ParsedWorkHistoryEntry:
+    return ParsedWorkHistoryEntry(
+        company_name=company, job_title=title, start_date=start
+    )
+
+
+def _parsed(**overrides) -> ParsedResumeData:
+    defaults = {"full_name": "Jane Doe", "email": "jane@example.com"}
+    return ParsedResumeData(**{**defaults, **overrides})
+
+
+async def _parse(profile_repo, parsed: ParsedResumeData):
+    """One parse pass against `profile_repo`, with a fresh resume and generator.
+
+    A fresh `SequentialIdGenerator` per call means a second pass mints the same ids
+    as the first. That is harmless *because* the dedup runs on content before any
+    entry is added — if it regressed, the duplicate-id guard on `add_work_history`
+    would raise, which is a second way these tests would notice.
+    """
+    resume_repo = InMemoryResumeRepo()
+    uploaded = await _seed_resume(resume_repo)
+    return await ParseResume(
+        resume_repository=resume_repo,
+        profile_repository=profile_repo,
+        resume_parser=FakeResumeParser(parsed),
+        id_generator=SequentialIdGenerator(),
+    ).execute(uploaded.id, "user-1")
+
+
+@pytest.mark.asyncio
+async def test_re_parsing_the_same_resume_does_not_duplicate_work_history():
+    """The defect this closes: uploading the same résumé twice doubled the
+    candidate's employment history, and nothing could remove the copy."""
+    profile_repo = InMemoryProfileRepo()
+    parsed = _parsed(work_history=[_one_job()])
+
+    await _parse(profile_repo, parsed)
+    await _parse(profile_repo, parsed)
+
+    stored = await profile_repo.get_by_user_id("user-1")
+    assert stored is not None
+    assert len(stored.work_history) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_resume_listing_the_same_job_twice_stores_it_once():
+    """Deduped within one batch as well as against the profile — the same two
+    reasons the skills merge has always done it."""
+    profile_repo = InMemoryProfileRepo()
+    await _parse(profile_repo, _parsed(work_history=[_one_job(), _one_job()]))
+
+    stored = await profile_repo.get_by_user_id("user-1")
+    assert stored is not None
+    assert len(stored.work_history) == 1
+
+
+@pytest.mark.asyncio
+async def test_casing_and_spacing_do_not_defeat_the_work_history_dedup():
+    """Normalized with the same helper the job-dedup logic uses, so "ACME  Corp"
+    and "Acme Corp" are one employer."""
+    profile_repo = InMemoryProfileRepo()
+    await _parse(
+        profile_repo,
+        _parsed(work_history=[_one_job(company="ACME  Corp", title="Engineer")]),
+    )
+    await _parse(
+        profile_repo,
+        _parsed(work_history=[_one_job(company="Acme Corp", title="engineer")]),
+    )
+
+    stored = await profile_repo.get_by_user_id("user-1")
+    assert stored is not None
+    assert len(stored.work_history) == 1
+
+
+@pytest.mark.asyncio
+async def test_two_stints_at_the_same_employer_are_kept_apart():
+    """The start date is in the dedup key deliberately: contract-then-permanent in
+    the same role is two real entries, and over-merging silently deletes history
+    the candidate may have typed."""
+    profile_repo = InMemoryProfileRepo()
+    await _parse(
+        profile_repo,
+        _parsed(
+            work_history=[
+                _one_job(start=date(2018, 1, 1)),
+                _one_job(start=date(2021, 6, 1)),
+            ]
+        ),
+    )
+
+    stored = await profile_repo.get_by_user_id("user-1")
+    assert stored is not None
+    assert len(stored.work_history) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_promotion_is_not_merged_into_the_role_it_followed():
+    """ "Engineer" and "Senior Engineer" stay separate even at one company on one
+    start date — which is why the key is an exact normalized title rather than the
+    substring-tolerant `titles_match`."""
+    profile_repo = InMemoryProfileRepo()
+    await _parse(
+        profile_repo,
+        _parsed(
+            work_history=[
+                _one_job(title="Engineer"),
+                _one_job(title="Senior Engineer"),
+            ]
+        ),
+    )
+
+    stored = await profile_repo.get_by_user_id("user-1")
+    assert stored is not None
+    assert len(stored.work_history) == 2
+
+
+@pytest.mark.asyncio
+async def test_re_parsing_does_not_duplicate_education():
+    profile_repo = InMemoryProfileRepo()
+    parsed = _parsed(
+        education=[
+            ParsedEducationEntry(
+                institution_name="State University",
+                degree="BSc",
+                start_date=date(2014, 9, 1),
+            )
+        ]
+    )
+
+    await _parse(profile_repo, parsed)
+    await _parse(profile_repo, parsed)
+
+    stored = await profile_repo.get_by_user_id("user-1")
+    assert stored is not None
+    assert len(stored.education) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_hand_typed_job_survives_a_later_resume_upload_unduplicated():
+    """The combination flow this dedup exists for, and the provenance check that
+    makes it worth doing per entry: the job the candidate typed keeps saying they
+    typed it, rather than being replaced by a parsed copy."""
+    profile_repo = InMemoryProfileRepo()
+    typed = UserProfile(
+        id="profile-1",
+        user_id="user-1",
+        full_name="Jane Doe",
+        email=EmailAddress("jane@example.com"),
+        contact_source=ProvenanceSource.USER_ENTERED,
+    )
+    typed.add_work_history(
+        WorkHistoryEntry(
+            id="typed-1",
+            company_name="Acme",
+            job_title="Engineer",
+            start_date=date(2020, 1, 1),
+            source=ProvenanceSource.USER_ENTERED,
+        )
+    )
+    await profile_repo.add(typed)
+
+    await _parse(
+        profile_repo,
+        _parsed(
+            work_history=[
+                _one_job(),
+                _one_job(
+                    company="Globex", title="Platform Engineer", start=date(2022, 3, 1)
+                ),
+            ]
+        ),
+    )
+
+    stored = await profile_repo.get_by_user_id("user-1")
+    assert stored is not None
+    assert len(stored.work_history) == 2, "the new job lands, the known one does not"
+    known = next(e for e in stored.work_history if e.company_name == "Acme")
+    assert known.source is ProvenanceSource.USER_ENTERED

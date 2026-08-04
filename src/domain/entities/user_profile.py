@@ -19,13 +19,19 @@ actually carries data; see `_validate_optional_source`).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Protocol
 
 from src.domain.entities.education_entry import EducationEntry
 from src.domain.entities.skill import Skill
 from src.domain.entities.work_history_entry import WorkHistoryEntry
-from src.domain.exceptions import BusinessRuleViolationError, InvalidValueError
+from src.domain.exceptions import (
+    BusinessRuleViolationError,
+    InvalidValueError,
+    ProfileEntryNotFoundError,
+)
 from src.domain.value_objects.address import Address
 from src.domain.value_objects.clearance_level import ClearanceLevel
 from src.domain.value_objects.degree_level import DegreeLevel
@@ -38,6 +44,19 @@ from src.domain.value_objects.work_authorization import WorkAuthorization
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+class _HasEntryId(Protocol):
+    """What `_index_of` needs of a list entry: an id to match on.
+
+    A structural type rather than a shared base class, so `WorkHistoryEntry`,
+    `EducationEntry` and `Skill` stay independent of each other — they have
+    nothing else in common and giving them a common ancestor for the sake of one
+    private lookup would be inheritance for a helper's convenience.
+    """
+
+    @property
+    def id(self) -> str: ...
 
 
 @dataclass
@@ -55,6 +74,22 @@ class UserProfile:
     phone: str | None = None
     headline: str | None = None
     location: str | None = None
+    #: The other two names an application form asks for, both optional and both
+    #: covered by `contact_source` like the rest of this group.
+    #:
+    #: Blank means something definite in each case, and the two meanings differ:
+    #:
+    #: - `middle_name` blank means "I have no middle name". A form asking for one
+    #:   gets nothing written into it rather than being handed back — see
+    #:   `profile_field_values`, which is where that reading is applied.
+    #: - `preferred_name` blank means "the same name I go by legally", so the
+    #:   slot falls back to the first name derived from `full_name`.
+    #:
+    #: Neither is guessed from the other. Storing the absence as a real answer is
+    #: what keeps an optional field from becoming a question on every
+    #: application.
+    middle_name: str | None = None
+    preferred_name: str | None = None
     address: Address = field(default_factory=Address)
     address_source: ProvenanceSource | None = None
     links: ProfileLinks = field(default_factory=ProfileLinks)
@@ -116,6 +151,51 @@ class UserProfile:
             raise InvalidValueError(f"{field_label} must be a valid ProvenanceSource.")
 
     # ---- Behaviors (business rules live here) --------------------------------
+
+    def set_contact_details(
+        self,
+        *,
+        full_name: str,
+        email: EmailAddress,
+        source: ProvenanceSource,
+        phone: str | None = None,
+        headline: str | None = None,
+        location: str | None = None,
+        middle_name: str | None = None,
+        preferred_name: str | None = None,
+    ) -> None:
+        """Replace the contact group in one call.
+
+        A setter rather than direct attribute assignment for the reason every
+        other mutator here exists: these seven fields share one
+        `contact_source`, and writing one of them without the others' knowledge
+        would leave that tag describing a mix of provenances. Assigning the
+        attributes directly also skips `_touch()`, so `updated_at` would go
+        stale — which it silently did before this method existed, since nothing
+        in the codebase could write these fields at all.
+
+        `source` is required, not optional. Unlike address and links, this group
+        is never empty — `full_name` and `email` are mandatory on the aggregate —
+        so there is no "nothing to attribute" case to allow.
+
+        Keyword-only, because seven mostly-optional strings in a row is exactly
+        the signature where a positional call puts a location into a headline.
+        """
+        if not full_name.strip():
+            raise InvalidValueError("full_name cannot be empty.")
+        if not isinstance(source, ProvenanceSource):
+            raise InvalidValueError(
+                "set_contact_details requires a valid ProvenanceSource."
+            )
+        self.full_name = full_name
+        self.email = email
+        self.contact_source = source
+        self.phone = phone
+        self.headline = headline
+        self.location = location
+        self.middle_name = middle_name
+        self.preferred_name = preferred_name
+        self._touch()
 
     def set_address(
         self, address: Address, source: ProvenanceSource | None = None
@@ -200,6 +280,81 @@ class UserProfile:
             )
         self.skills.append(skill)
         self._touch()
+
+    # ---- Editing and removing list entries -----------------------------------
+    #
+    # The counterparts to the three `add_*` methods above. Until an editable
+    # profile existed, a résumé parse could only ever append, so nothing needed
+    # these — which is also why a mis-parsed job title was uncorrectable.
+    #
+    # Each `update_*` replaces an entry in place, keeping its position, and each
+    # raises when the id names nothing. Refusing rather than appending matters:
+    # an update against a stale id is a caller working from a list that has since
+    # changed, and silently adding a second entry is the one outcome nobody
+    # wants from a save button labelled "edit".
+
+    def update_work_history(self, entry: WorkHistoryEntry) -> None:
+        """Replace the work-history entry with the same id."""
+        self.work_history[
+            self._index_of(self.work_history, entry.id, "Work history")
+        ] = entry
+        self._touch()
+
+    def remove_work_history(self, entry_id: str) -> None:
+        """Remove the work-history entry with this id."""
+        del self.work_history[
+            self._index_of(self.work_history, entry_id, "Work history")
+        ]
+        self._touch()
+
+    def update_education(self, entry: EducationEntry) -> None:
+        """Replace the education entry with the same id."""
+        self.education[self._index_of(self.education, entry.id, "Education")] = entry
+        self._touch()
+
+    def remove_education(self, entry_id: str) -> None:
+        """Remove the education entry with this id."""
+        del self.education[self._index_of(self.education, entry_id, "Education")]
+        self._touch()
+
+    def update_skill(self, skill: Skill) -> None:
+        """Replace the skill with the same id.
+
+        Re-checks the case-insensitive name rule `add_skill` enforces, against
+        every *other* skill — so renaming "python" to "Java" when a "Java"
+        already exists is refused, while renaming it to "Python" (its own name,
+        recased) is not.
+        """
+        index = self._index_of(self.skills, skill.id, "Skill")
+        renamed = skill.name.strip().lower()
+        if any(
+            other.name.strip().lower() == renamed
+            for position, other in enumerate(self.skills)
+            if position != index
+        ):
+            raise BusinessRuleViolationError(
+                f"Skill '{skill.name}' already exists on this profile."
+            )
+        self.skills[index] = skill
+        self._touch()
+
+    def remove_skill(self, skill_id: str) -> None:
+        """Remove the skill with this id."""
+        del self.skills[self._index_of(self.skills, skill_id, "Skill")]
+        self._touch()
+
+    @staticmethod
+    def _index_of(entries: Sequence[_HasEntryId], entry_id: str, label: str) -> int:
+        """Where `entry_id` sits in `entries`, or raise.
+
+        Generic over the three list types rather than accepting a union of them,
+        because iterating a union widens the element to `object` and loses the
+        `id` the lookup is for.
+        """
+        for index, entry in enumerate(entries):
+            if entry.id == entry_id:
+                return index
+        raise ProfileEntryNotFoundError(label, entry_id)
 
     def _touch(self) -> None:
         self.updated_at = _utcnow()

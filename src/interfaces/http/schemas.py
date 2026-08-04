@@ -78,7 +78,34 @@ class SkillResponse(BaseModel):
     source: str
 
 
+class AddressResponse(BaseModel):
+    street_address: str | None = None
+    city: str | None = None
+    state_or_region: str | None = None
+    postal_code: str | None = None
+    country: str | None = None
+    source: str | None = None
+
+
+class ProfileLinksResponse(BaseModel):
+    portfolio_url: str | None = None
+    linkedin_url: str | None = None
+    github_url: str | None = None
+    source: str | None = None
+
+
+class QualificationsResponse(BaseModel):
+    clearance_level: str | None = None
+    highest_degree: str | None = None
+
+
 class ProfileResponse(BaseModel):
+    """The whole profile, minus the EEO record — that has its own endpoint.
+
+    `middle_name` and `preferred_name` are optional and defaulted, so the
+    résumé-parse response (which does not set them) keeps its shape.
+    """
+
     id: str
     user_id: str
     full_name: str
@@ -89,9 +116,14 @@ class ProfileResponse(BaseModel):
     location: str | None
     created_at: datetime
     updated_at: datetime
-    work_history: list[WorkHistoryResponse]
-    education: list[EducationResponse]
-    skills: list[SkillResponse]
+    middle_name: str | None = None
+    preferred_name: str | None = None
+    address: AddressResponse | None = None
+    links: ProfileLinksResponse | None = None
+    qualifications: QualificationsResponse | None = None
+    work_history: list[WorkHistoryResponse] = Field(default_factory=list)
+    education: list[EducationResponse] = Field(default_factory=list)
+    skills: list[SkillResponse] = Field(default_factory=list)
 
 
 class JobRequirementsResponse(BaseModel):
@@ -818,3 +850,153 @@ class ErasureReceiptResponse(BaseModel):
     retained: list[DeferredCategoryResponse] = Field(default_factory=list)
     consents_withdrawn: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
+
+
+# -- Profile editor ----------------------------------------------------------
+#
+# One request schema per section, matching the per-section endpoints. Each `PUT`
+# fully replaces its own section, so an omitted field is cleared — that is how a
+# candidate deletes a phone number or an address, and it is why these are not
+# partial patches.
+#
+# Shape validation only. The business rules stay in the domain: dates ordering on
+# a work-history entry, the unique-skill rule, and "a source is required once a
+# group carries data" are all enforced there and would drift if restated here.
+
+
+class ContactDetailsRequest(BaseModel):
+    """The contact section — and the one that creates a profile.
+
+    `full_name` and `email` are the only mandatory fields on the whole profile,
+    which is what makes this section able to bring one into existence for a
+    candidate who has no résumé to parse.
+    """
+
+    full_name: str = Field(min_length=1, max_length=255)
+    email: EmailStr
+    phone: str | None = Field(default=None, max_length=32)
+    headline: str | None = Field(default=None, max_length=255)
+    location: str | None = Field(default=None, max_length=255)
+    #: Leaving these blank means something definite: no middle name, and no
+    #: preferred name distinct from the legal one. See `UserProfile`.
+    middle_name: str | None = Field(default=None, max_length=255)
+    preferred_name: str | None = Field(default=None, max_length=255)
+
+
+class AddressRequest(BaseModel):
+    street_address: str | None = Field(default=None, max_length=255)
+    city: str | None = Field(default=None, max_length=255)
+    state_or_region: str | None = Field(default=None, max_length=255)
+    postal_code: str | None = Field(default=None, max_length=32)
+    country: str | None = Field(default=None, max_length=255)
+
+
+class ProfileLinksRequest(BaseModel):
+    portfolio_url: str | None = Field(default=None, max_length=2048)
+    linkedin_url: str | None = Field(default=None, max_length=2048)
+    github_url: str | None = Field(default=None, max_length=2048)
+
+
+class QualificationsRequest(BaseModel):
+    """Clearance and highest degree — used for matching, never for filling forms.
+
+    Both are enum values; an unrecognized one is a 422 from the use case rather
+    than being silently dropped, because a discarded clearance level would read
+    as "not stated" and change which jobs are shown.
+    """
+
+    clearance_level: str | None = None
+    highest_degree: str | None = None
+
+
+class WorkHistoryRequest(BaseModel):
+    company_name: str = Field(min_length=1, max_length=255)
+    job_title: str = Field(min_length=1, max_length=255)
+    start_date: date
+    end_date: date | None = None
+    location: str | None = Field(default=None, max_length=255)
+    description: str | None = None
+
+
+class EducationRequest(BaseModel):
+    institution_name: str = Field(min_length=1, max_length=255)
+    degree: str = Field(min_length=1, max_length=255)
+    field_of_study: str | None = Field(default=None, max_length=255)
+    start_date: date | None = None
+    end_date: date | None = None
+    description: str | None = None
+
+
+class SkillRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    proficiency: str | None = None
+    years_of_experience: int | None = Field(default=None, ge=0, le=80)
+
+
+class WorkAuthorizationRequest(BaseModel):
+    """The legal declarations, plus the acknowledgement that stores them.
+
+    `consent_acknowledged` must be true to save data — this is GDPR Art. 9
+    special-category data, and explicit consent means a clear affirmative action
+    rather than an inference from the request arriving. The UI renders it as a box
+    beside the notice text, so it is one form and one submit.
+
+    `status: null` clears the record, and clearing needs no acknowledgement:
+    consent is required to store this data, not to delete it.
+    """
+
+    status: str | None = None
+    citizenship_country: str | None = Field(default=None, max_length=255)
+    visa_type: str | None = Field(default=None, max_length=64)
+    requires_sponsorship: bool | None = None
+    details: str | None = None
+    consent_acknowledged: bool = False
+
+
+class WorkAuthorizationResponse(BaseModel):
+    """The stored record, plus the two things a candidate needs to make sense of it.
+
+    `is_candidate_attested` is why a résumé-derived record still gets handed back
+    on every form: only the candidate's own statement may be asserted to an
+    employer on their behalf. `consent_granted` lets the editor pre-tick the box
+    for someone who has already agreed.
+    """
+
+    status: str | None = None
+    citizenship_country: str | None = None
+    visa_type: str | None = None
+    requires_sponsorship: bool | None = None
+    details: str | None = None
+    source: str | None = None
+    is_candidate_attested: bool = False
+    consent_granted: bool = False
+
+
+class EeoSelfIdentificationRequest(BaseModel):
+    """Voluntary self-identification. Same acknowledgement rule as above.
+
+    Every category is independently optional, and omitting one means "I did not
+    answer this" — distinct from `decline_to_self_identify`, which is an answer.
+    All-empty clears the record.
+    """
+
+    gender_identity: str | None = None
+    race_ethnicity: str | None = None
+    veteran_status: str | None = None
+    disability_status: str | None = None
+    consent_acknowledged: bool = False
+
+
+class EeoSelfIdentificationResponse(BaseModel):
+    """The stored EEO record, for the candidate's own view and the data export.
+
+    ApplyFlow never fills these onto an application — that refusal is
+    unconditional. This response must not be handed to anything that fills forms.
+    """
+
+    gender_identity: str | None = None
+    race_ethnicity: str | None = None
+    veteran_status: str | None = None
+    disability_status: str | None = None
+    source: str | None = None
+    consent_granted: bool = False

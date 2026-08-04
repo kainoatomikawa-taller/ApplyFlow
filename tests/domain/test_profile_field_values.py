@@ -209,13 +209,74 @@ def test_a_whitespace_only_stored_value_counts_as_absent(blank):
     assert resolve_profile_field(profile, Slot.PHONE) is None
 
 
-@pytest.mark.parametrize(
-    "slot", [Slot.MIDDLE_NAME, Slot.PREFERRED_NAME, Slot.ADDRESS_LINE_2]
-)
-def test_slots_no_profile_data_answers_return_none(full_profile, slot):
-    """These exist to be recognized and declined — see the module docstring
-    on `ApplicationFieldSlot`."""
-    assert resolve_profile_field(full_profile, slot) is None
+def test_address_line_2_is_recognized_and_declined(full_profile):
+    """Still exists to be recognized and declined — the profile stores one
+    street-address line, so there is nothing to answer a second with.
+
+    `MIDDLE_NAME` and `PREFERRED_NAME` used to be tested here alongside it. The
+    profile now stores both, and they have their own tests below.
+    """
+    assert resolve_profile_field(full_profile, Slot.ADDRESS_LINE_2) is None
+
+
+# ---- The two "other names", and what their absence means --------------------
+#
+# These are the only slots whose *empty* answer is a real answer rather than a
+# gap, so they get their own section.
+
+
+def test_a_stated_middle_name_is_answered_verbatim():
+    profile = make_profile(middle_name="Andrew")
+    resolved = resolve_profile_field(profile, Slot.MIDDLE_NAME)
+    assert resolved is not None
+    assert resolved.text == "Andrew"
+    assert not resolved.is_derived
+
+
+def test_no_middle_name_answers_empty_rather_than_none():
+    """The decision that keeps a person with no middle name from being asked
+    about it on every application: blank on the profile means "I have none", so
+    the slot is *answered* with nothing rather than left unanswerable.
+
+    `None` here would mean "the profile cannot say", which surfaces the field
+    every single time. The planner is what turns this empty answer into a blank
+    box — and what still surfaces it if the portal marks the field required.
+    """
+    resolved = resolve_profile_field(make_profile(), Slot.MIDDLE_NAME)
+    assert resolved is not None, "an absent middle name is an answer, not a gap"
+    assert resolved.text == ""
+
+
+def test_a_stated_preferred_name_is_answered_verbatim():
+    profile = make_profile(full_name="Michael Andrew Smith", preferred_name="Mike")
+    resolved = resolve_profile_field(profile, Slot.PREFERRED_NAME)
+    assert resolved is not None
+    assert resolved.text == "Mike"
+    assert not resolved.is_derived
+
+
+def test_no_preferred_name_falls_back_to_the_first_name():
+    """Blank means "the same name I go by legally" — and for a preferred-name
+    field that is the *first* name, not the whole legal name: these boxes expect
+    "Michael", not "Michael Andrew Smith".
+
+    Flagged derived, like first and last name, so a review screen can show that
+    ApplyFlow chose how to present the candidate's data rather than reading a
+    field they filled.
+    """
+    profile = make_profile(full_name="Michael Andrew Smith")
+    resolved = resolve_profile_field(profile, Slot.PREFERRED_NAME)
+    assert resolved is not None
+    assert resolved.text == "Michael Andrew"
+    assert resolved.is_derived
+
+
+def test_a_single_token_name_cannot_answer_the_preferred_name_slot():
+    """The fallback goes through the same name split as first/last name, which
+    declines a one-token name — there is no family name to separate off, so
+    nothing is inferred."""
+    profile = make_profile(full_name="Prince")
+    assert resolve_profile_field(profile, Slot.PREFERRED_NAME) is None
 
 
 @pytest.mark.parametrize("slot", [Slot.RESUME, Slot.COVER_LETTER])
@@ -369,10 +430,38 @@ def test_a_between_jobs_candidate_answers_with_their_most_recent_role():
 # ---- Coverage of the enum ---------------------------------------------------
 
 
+#: The one slot whose answer may legitimately be an empty string: a blank
+#: `middle_name` is the candidate stating they have none. Every other slot must
+#: either answer with real text or answer None — an empty string anywhere else
+#: would be a placeholder reaching a form, which is what this test exists to
+#: prevent.
+_MAY_ANSWER_EMPTY = frozenset({ApplicationFieldSlot.MIDDLE_NAME})
+
+
 def test_every_slot_is_accounted_for(full_profile):
     """No slot may raise, and none may return a value on a profile that
     doesn't back it — the enum and the resolver table cannot drift apart
     without this failing."""
     for slot in ApplicationFieldSlot:
         resolved = resolve_profile_field(full_profile, slot)
-        assert resolved is None or resolved.text.strip()
+        if resolved is None:
+            continue
+        if slot in _MAY_ANSWER_EMPTY:
+            continue
+        assert resolved.text.strip(), f"{slot} answered with blank text"
+
+
+def test_only_the_middle_name_slot_may_answer_with_nothing():
+    """Pins the exemption above so it cannot quietly widen. An empty answer means
+    "I have none of this", and that reading is only true for a middle name — for
+    a phone number or a postal code it would put a blank into a form and report
+    it as filled."""
+    profile = make_profile()
+    for slot in ApplicationFieldSlot:
+        if slot in _MAY_ANSWER_EMPTY:
+            continue
+        resolved = resolve_profile_field(profile, slot)
+        assert resolved is None or resolved.text.strip(), (
+            f"{slot} answered with an empty string; only "
+            f"{sorted(_MAY_ANSWER_EMPTY)} may do that"
+        )

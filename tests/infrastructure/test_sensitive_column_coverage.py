@@ -367,10 +367,11 @@ def test_the_free_text_walk_finds_the_columns_it_should() -> None:
 def test_the_flag_and_encryption_checks_agree_on_the_known_column_set() -> None:
     """Pins the actual coverage, so an accidental mass-unflagging shows up as a
     number rather than as two empty sets agreeing with each other. The count is
-    30 as of migration 0023: 28 from 0021 plus `tailored_cover_letter` and
-    `application_status_events.note`."""
+    32 as of migration 0024: 28 from 0021, plus `tailored_cover_letter` and
+    `application_status_events.note` (0023), plus `middle_name` and
+    `preferred_name` (0024)."""
     assert _flagged() == _encrypted()
-    assert len(_flagged()) == 30, (
+    assert len(_flagged()) == 32, (
         f"Sensitive column count changed to {len(_flagged())}. If that is "
         "intended, update this number — and check the new column also has a "
         "migration, a log-guard decision "

@@ -280,3 +280,26 @@ class UnknownPersonalDataCategoryError(DomainError):
             "holding personal data has to be declared in "
             "src/domain/services/personal_data_inventory.py."
         )
+
+
+class ProfileEntryNotFoundError(DomainError):
+    """Raised when an edit or delete named a work-history, education, or skill
+    entry that is not on the profile.
+
+    Refused rather than treated as an insert. An update against an id the
+    profile does not hold is a caller working from a list that has since
+    changed — a second browser tab, a stale render — and quietly appending a
+    duplicate is the one outcome nobody expects from a control labelled "edit".
+
+    Carries the kind of entry and its id, both of which are safe to log: an
+    entry id says nothing about the person, unlike the company name or job
+    title inside the entry.
+    """
+
+    def __init__(self, entry_kind: str, entry_id: str) -> None:
+        self.entry_kind = entry_kind
+        self.entry_id = entry_id
+        super().__init__(
+            f"{entry_kind} entry '{entry_id}' is not on this profile, so it "
+            "cannot be updated or removed."
+        )

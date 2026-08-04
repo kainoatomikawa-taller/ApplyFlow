@@ -275,8 +275,16 @@ decisions above. This is the list, in the order it would have to be done.
    directory discloses nothing by itself, but a reader of that directory reads
    résumés. Erasure already reaches these files; confidentiality at rest does
    not yet.
-6. **Enforce consent at the point of processing.** The ledger is recorded and
-   exported; nothing yet *checks* it. `AI_DOCUMENT_GENERATION` should gate the
+6. **Enforce consent at the point of processing.** *Partly done.* The two
+   sensitive profile sections — work authorization and EEO self-identification —
+   now require an explicit acknowledgement and record the grant for
+   `SENSITIVE_ATTRIBUTE_STORAGE` in the same request that stores the data (see
+   `SaveWorkAuthorization` and the profile editor section of the README). That was
+   the one site where the gate is unambiguous: the candidate is handing over
+   exactly the data the purpose describes, at exactly that moment.
+
+   The rest is still open. The ledger is recorded and exported; nothing else
+   *checks* it. `AI_DOCUMENT_GENERATION` should gate the
    generation use cases, `ANSWER_REUSE` the answer-memory writes,
    `AUTOMATED_PORTAL_INTERACTION` the browser paths. Deliberately not done here:
    a gate that silently changes behaviour is worth adding with its own tests and

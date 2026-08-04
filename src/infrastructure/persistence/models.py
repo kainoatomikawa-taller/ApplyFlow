@@ -225,10 +225,32 @@ class UserProfileModel(Base):
         info=_SENSITIVE_COLUMN_INFO,
         comment=_SENSITIVE_COMMENT,
     )
-    # Provenance for full_name/email/phone/headline/location as a bundle —
-    # see UserProfile's module docstring for why. Always required: those
-    # fields are always present once a profile exists. Not itself sensitive:
-    # "the candidate typed this" describes the fact without disclosing it.
+    #: SENSITIVE. The other two names an application form asks for. Encrypted
+    #: for the same reason `full_name` is — a middle name and the name someone
+    #: goes by are as identifying as the legal one, and a database holding all
+    #: three is not improved by protecting only the first.
+    #:
+    #: Both nullable, and NULL carries meaning rather than being an absence of
+    #: data: no middle name, and no preferred name distinct from the legal one.
+    #: See `UserProfile` for the two readings and `profile_field_values` for
+    #: where they are applied.
+    middle_name: Mapped[str | None] = mapped_column(
+        EncryptedString("user_profiles.middle_name"),
+        nullable=True,
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
+    )
+    preferred_name: Mapped[str | None] = mapped_column(
+        EncryptedString("user_profiles.preferred_name"),
+        nullable=True,
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
+    )
+    # Provenance for full_name/email/phone/headline/location plus the two names
+    # above, as a bundle — see UserProfile's module docstring for why. Always
+    # required: those fields are always present once a profile exists. Not
+    # itself sensitive: "the candidate typed this" describes the fact without
+    # disclosing it.
     contact_source: Mapped[str] = mapped_column(String(16), comment=_PROVENANCE_COMMENT)
     phone: Mapped[str | None] = mapped_column(
         EncryptedString("user_profiles.phone"),

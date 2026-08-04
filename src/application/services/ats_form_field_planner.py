@@ -174,6 +174,13 @@ class SurfaceReason(StrEnum):
     #: it. Actionable: filling in the profile fixes it for every future
     #: application.
     NO_PROFILE_DATA = "no_profile_data"
+    #: Recognized, and the profile's answer is positively *nothing* — "I have no
+    #: middle name" — but the portal marks the field required. Distinct from
+    #: `NO_PROFILE_DATA` because filling in the profile will not fix it: the
+    #: profile is already complete and the two simply disagree about whether an
+    #: answer exists. Only the candidate can settle that, which is why it is
+    #: surfaced rather than filled blank.
+    REQUIRED_WITH_NO_APPLICABLE_VALUE = "required_with_no_applicable_value"
     #: Recognized, and deliberately never autofilled: EEO self-identification
     #: (see `REQUIRES_CANDIDATE_ANSWER`). Not a gap in the profile and not
     #: something filling one in would fix — the candidate decides this per
@@ -409,6 +416,28 @@ class AtsFormFieldPlanner:
         resolved = resolve_profile_field(profile, slot)
         if resolved is None:
             return self._surface(field, SurfaceReason.NO_PROFILE_DATA, slot=slot)
+
+        # An empty answer is a real answer, not a gap: the profile is saying "I
+        # have none of this". Today only `MIDDLE_NAME` produces one — a blank
+        # middle name on the profile means the candidate has none, and a person
+        # with no middle name should not be asked about it on every application
+        # they fill.
+        #
+        # The one case that reading cannot cover is a field the portal marks
+        # required, where writing nothing fails the portal's own validation and
+        # the candidate has to decide what to put. So a required field gets
+        # surfaced with its own reason.
+        #
+        # `required=False` is treated as "fill it blank" deliberately, even
+        # though `FormField.required` warns that False means "not asserted"
+        # rather than "safe to leave blank". Writing an empty string into a
+        # field that turns out to be required produces exactly the outcome
+        # leaving it untouched would — the portal's validation on submit — so
+        # nothing is lost by trusting it here.
+        if not resolved.text and field.required:
+            return self._surface(
+                field, SurfaceReason.REQUIRED_WITH_NO_APPLICABLE_VALUE, slot=slot
+            )
 
         if field.kind not in _TEXT_VALUE_KINDS:
             return self._surface(field, SurfaceReason.UNSUPPORTED_FIELD_KIND, slot=slot)

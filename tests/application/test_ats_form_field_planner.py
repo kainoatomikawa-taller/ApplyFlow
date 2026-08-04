@@ -564,3 +564,90 @@ def test_no_field_is_ever_planned_without_a_disposition(planner, profile):
 
 def test_an_empty_form_plans_to_nothing(planner, profile):
     assert planner.plan((), provider=AtsProvider.ASHBY, profile=profile) == ()
+
+
+# ---- The "other names", and an answer that is deliberately empty ------------
+
+
+def test_a_stated_middle_name_is_filled(planner, profile):
+    profile.set_contact_details(
+        full_name="Dana Reyes",
+        email=profile.email,
+        source=ProvenanceSource.USER_ENTERED,
+        middle_name="Quinn",
+    )
+    plan = planner.plan(
+        (field("Middle name", handle="h-mid"),),
+        profile=profile,
+        provider=AtsProvider.GREENHOUSE,
+    )
+    assert plan[0].disposition is FieldDisposition.FILL
+    assert plan[0].value == "Quinn"
+
+
+def test_an_absent_middle_name_fills_the_optional_field_blank(planner, profile):
+    """The candidate has no middle name, so the answer is nothing — written as
+    nothing rather than handed back on every application they ever fill.
+
+    `FILL` with an empty value is deliberately how this is expressed: writing ""
+    into a text input is indistinguishable from leaving it alone, and reporting
+    it as filled says truthfully that ApplyFlow answered the question.
+    """
+    plan = planner.plan(
+        (field("Middle name", handle="h-mid"),),
+        profile=profile,
+        provider=AtsProvider.GREENHOUSE,
+    )
+    assert plan[0].disposition is FieldDisposition.FILL
+    assert plan[0].value == ""
+    assert plan[0].surface_reason is None
+
+
+def test_an_absent_middle_name_is_surfaced_when_the_portal_requires_it(
+    planner, profile
+):
+    """The one case the "blank means none" reading cannot cover. Writing nothing
+    into a field the portal insists on would fail its own validation, and only
+    the candidate can decide what to put there.
+
+    Its own reason rather than `NO_PROFILE_DATA`, because filling in the profile
+    will not fix it — the profile is already complete and the two disagree about
+    whether an answer exists.
+    """
+    plan = planner.plan(
+        (field("Middle name", handle="h-mid", required=True),),
+        profile=profile,
+        provider=AtsProvider.GREENHOUSE,
+    )
+    assert plan[0].disposition is FieldDisposition.SURFACE
+    assert plan[0].surface_reason is SurfaceReason.REQUIRED_WITH_NO_APPLICABLE_VALUE
+
+
+def test_a_preferred_name_field_falls_back_to_the_first_name(planner, profile):
+    """Blank preferred name means "the same name I go by legally", and for this
+    box that is the first name — flagged derived, since ApplyFlow chose how to
+    present the candidate's data."""
+    plan = planner.plan(
+        (field("Preferred name", handle="h-pref"),),
+        profile=profile,
+        provider=AtsProvider.GREENHOUSE,
+    )
+    assert plan[0].disposition is FieldDisposition.FILL
+    assert plan[0].value == "Dana"
+    assert plan[0].is_derived
+
+
+def test_a_stated_preferred_name_is_not_reported_as_derived(planner, profile):
+    profile.set_contact_details(
+        full_name="Dana Reyes",
+        email=profile.email,
+        source=ProvenanceSource.USER_ENTERED,
+        preferred_name="Dee",
+    )
+    plan = planner.plan(
+        (field("Preferred name", handle="h-pref"),),
+        profile=profile,
+        provider=AtsProvider.GREENHOUSE,
+    )
+    assert plan[0].value == "Dee"
+    assert not plan[0].is_derived

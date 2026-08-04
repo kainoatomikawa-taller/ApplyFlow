@@ -27,6 +27,7 @@ from src.interfaces.http.controllers import (
     job_match_feedback_controller,
     job_posting_controller,
     portal_handoff_controller,
+    profile_controller,
     resume_controller,
     tailored_resume_controller,
     tracked_application_controller,
@@ -87,6 +88,10 @@ def create_app() -> FastAPI:
     app.include_router(health_controller.router)
     app.include_router(application_controller.router)
     app.include_router(resume_controller.router)
+    # The profile editor. Registered next to resumes because the two are the
+    # only ways a profile comes into being, and the editor is now the primary
+    # one — a résumé is a shortcut, not a prerequisite.
+    app.include_router(profile_controller.router)
     app.include_router(job_posting_controller.router)
     app.include_router(job_match_feedback_controller.router)
     app.include_router(gap_resolution_controller.router)

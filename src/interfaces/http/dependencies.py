@@ -55,11 +55,16 @@ from src.application.use_cases.generate_gap_resolution_questions import (
 from src.application.use_cases.generate_tailored_resume import GenerateTailoredResume
 from src.application.use_cases.get_application_document import GetApplicationDocument
 from src.application.use_cases.get_application_review import GetApplicationReview
+from src.application.use_cases.get_eeo_self_identification import (
+    GetEeoSelfIdentification,
+)
 from src.application.use_cases.get_latest_application_document import (
     GetLatestApplicationDocument,
 )
+from src.application.use_cases.get_profile import GetProfile
 from src.application.use_cases.get_resume import GetResume
 from src.application.use_cases.get_tracked_application import GetTrackedApplication
+from src.application.use_cases.get_work_authorization import GetWorkAuthorization
 from src.application.use_cases.inspect_application_portal import (
     InspectApplicationPortal,
 )
@@ -83,12 +88,23 @@ from src.application.use_cases.rank_matched_job_postings import (
     RankMatchedJobPostings,
 )
 from src.application.use_cases.record_consent import RecordConsent
+from src.application.use_cases.remove_education_entry import RemoveEducationEntry
+from src.application.use_cases.remove_skill import RemoveSkill
+from src.application.use_cases.remove_work_history_entry import RemoveWorkHistoryEntry
 from src.application.use_cases.resolve_gap_answer import ResolveGapAnswer
 from src.application.use_cases.resume_portal_handoff import ResumePortalHandoff
 from src.application.use_cases.revise_generated_document import (
     ReviseGeneratedDocument,
 )
 from src.application.use_cases.revise_reviewed_answer import ReviseReviewedAnswer
+from src.application.use_cases.save_contact_details import SaveContactDetails
+from src.application.use_cases.save_education_entry import SaveEducationEntry
+from src.application.use_cases.save_eeo_self_identification import (
+    SaveEeoSelfIdentification,
+)
+from src.application.use_cases.save_skill import SaveSkill
+from src.application.use_cases.save_work_authorization import SaveWorkAuthorization
+from src.application.use_cases.save_work_history_entry import SaveWorkHistoryEntry
 from src.application.use_cases.submit_application_form import SubmitApplicationForm
 from src.application.use_cases.submit_application_review import (
     SubmitApplicationReview,
@@ -100,6 +116,11 @@ from src.application.use_cases.submit_job_match_feedback import (
     SubmitJobMatchFeedback,
 )
 from src.application.use_cases.update_application_status import UpdateApplicationStatus
+from src.application.use_cases.update_profile_address import UpdateProfileAddress
+from src.application.use_cases.update_profile_links import UpdateProfileLinks
+from src.application.use_cases.update_profile_qualifications import (
+    UpdateProfileQualifications,
+)
 from src.application.use_cases.upload_resume import UploadResume
 from src.domain.services.application_ranking_service import (
     ApplicationRankingService,
@@ -879,6 +900,135 @@ def get_list_user_consents_use_case(
     repository: SqlAlchemyConsentRepository = Depends(_consent_repository),
 ) -> ListUserConsents:
     return ListUserConsents(repository=repository)
+
+
+# -- Profile editor ----------------------------------------------------------
+#
+# One provider per section, matching the per-section endpoints. All of them share
+# the one request-scoped session, so a save is a single transaction.
+#
+# The two sensitive sections take the consent repository as well as the profile
+# one: saving work authorization or EEO records the consent grant in the same
+# operation (see `SaveWorkAuthorization`). Nothing here can switch that off — the
+# consent repository is not optional on those constructors.
+
+
+def get_profile_use_case(
+    repository: SqlAlchemyProfileRepository = Depends(_profile_repository),
+) -> GetProfile:
+    return GetProfile(repository=repository)
+
+
+def get_save_contact_details_use_case(
+    repository: SqlAlchemyProfileRepository = Depends(_profile_repository),
+) -> SaveContactDetails:
+    """The one section that can create a profile — see `SaveContactDetails`.
+
+    Takes the id generator for exactly that reason: creating needs an id, and the
+    other sections never create.
+    """
+    return SaveContactDetails(repository=repository, id_generator=UuidIdGenerator())
+
+
+def get_update_profile_address_use_case(
+    repository: SqlAlchemyProfileRepository = Depends(_profile_repository),
+) -> UpdateProfileAddress:
+    return UpdateProfileAddress(repository=repository)
+
+
+def get_update_profile_links_use_case(
+    repository: SqlAlchemyProfileRepository = Depends(_profile_repository),
+) -> UpdateProfileLinks:
+    return UpdateProfileLinks(repository=repository)
+
+
+def get_update_profile_qualifications_use_case(
+    repository: SqlAlchemyProfileRepository = Depends(_profile_repository),
+) -> UpdateProfileQualifications:
+    return UpdateProfileQualifications(repository=repository)
+
+
+def get_save_work_history_entry_use_case(
+    repository: SqlAlchemyProfileRepository = Depends(_profile_repository),
+) -> SaveWorkHistoryEntry:
+    return SaveWorkHistoryEntry(repository=repository, id_generator=UuidIdGenerator())
+
+
+def get_remove_work_history_entry_use_case(
+    repository: SqlAlchemyProfileRepository = Depends(_profile_repository),
+) -> RemoveWorkHistoryEntry:
+    return RemoveWorkHistoryEntry(repository=repository)
+
+
+def get_save_education_entry_use_case(
+    repository: SqlAlchemyProfileRepository = Depends(_profile_repository),
+) -> SaveEducationEntry:
+    return SaveEducationEntry(repository=repository, id_generator=UuidIdGenerator())
+
+
+def get_remove_education_entry_use_case(
+    repository: SqlAlchemyProfileRepository = Depends(_profile_repository),
+) -> RemoveEducationEntry:
+    return RemoveEducationEntry(repository=repository)
+
+
+def get_save_skill_use_case(
+    repository: SqlAlchemyProfileRepository = Depends(_profile_repository),
+) -> SaveSkill:
+    return SaveSkill(repository=repository, id_generator=UuidIdGenerator())
+
+
+def get_remove_skill_use_case(
+    repository: SqlAlchemyProfileRepository = Depends(_profile_repository),
+) -> RemoveSkill:
+    return RemoveSkill(repository=repository)
+
+
+def get_work_authorization_use_case(
+    profile_repository: SqlAlchemyProfileRepository = Depends(_profile_repository),
+    consent_repository: SqlAlchemyConsentRepository = Depends(_consent_repository),
+) -> GetWorkAuthorization:
+    return GetWorkAuthorization(
+        profile_repository=profile_repository,
+        consent_repository=consent_repository,
+    )
+
+
+def get_save_work_authorization_use_case(
+    profile_repository: SqlAlchemyProfileRepository = Depends(_profile_repository),
+    consent_repository: SqlAlchemyConsentRepository = Depends(_consent_repository),
+) -> SaveWorkAuthorization:
+    """The write path that makes the sensitive-field machinery live.
+
+    The consent repository is a required collaborator, not an optional one: this
+    stores special-category data, and the grant that permits it is recorded in the
+    same operation. There is no wiring here that could store the data without
+    recording the consent.
+    """
+    return SaveWorkAuthorization(
+        profile_repository=profile_repository,
+        consent_repository=consent_repository,
+    )
+
+
+def get_eeo_self_identification_use_case(
+    profile_repository: SqlAlchemyProfileRepository = Depends(_profile_repository),
+    consent_repository: SqlAlchemyConsentRepository = Depends(_consent_repository),
+) -> GetEeoSelfIdentification:
+    return GetEeoSelfIdentification(
+        profile_repository=profile_repository,
+        consent_repository=consent_repository,
+    )
+
+
+def get_save_eeo_self_identification_use_case(
+    profile_repository: SqlAlchemyProfileRepository = Depends(_profile_repository),
+    consent_repository: SqlAlchemyConsentRepository = Depends(_consent_repository),
+) -> SaveEeoSelfIdentification:
+    return SaveEeoSelfIdentification(
+        profile_repository=profile_repository,
+        consent_repository=consent_repository,
+    )
 
 
 def _auth_verifier() -> AuthVerifierPort:

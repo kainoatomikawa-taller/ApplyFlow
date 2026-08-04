@@ -106,6 +106,8 @@ class SqlAlchemyProfileRepository(ProfileRepository):
             email=str(entity.email),
             contact_source=entity.contact_source.value,
             phone=entity.phone,
+            middle_name=entity.middle_name,
+            preferred_name=entity.preferred_name,
             headline=entity.headline,
             location=entity.location,
             street_address=entity.address.street_address,
@@ -241,6 +243,8 @@ class SqlAlchemyProfileRepository(ProfileRepository):
         model.email = str(entity.email)
         model.contact_source = entity.contact_source.value
         model.phone = entity.phone
+        model.middle_name = entity.middle_name
+        model.preferred_name = entity.preferred_name
         model.headline = entity.headline
         model.location = entity.location
         model.street_address = entity.address.street_address
@@ -299,6 +303,8 @@ class SqlAlchemyProfileRepository(ProfileRepository):
             email=EmailAddress(model.email),
             contact_source=ProvenanceSource(model.contact_source),
             phone=model.phone,
+            middle_name=model.middle_name,
+            preferred_name=model.preferred_name,
             headline=model.headline,
             location=model.location,
             address=Address(

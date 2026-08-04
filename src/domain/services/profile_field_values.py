@@ -92,10 +92,11 @@ def resolve_profile_field(
 
     resolver = _RESOLVERS.get(slot)
     if resolver is None:
-        # A recognized slot with nothing in the profile that answers it —
-        # MIDDLE_NAME, PREFERRED_NAME, ADDRESS_LINE_2 — plus the document
-        # slots, which are answered from a stored `ApplicationDocument` and
-        # so are deliberately not this function's business.
+        # A recognized slot with nothing in the profile that answers it.
+        # MIDDLE_NAME and PREFERRED_NAME used to be here; the profile now holds
+        # both (see `_middle_name`/`_preferred_name`). What is left is the
+        # document slots, answered from a stored `ApplicationDocument` and so
+        # deliberately not this function's business.
         return None
     return resolver(profile)
 
@@ -115,6 +116,44 @@ def _first_name(profile: UserProfile) -> ProfileFieldValue | None:
 def _last_name(profile: UserProfile) -> ProfileFieldValue | None:
     split = _split_name(profile.full_name)
     return ProfileFieldValue(split[1], is_derived=True) if split else None
+
+
+def _middle_name(profile: UserProfile) -> ProfileFieldValue | None:
+    """The candidate's middle name, or a positive "I have none".
+
+    The empty answer is the interesting case. A blank `middle_name` on the
+    profile means the candidate has none — not that they forgot to tell us — so
+    this returns an *answered* value that happens to be empty rather than None.
+
+    The difference matters at the other end: None means "the profile cannot
+    answer this", which sends the question to the candidate on every application
+    they ever fill. An empty answer means "the answer is nothing", which leaves
+    the box blank and stops asking. Plenty of people have no middle name, and a
+    form field they must dismiss on every application is a worse outcome than a
+    field left empty.
+
+    `AtsFormFieldPlanner` is where that reading is acted on, including the one
+    case it cannot honor: a field the portal marks *required*, where writing
+    nothing would fail the portal's own validation and the candidate has to
+    decide what to put.
+    """
+    return ProfileFieldValue(profile.middle_name or "")
+
+
+def _preferred_name(profile: UserProfile) -> ProfileFieldValue | None:
+    """The name the candidate goes by, falling back to their first name.
+
+    A blank `preferred_name` means "the same name I go by legally", so the answer
+    is the first name split out of `full_name` — not the whole legal name. ATS
+    "preferred name" fields expect "Mike", not "Michael Andrew Smith".
+
+    Flagged derived in both the fallback case (assembled from `full_name`) and
+    never in the stated case, so a review screen can distinguish a name the
+    candidate typed from one inferred for them.
+    """
+    if profile.preferred_name:
+        return ProfileFieldValue(profile.preferred_name)
+    return _first_name(profile)
 
 
 def _split_name(full_name: str) -> tuple[str, str] | None:
@@ -300,6 +339,8 @@ _RESOLVERS: dict[ApplicationFieldSlot, _SlotResolver] = {
     ApplicationFieldSlot.FULL_NAME: _full_name,
     ApplicationFieldSlot.FIRST_NAME: _first_name,
     ApplicationFieldSlot.LAST_NAME: _last_name,
+    ApplicationFieldSlot.MIDDLE_NAME: _middle_name,
+    ApplicationFieldSlot.PREFERRED_NAME: _preferred_name,
     ApplicationFieldSlot.EMAIL: _email,
     ApplicationFieldSlot.PHONE: _phone,
     ApplicationFieldSlot.LOCATION: _location,

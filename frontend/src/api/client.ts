@@ -1,29 +1,41 @@
 import { getAccessToken } from './accessToken';
 import type {
+  AddressInput,
   AnswerAction,
   ApplicationAutofillReport,
   ApplicationReview,
   ApplicationSubmissionReceipt,
+  ContactDetailsInput,
   CreateApplicationInput,
   DocumentKind,
+  EducationInput,
+  EeoSelfIdentification,
+  EeoSelfIdentificationInput,
   FeedbackRating,
   GapResolutionQuestions,
   GuardedDocument,
   HealthStatus,
   JobApplication,
   JobMatchFeedback,
+  LinksInput,
   OpenApplicationReview,
   PortalHandoff,
   PortalHandoffList,
   PortalInspection,
+  Profile,
+  QualificationsInput,
   RankedJob,
   ResolvedGapAnswer,
+  SkillInput,
   StoredApplicationDocument,
   SubmittedApplicationReview,
   TailoredResume,
   TrackedApplication,
   TrackedApplicationList,
   TrackedApplicationStatus,
+  WorkAuthorization,
+  WorkAuthorizationInput,
+  WorkHistoryInput,
 } from '../types';
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? '';
@@ -400,5 +412,158 @@ export const applyFlowApi = {
       `/api/tracked-applications/${applicationId}/status`,
       { method: 'PATCH', body: JSON.stringify({ status, note }) },
     );
+  },
+  // ---- Profile -------------------------------------------------------------
+  //
+  // One call per section, matching the API. Saving a section returns the whole
+  // profile, so a component never has to merge a partial response into local
+  // state — it re-renders from what was stored.
+  //
+  // Every one of these 404s until the contact section has been saved, because
+  // `full_name` and `email` are the only mandatory fields on a profile and so
+  // contact is the section that creates it. That is what makes a résumé optional
+  // rather than the way in.
+
+  /** The whole profile minus EEO. Throws when none exists yet. */
+  getProfile(): Promise<Profile> {
+    return request<Profile>('/api/profile');
+  },
+
+  /**
+   * Create or update the contact section — the only call that works without an
+   * existing profile.
+   *
+   * Saving re-stamps the section as the candidate's own statement, so a profile
+   * built by parsing a résumé stops describing itself as parsed once they have
+   * confirmed it.
+   */
+  saveContactDetails(input: ContactDetailsInput): Promise<Profile> {
+    return request<Profile>('/api/profile/contact', {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    });
+  },
+
+  /** Replace the postal address. All-empty clears it. */
+  saveAddress(input: AddressInput): Promise<Profile> {
+    return request<Profile>('/api/profile/address', {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    });
+  },
+
+  /** Replace the links. All-empty clears them. */
+  saveLinks(input: LinksInput): Promise<Profile> {
+    return request<Profile>('/api/profile/links', {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    });
+  },
+
+  /** Clearance and highest degree — used for matching, never to fill a form. */
+  saveQualifications(input: QualificationsInput): Promise<Profile> {
+    return request<Profile>('/api/profile/qualifications', {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    });
+  },
+
+  addWorkHistory(input: WorkHistoryInput): Promise<Profile> {
+    return request<Profile>('/api/profile/work-history', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  },
+
+  updateWorkHistory(entryId: string, input: WorkHistoryInput): Promise<Profile> {
+    return request<Profile>(`/api/profile/work-history/${entryId}`, {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    });
+  },
+
+  removeWorkHistory(entryId: string): Promise<Profile> {
+    return request<Profile>(`/api/profile/work-history/${entryId}`, {
+      method: 'DELETE',
+    });
+  },
+
+  addEducation(input: EducationInput): Promise<Profile> {
+    return request<Profile>('/api/profile/education', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  },
+
+  updateEducation(entryId: string, input: EducationInput): Promise<Profile> {
+    return request<Profile>(`/api/profile/education/${entryId}`, {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    });
+  },
+
+  removeEducation(entryId: string): Promise<Profile> {
+    return request<Profile>(`/api/profile/education/${entryId}`, {
+      method: 'DELETE',
+    });
+  },
+
+  addSkill(input: SkillInput): Promise<Profile> {
+    return request<Profile>('/api/profile/skills', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  },
+
+  updateSkill(skillId: string, input: SkillInput): Promise<Profile> {
+    return request<Profile>(`/api/profile/skills/${skillId}`, {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    });
+  },
+
+  removeSkill(skillId: string): Promise<Profile> {
+    return request<Profile>(`/api/profile/skills/${skillId}`, {
+      method: 'DELETE',
+    });
+  },
+
+  getWorkAuthorization(): Promise<WorkAuthorization> {
+    return request<WorkAuthorization>('/api/profile/work-authorization');
+  },
+
+  /**
+   * Store the candidate's own work-authorization declarations.
+   *
+   * `consent_acknowledged` must be true to store anything — this is
+   * special-category data, kept only with an explicit agreement, and the grant is
+   * recorded in this same request. `status: null` clears the record and needs no
+   * acknowledgement: consent is required to store, not to delete.
+   */
+  saveWorkAuthorization(
+    input: WorkAuthorizationInput,
+  ): Promise<WorkAuthorization> {
+    return request<WorkAuthorization>('/api/profile/work-authorization', {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    });
+  },
+
+  getEeoSelfIdentification(): Promise<EeoSelfIdentification> {
+    return request<EeoSelfIdentification>('/api/profile/eeo');
+  },
+
+  /**
+   * Store voluntary self-identification. Changes nothing about what ApplyFlow
+   * puts on an application: these answers are refused unconditionally and stay
+   * the candidate's to give per application.
+   */
+  saveEeoSelfIdentification(
+    input: EeoSelfIdentificationInput,
+  ): Promise<EeoSelfIdentification> {
+    return request<EeoSelfIdentification>('/api/profile/eeo', {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    });
   },
 };

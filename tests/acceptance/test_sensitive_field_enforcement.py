@@ -46,7 +46,7 @@ left unfixed, are written up in `docs/sensitive-field-enforcement-check.md`.
 from __future__ import annotations
 
 import ast
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -56,6 +56,11 @@ from src.application.dtos.application_autofill_dtos import (
     FieldAutofillOutcome,
 )
 from src.application.dtos.application_review_dtos import AnswerApplicationFieldInput
+from src.application.dtos.profile_dtos import (
+    EeoSelfIdentificationInput,
+    WorkAuthorizationInput,
+)
+from src.application.exceptions import SensitiveStorageNotAcknowledgedError
 from src.application.ports.browser_automation_port import (
     FormField,
     FormFieldKind,
@@ -71,8 +76,15 @@ from src.application.services.ats_form_field_planner import (
 )
 from src.application.use_cases.answer_application_field import AnswerApplicationField
 from src.application.use_cases.autofill_application_form import AutofillApplicationForm
+from src.application.use_cases.save_eeo_self_identification import (
+    SaveEeoSelfIdentification,
+)
+from src.application.use_cases.save_work_authorization import SaveWorkAuthorization
+from src.domain.entities.consent_record import ConsentRecord
 from src.domain.entities.job_posting import JobPosting
 from src.domain.entities.user_profile import UserProfile
+from src.domain.repositories.consent_repository import ConsentRepository
+from src.domain.repositories.profile_repository import ProfileRepository
 from src.domain.services.ats_field_mapper import recognize_application_field
 from src.domain.services.candidate_fact_extractor import CandidateFactExtractor
 from src.domain.services.sensitive_field_policy import decide_sensitive_field
@@ -85,6 +97,7 @@ from src.domain.value_objects.application_field_slot import (
 )
 from src.domain.value_objects.ats_form_question import AtsFormQuestion
 from src.domain.value_objects.ats_provider import AtsProvider
+from src.domain.value_objects.consent_purpose import ConsentPurpose
 from src.domain.value_objects.eeo_categories import (
     DisabilityStatus,
     GenderIdentity,
@@ -892,15 +905,44 @@ def test_the_eeo_record_is_unreachable_from_every_form_filling_module() -> None:
     so the many docstrings that discuss EEO by name are not mistaken for code
     that touches it.
     """
-    #: The complete set of modules that may read the record: the value object
-    #: itself, the entity that holds it, and the persistence mapping that
-    #: stores and loads it. Nothing between the database and the profile,
-    #: and nothing at all on the way to a form.
+    #: The complete set of modules that may read the record.
+    #:
+    #: The rule this list enforces is precise, and it is worth stating exactly
+    #: because the list has grown once: **nothing on the way to an application
+    #: form may touch this record.** Not "almost nothing reads it" — the
+    #: candidate has to be able to see, correct and withdraw their own data, and
+    #: the data export has to include it, so some modules must.
+    #:
+    #: What is on the list, and why each earns its place:
+    #:
+    #: - the value object itself, the entity that holds it, and the persistence
+    #:   mapping that stores and loads it — nothing between the database and the
+    #:   profile;
+    #: - the profile editor's own read/write path and its dedicated mapper. A
+    #:   profile editor is not on the way to a form: it is the *candidate*
+    #:   reading their own record. These are deliberately three small modules
+    #:   rather than folded into `profile_mapper.py`, so the mapper every profile
+    #:   view goes through stays off this list.
+    #:
+    #: What must never be added: a field resolver, a prompt builder, an autofill
+    #: planner, an answer-memory writer, a "prefill from last application"
+    #: convenience. Each would be a reasonable-looking diff and each would defeat
+    #: the rule. If a change needs one of those on this list, the change is
+    #: wrong, not the list.
+    #:
+    #: Note that the *export* path is absent and does not need adding: it reads
+    #: `EeoSelfIdentificationModel` (the ORM class), a different name from the
+    #: two this guard matches. That is a coincidence of naming rather than a
+    #: designed exemption — do not use it as a way around this guard.
     allowed = {
         "domain/value_objects/eeo_self_identification.py",
         "domain/entities/user_profile.py",
         "infrastructure/persistence/models.py",
         "infrastructure/persistence/profile_repository_impl.py",
+        # The candidate's own view of their own record — see above.
+        "application/mappers/eeo_mapper.py",
+        "application/use_cases/get_eeo_self_identification.py",
+        "application/use_cases/save_eeo_self_identification.py",
     }
     names = {"EeoSelfIdentification", "eeo_self_identification"}
 
@@ -1041,3 +1083,280 @@ def test_the_planner_has_no_branch_that_could_fill_a_voluntary_slot(
             planned.disposition is FieldDisposition.SURFACE
         ), f"a {kind.value} widget produced {planned.disposition} for {slot}"
         assert planned.value is None
+
+
+# ==============================================================================
+# The write path: a record the candidate actually entered
+# ==============================================================================
+#
+# Everything above builds its profiles in this file and hands them to autofill.
+# That proved the *policy* correct — and hid the fact that, until the profile
+# editor existed, no code path in production could create a work-authorization
+# record at all. The parser deliberately does not produce one, and there was no
+# endpoint, so `work_authorizations` was always empty in a real deployment: every
+# legal question was surfaced, and the thirteen-case truth table above ran on data
+# no candidate could supply.
+#
+# These tests close that gap by starting from the editor's own input DTO and
+# driving the real `SaveWorkAuthorization` use case, then feeding what it stored
+# into the same autofill pass the rest of this file uses. If the write path ever
+# breaks — or starts stamping a provenance that is not the candidate's own — the
+# failure lands here rather than being invisible.
+
+
+class _InMemoryProfileRepository(ProfileRepository):
+    """Holds one profile, so a use case can be exercised without a database."""
+
+    def __init__(self, profile: UserProfile | None = None) -> None:
+        self.profile = profile
+
+    async def add(self, profile: UserProfile) -> None:
+        self.profile = profile
+
+    async def get_by_id(self, profile_id: str) -> UserProfile | None:
+        if self.profile is not None and self.profile.id == profile_id:
+            return self.profile
+        return None
+
+    async def get_by_user_id(self, user_id: str) -> UserProfile | None:
+        if self.profile is not None and self.profile.user_id == user_id:
+            return self.profile
+        return None
+
+    async def update(self, profile: UserProfile) -> None:
+        self.profile = profile
+
+    async def delete(self, profile_id: str) -> None:
+        self.profile = None
+
+
+class _InMemoryConsentRepository(ConsentRepository):
+    def __init__(self) -> None:
+        self.records: dict[ConsentPurpose, ConsentRecord] = {}
+
+    async def get(self, *, user_id: str, purpose: ConsentPurpose) -> ConsentRecord:
+        stored = self.records.get(purpose)
+        return ConsentRecord(
+            user_id=user_id,
+            purpose=purpose,
+            history=stored.history if stored else (),
+        )
+
+    async def list_for_user(self, user_id: str) -> list[ConsentRecord]:
+        return [
+            await self.get(user_id=user_id, purpose=purpose)
+            for purpose in ConsentPurpose
+        ]
+
+    async def save(self, record: ConsentRecord) -> None:
+        self.records[record.purpose] = record
+
+
+_EDITOR_NOW = datetime(2026, 8, 4, 9, 0, tzinfo=UTC)
+_EDITOR_POLICY = "2026-08-03"
+
+
+def _bare_profile() -> UserProfile:
+    """A profile with contact details and nothing else — what the editor's own
+    contact section produces for a candidate who has no résumé."""
+    return UserProfile(
+        id="profile-1",
+        user_id="user-1",
+        full_name="Dana Reyes",
+        email=EmailAddress("dana@example.com"),
+        contact_source=ProvenanceSource.USER_ENTERED,
+    )
+
+
+async def _save_through_the_editor(
+    profiles: _InMemoryProfileRepository,
+    consents: _InMemoryConsentRepository,
+    **fields: object,
+) -> None:
+    use_case = SaveWorkAuthorization(
+        profile_repository=profiles, consent_repository=consents
+    )
+    await use_case.execute(
+        WorkAuthorizationInput(
+            user_id="user-1", consent_acknowledged=True, **fields  # type: ignore[arg-type]
+        ),
+        decided_at=_EDITOR_NOW,
+        policy_version=_EDITOR_POLICY,
+    )
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [("citizen", "Yes"), ("requires_sponsorship", "No")],
+)
+async def test_a_declaration_entered_in_the_editor_reaches_the_form(
+    status: str, expected: str
+) -> None:
+    """The end-to-end claim this whole feature exists to make true.
+
+    Starts where a candidate starts — an input DTO off a form — and ends at the
+    bytes written to the page. Nothing in between is stubbed except the browser.
+
+    Before the editor, this test could not be written: there was no way to put a
+    work-authorization record into a profile outside a test fixture, so the
+    autofill path had nothing to read and surfaced every legal question forever.
+    """
+    profiles = _InMemoryProfileRepository(_bare_profile())
+    consents = _InMemoryConsentRepository()
+    await _save_through_the_editor(profiles, consents, status=status)
+
+    stored = profiles.profile
+    assert stored is not None
+    _, session, _ = await run_autofill(
+        stored,
+        (
+            question(
+                "Are you legally authorized to work in the United States? *",
+                handle="f-auth",
+            ),
+        ),
+    )
+
+    assert dict(session.filled) == {"f-auth": expected}
+
+
+async def test_the_editor_stamps_a_declaration_as_the_candidates_own() -> None:
+    """Why the value above is fillable at all.
+
+    `decide_sensitive_field` refuses a record that is not candidate-attested, and
+    `ATTESTING_SOURCES` deliberately excludes `PARSED_RESUME` — a model's reading
+    of a visa mention is not a declaration anyone made. The editor writes
+    `USER_ENTERED`, which is the whole reason a typed answer can be asserted to an
+    employer and a parsed one cannot.
+    """
+    profiles = _InMemoryProfileRepository(_bare_profile())
+    await _save_through_the_editor(
+        profiles, _InMemoryConsentRepository(), status="citizen"
+    )
+
+    stored = profiles.profile
+    assert stored is not None
+    assert stored.work_authorization is not None
+    assert stored.work_authorization.source is ProvenanceSource.USER_ENTERED
+    assert stored.work_authorization.is_candidate_attested
+
+
+async def test_saving_a_declaration_records_the_consent_that_permits_it() -> None:
+    """Special-category data is stored only with an explicit affirmative act, and
+    the grant is recorded in the same request so the ledger can still show what
+    was agreed and when."""
+    consents = _InMemoryConsentRepository()
+    await _save_through_the_editor(
+        _InMemoryProfileRepository(_bare_profile()), consents, status="citizen"
+    )
+
+    record = consents.records[ConsentPurpose.SENSITIVE_ATTRIBUTE_STORAGE]
+    assert record.is_granted
+    assert [decision.granted for decision in record.history] == [True]
+    assert record.history[0].policy_version == _EDITOR_POLICY
+
+
+async def test_saving_twice_does_not_fill_the_ledger_with_repeats() -> None:
+    """The consent record is a log of decisions, not of clicks. Correcting a visa
+    type should not append a second identical grant."""
+    profiles = _InMemoryProfileRepository(_bare_profile())
+    consents = _InMemoryConsentRepository()
+    await _save_through_the_editor(profiles, consents, status="visa_holder")
+    await _save_through_the_editor(
+        profiles, consents, status="visa_holder", visa_type="H-1B"
+    )
+
+    record = consents.records[ConsentPurpose.SENSITIVE_ATTRIBUTE_STORAGE]
+    assert len(record.history) == 1
+
+
+async def test_storing_a_declaration_without_acknowledgement_is_refused() -> None:
+    """The affirmative act is the point. A request that merely arrived is not one,
+    so the data is not stored and no consent is recorded."""
+    profiles = _InMemoryProfileRepository(_bare_profile())
+    consents = _InMemoryConsentRepository()
+    use_case = SaveWorkAuthorization(
+        profile_repository=profiles, consent_repository=consents
+    )
+
+    with pytest.raises(SensitiveStorageNotAcknowledgedError):
+        await use_case.execute(
+            WorkAuthorizationInput(
+                user_id="user-1", status="citizen", consent_acknowledged=False
+            ),
+            decided_at=_EDITOR_NOW,
+            policy_version=_EDITOR_POLICY,
+        )
+
+    assert profiles.profile is not None
+    assert profiles.profile.work_authorization is None
+    assert consents.records == {}
+
+
+async def test_clearing_a_declaration_needs_no_acknowledgement() -> None:
+    """Consent is required to *store* this data, not to delete it — and clearing
+    does not withdraw the consent either, so fixing a typo does not force the
+    candidate to agree again."""
+    profiles = _InMemoryProfileRepository(_bare_profile())
+    consents = _InMemoryConsentRepository()
+    await _save_through_the_editor(profiles, consents, status="citizen")
+
+    use_case = SaveWorkAuthorization(
+        profile_repository=profiles, consent_repository=consents
+    )
+    await use_case.execute(
+        WorkAuthorizationInput(user_id="user-1", status=None),
+        decided_at=_EDITOR_NOW,
+        policy_version=_EDITOR_POLICY,
+    )
+
+    assert profiles.profile is not None
+    assert profiles.profile.work_authorization is None
+    assert consents.records[ConsentPurpose.SENSITIVE_ATTRIBUTE_STORAGE].is_granted
+
+
+async def test_an_eeo_record_entered_in_the_editor_still_fills_nothing() -> None:
+    """The new write path must not become a new leak.
+
+    A candidate can now store EEO answers, which they could not before. The rule
+    that ApplyFlow never puts them on an application is unconditional and does not
+    become weaker because the data is now reachable — so this drives the real save
+    use case and then sweeps the whole form for any of the stored values.
+    """
+    profiles = _InMemoryProfileRepository(_bare_profile())
+    consents = _InMemoryConsentRepository()
+    await SaveEeoSelfIdentification(
+        profile_repository=profiles, consent_repository=consents
+    ).execute(
+        EeoSelfIdentificationInput(
+            user_id="user-1",
+            gender_identity="female",
+            race_ethnicity="asian",
+            veteran_status="protected_veteran",
+            disability_status="has_disability",
+            consent_acknowledged=True,
+        ),
+        decided_at=_EDITOR_NOW,
+        policy_version=_EDITOR_POLICY,
+    )
+
+    stored = profiles.profile
+    assert stored is not None
+    assert stored.eeo_self_identification is not None, "the record really is on file"
+
+    report, session, _ = await run_autofill(
+        stored,
+        (
+            question("Gender", handle="f-gender", options=()),
+            question("Race / Ethnicity", handle="f-race", options=()),
+            question("Veteran status", handle="f-vet", options=()),
+            question("Disability status", handle="f-dis", options=()),
+        ),
+    )
+
+    assert session.filled == []
+    written = " ".join(value for _, value in session.filled).lower()
+    for disclosed in EEO_VALUES:
+        assert disclosed.lower() not in written
+    for item in report.fields:  # type: ignore[attr-defined]
+        assert item.outcome == FieldAutofillOutcome.SURFACED
