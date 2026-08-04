@@ -12,10 +12,12 @@ from __future__ import annotations
 from src.application.dtos.profile_dtos import (
     AddressOutput,
     EducationOutput,
+    JobSearchPreferencesOutput,
     ProfileLinksOutput,
     ProfileOutput,
     QualificationsOutput,
     SkillOutput,
+    TermOutput,
     WorkHistoryOutput,
 )
 from src.domain.entities.education_entry import EducationEntry
@@ -74,6 +76,20 @@ class ProfileMapper:
                     profile.highest_degree.value
                     if profile.highest_degree is not None
                     else None
+                ),
+            ),
+            job_search_preferences=JobSearchPreferencesOutput(
+                employment_types=tuple(
+                    preference.value
+                    for preference in profile.job_search_preferences.employment_types
+                ),
+                terms=tuple(
+                    # `label` comes from the domain rather than being assembled
+                    # here, so every surface spells a term the same way.
+                    TermOutput(
+                        season=term.season.value, year=term.year, label=term.label
+                    )
+                    for term in profile.job_search_preferences.terms
                 ),
             ),
             work_history=[

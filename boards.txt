@@ -1,0 +1,40 @@
+# ApplyFlow target boards — read with:
+#   applyflow ingest-board --boards-file boards.txt
+#
+# Format: Company,board-url-or-provider:token
+# Board APIs are unauthenticated and unmetered, so re-reading this list costs
+# nothing and adds only postings you do not already have.
+#
+# Chosen for signal rather than volume: boards that actually carry internships
+# and state hiring terms, plus enough full-time and new-grad roles to give a
+# classifier negatives, and at least two companies on each of the three ATS
+# platforms so their differing description formats are all represented.
+#
+# Deliberately omitted: Databricks (806 postings, 2 internships), OpenAI (733, 0)
+# and Gopuff (804, 0). Large boards that add thousands of rows and almost no
+# internship or term examples — and every row is a posting that eventually costs
+# an LLM call to extract requirements from.
+
+# --- Greenhouse ---
+# Best internship and term density found while probing.
+Cloudflare,greenhouse:cloudflare
+# Quant finance, and the second-densest internship board.
+Point72,greenhouse:point72
+# No internships listed right now, but 15 new-grad/campus roles — the category
+# that has to be told apart from internships.
+Jane Street,greenhouse:janestreet
+Samsara,greenhouse:samsara
+Duolingo,greenhouse:duolingo
+Stripe,https://boards.greenhouse.io/stripe
+
+# --- Ashby ---
+# The only platform of the three that states remoteness as a boolean.
+Ramp,ashby:ramp
+Vanta,ashby:vanta
+Linear,ashby:linear
+
+# --- Lever ---
+# Different JSON shape again: `text` for the title, location under `categories`,
+# and epoch-millisecond dates.
+Match Group,lever:matchgroup
+Alloy,lever:alloy

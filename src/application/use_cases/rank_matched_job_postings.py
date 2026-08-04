@@ -45,6 +45,7 @@ from src.domain.repositories.tracked_application_repository import (
 )
 from src.domain.services.applied_job_index import AppliedJobIndex
 from src.domain.services.hard_disqualifier_filter import HardDisqualifierFilter
+from src.domain.services.job_search_preference_filter import JobSearchPreferenceFilter
 from src.domain.services.requirement_classifier import RequirementClassifier
 from src.domain.services.soft_preference_evaluator import SoftPreferenceEvaluator
 from src.domain.value_objects.job_requirements import JobRequirements
@@ -60,6 +61,7 @@ class RankMatchedJobPostings:
         disqualifier_filter: HardDisqualifierFilter | None = None,
         classifier: RequirementClassifier | None = None,
         soft_evaluator: SoftPreferenceEvaluator | None = None,
+        preference_filter: JobSearchPreferenceFilter | None = None,
     ) -> None:
         self._job_posting_repository = job_posting_repository
         self._profile_repository = profile_repository
@@ -68,6 +70,7 @@ class RankMatchedJobPostings:
         self._disqualifier_filter = disqualifier_filter or HardDisqualifierFilter()
         self._classifier = classifier or RequirementClassifier()
         self._soft_evaluator = soft_evaluator or SoftPreferenceEvaluator()
+        self._preference_filter = preference_filter or JobSearchPreferenceFilter()
 
     async def execute(self, dto: RankMatchedJobsInput) -> list[RankedJobOutput]:
         profile = await self._profile_repository.get_by_user_id(dto.user_id)
@@ -88,6 +91,13 @@ class RankMatchedJobPostings:
         for posting in postings:
             requirements = posting.requirements or JobRequirements()
             if not self._disqualifier_filter.evaluate(profile, requirements).qualifies:
+                continue
+            # Checked after the disqualifier and before the expensive per-posting
+            # work below: a posting the candidate did not ask to see costs nothing
+            # to drop, and there is no point generating a rationale for it.
+            if not self._preference_filter.evaluate(
+                profile.job_search_preferences, requirements
+            ).matches:
                 continue
             already_applied = applied.has_applied_to(posting)
             if already_applied and not dto.include_already_applied:

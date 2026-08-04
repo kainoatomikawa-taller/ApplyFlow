@@ -114,6 +114,9 @@ class ProfileOutput:
     address: AddressOutput | None = None
     links: ProfileLinksOutput | None = None
     qualifications: QualificationsOutput | None = None
+    #: Defaulted for the same reason the two names above are: every existing
+    #: construction of this DTO predates it.
+    job_search_preferences: JobSearchPreferencesOutput | None = None
     work_history: list[WorkHistoryOutput] = field(default_factory=list)
     education: list[EducationOutput] = field(default_factory=list)
     skills: list[SkillOutput] = field(default_factory=list)
@@ -161,6 +164,39 @@ class QualificationsInput:
     user_id: str
     clearance_level: str | None = None
     highest_degree: str | None = None
+
+
+@dataclass(frozen=True)
+class TermInput:
+    """One academic term as submitted. `year` omitted means any year."""
+
+    season: str
+    year: int | None = None
+
+
+@dataclass(frozen=True)
+class JobSearchPreferencesInput:
+    """What the candidate wants to see. Empty lists mean "no preference", which
+    is how the candidate turns filtering back off."""
+
+    user_id: str
+    employment_types: tuple[str, ...] = ()
+    terms: tuple[TermInput, ...] = ()
+
+
+@dataclass(frozen=True)
+class TermOutput:
+    season: str
+    year: int | None
+    #: "Summer 2027", or "Summer" when no year is stated. Rendered by the domain
+    #: so every surface labels a term the same way.
+    label: str
+
+
+@dataclass(frozen=True)
+class JobSearchPreferencesOutput:
+    employment_types: tuple[str, ...]
+    terms: tuple[TermOutput, ...]
 
 
 @dataclass(frozen=True)

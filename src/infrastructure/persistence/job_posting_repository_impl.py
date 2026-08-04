@@ -14,6 +14,8 @@ from src.domain.entities.job_posting import JobPosting
 from src.domain.repositories.job_posting_repository import JobPostingRepository
 from src.domain.value_objects.clearance_level import ClearanceLevel
 from src.domain.value_objects.degree_level import DegreeLevel
+from src.domain.value_objects.employment_type import EmploymentType
+from src.domain.value_objects.hiring_term import HiringTerm, TermSeason
 from src.domain.value_objects.job_posting_status import JobPostingStatus
 from src.domain.value_objects.job_requirements import JobRequirements
 from src.domain.value_objects.remote_type import RemoteType
@@ -182,6 +184,21 @@ class SqlAlchemyJobPostingRepository(JobPostingRepository):
         if requirements is None:
             return None
         return {
+            "employment_type": (
+                requirements.employment_type.value
+                if requirements.employment_type
+                else None
+            ),
+            # Flattened rather than nested, matching the extractor's own schema and
+            # keeping the stored shape one level deep like every other key here.
+            "hiring_term_season": (
+                requirements.hiring_term.season.value
+                if requirements.hiring_term
+                else None
+            ),
+            "hiring_term_year": (
+                requirements.hiring_term.year if requirements.hiring_term else None
+            ),
             "degree_level": (
                 requirements.degree_level.value if requirements.degree_level else None
             ),
@@ -242,7 +259,27 @@ class SqlAlchemyJobPostingRepository(JobPostingRepository):
         assert isinstance(preferred_skills, list)
         assert isinstance(preferences, list)
 
+        employment_type = data.get("employment_type")
+        term_season = data.get("hiring_term_season")
+        term_year = data.get("hiring_term_year")
+
         return JobRequirements(
+            employment_type=(
+                EmploymentType(employment_type)
+                if isinstance(employment_type, str)
+                else None
+            ),
+            # A stored year with no season cannot be reassembled — `HiringTerm`
+            # requires a season — so the term reads as absent rather than raising
+            # on a row written by an older or partial extraction.
+            hiring_term=(
+                HiringTerm(
+                    season=TermSeason(term_season),
+                    year=term_year if isinstance(term_year, int) else None,
+                )
+                if isinstance(term_season, str)
+                else None
+            ),
             degree_level=(
                 DegreeLevel(degree_level) if isinstance(degree_level, str) else None
             ),

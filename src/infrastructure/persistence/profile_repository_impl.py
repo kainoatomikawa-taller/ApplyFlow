@@ -13,6 +13,7 @@ from src.domain.entities.education_entry import EducationEntry
 from src.domain.entities.skill import Skill
 from src.domain.entities.user_profile import UserProfile
 from src.domain.entities.work_history_entry import WorkHistoryEntry
+from src.domain.exceptions import InvalidValueError
 from src.domain.repositories.profile_repository import ProfileRepository
 from src.domain.value_objects.address import Address
 from src.domain.value_objects.clearance_level import ClearanceLevel
@@ -25,6 +26,9 @@ from src.domain.value_objects.eeo_categories import (
 )
 from src.domain.value_objects.eeo_self_identification import EeoSelfIdentification
 from src.domain.value_objects.email_address import EmailAddress
+from src.domain.value_objects.employment_type import EmploymentType
+from src.domain.value_objects.hiring_term import HiringTerm, TermSeason
+from src.domain.value_objects.job_search_preferences import JobSearchPreferences
 from src.domain.value_objects.proficiency_level import ProficiencyLevel
 from src.domain.value_objects.profile_links import ProfileLinks
 from src.domain.value_objects.provenance_source import ProvenanceSource
@@ -135,6 +139,22 @@ class SqlAlchemyProfileRepository(ProfileRepository):
                 entity.highest_degree.value
                 if entity.highest_degree is not None
                 else None
+            ),
+            # `None` rather than `[]` when nothing is stated, so the column holds
+            # SQL NULL and "not stated" is one value rather than two.
+            desired_employment_types=(
+                [
+                    preference.value
+                    for preference in entity.job_search_preferences.employment_types
+                ]
+                or None
+            ),
+            desired_terms=(
+                [
+                    {"season": term.season.value, "year": term.year}
+                    for term in entity.job_search_preferences.terms
+                ]
+                or None
             ),
             created_at=entity.created_at,
             updated_at=entity.updated_at,
@@ -271,6 +291,14 @@ class SqlAlchemyProfileRepository(ProfileRepository):
         model.highest_degree = (
             entity.highest_degree.value if entity.highest_degree is not None else None
         )
+        model.desired_employment_types = [
+            employment_type.value
+            for employment_type in entity.job_search_preferences.employment_types
+        ] or None
+        model.desired_terms = [
+            {"season": term.season.value, "year": term.year}
+            for term in entity.job_search_preferences.terms
+        ] or None
         model.updated_at = entity.updated_at
 
         model.work_history = [
@@ -343,6 +371,9 @@ class SqlAlchemyProfileRepository(ProfileRepository):
                 if model.highest_degree is not None
                 else None
             ),
+            job_search_preferences=SqlAlchemyProfileRepository._preferences_to_entity(
+                model.desired_employment_types, model.desired_terms
+            ),
             work_authorization=(
                 SqlAlchemyProfileRepository._work_authorization_to_entity(
                     model.work_authorization
@@ -400,6 +431,47 @@ class SqlAlchemyProfileRepository(ProfileRepository):
             ],
             created_at=model.created_at,
             updated_at=model.updated_at,
+        )
+
+    @staticmethod
+    def _preferences_to_entity(
+        employment_types: list[str] | None,
+        terms: list[dict[str, object]] | None,
+    ) -> JobSearchPreferences:
+        """Rebuild stated preferences from two JSON columns.
+
+        Unrecognized values are skipped rather than raised on. These rows are
+        written by this application, so a bad value means a stored enum member
+        that no longer exists — and losing one preference is a better outcome than
+        a profile that cannot be loaded at all.
+        """
+        parsed_types: list[EmploymentType] = []
+        for value in employment_types or []:
+            try:
+                parsed_types.append(EmploymentType(value))
+            except ValueError:
+                continue
+
+        parsed_terms: list[HiringTerm] = []
+        for entry in terms or []:
+            if not isinstance(entry, dict):
+                continue
+            season = entry.get("season")
+            year = entry.get("year")
+            if not isinstance(season, str):
+                continue
+            try:
+                parsed_terms.append(
+                    HiringTerm(
+                        season=TermSeason(season),
+                        year=year if isinstance(year, int) else None,
+                    )
+                )
+            except (ValueError, InvalidValueError):
+                continue
+
+        return JobSearchPreferences(
+            employment_types=tuple(parsed_types), terms=tuple(parsed_terms)
         )
 
     @staticmethod

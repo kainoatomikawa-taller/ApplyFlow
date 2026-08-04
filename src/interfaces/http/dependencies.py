@@ -116,6 +116,9 @@ from src.application.use_cases.submit_job_match_feedback import (
     SubmitJobMatchFeedback,
 )
 from src.application.use_cases.update_application_status import UpdateApplicationStatus
+from src.application.use_cases.update_job_search_preferences import (
+    UpdateJobSearchPreferences,
+)
 from src.application.use_cases.update_profile_address import UpdateProfileAddress
 from src.application.use_cases.update_profile_links import UpdateProfileLinks
 from src.application.use_cases.update_profile_qualifications import (
@@ -946,6 +949,12 @@ def get_update_profile_qualifications_use_case(
     repository: SqlAlchemyProfileRepository = Depends(_profile_repository),
 ) -> UpdateProfileQualifications:
     return UpdateProfileQualifications(repository=repository)
+
+
+def get_update_job_search_preferences_use_case(
+    repository: SqlAlchemyProfileRepository = Depends(_profile_repository),
+) -> UpdateJobSearchPreferences:
+    return UpdateJobSearchPreferences(repository=repository)
 
 
 def get_save_work_history_entry_use_case(

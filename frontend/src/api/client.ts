@@ -16,6 +16,7 @@ import type {
   GuardedDocument,
   HealthStatus,
   JobApplication,
+  JobSearchPreferencesInput,
   JobMatchFeedback,
   LinksInput,
   OpenApplicationReview,
@@ -505,6 +506,19 @@ export const applyFlowApi = {
   /** Clearance and highest degree — used for matching, never to fill a form. */
   saveQualifications(input: QualificationsInput): Promise<Profile> {
     return request<Profile>('/api/profile/qualifications', {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    });
+  },
+
+  /**
+   * Replace what kinds of role and which terms to show. Sending empty arrays
+   * clears the preferences, which is how filtering is turned back off.
+   */
+  saveJobSearchPreferences(
+    input: JobSearchPreferencesInput,
+  ): Promise<Profile> {
+    return request<Profile>('/api/profile/job-search-preferences', {
       method: 'PUT',
       body: JSON.stringify(input),
     });

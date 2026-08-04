@@ -24,8 +24,11 @@ from src.application.ports.job_requirements_extractor_port import (
     JobRequirementsExtractorPort,
 )
 from src.application.ports.llm_client_port import LlmClientPort, LlmTaskType
+from src.domain.exceptions import InvalidValueError
 from src.domain.value_objects.clearance_level import ClearanceLevel
 from src.domain.value_objects.degree_level import DegreeLevel
+from src.domain.value_objects.employment_type import EmploymentType
+from src.domain.value_objects.hiring_term import HiringTerm, TermSeason
 from src.domain.value_objects.job_requirements import JobRequirements
 from src.domain.value_objects.remote_type import RemoteType
 from src.domain.value_objects.work_authorization_status import (
@@ -39,6 +42,10 @@ return ONLY a single JSON object — no markdown code fences, no commentary
 — matching exactly this shape:
 
 {
+  "employment_type": one of "internship", "co_op", "new_grad", \
+"full_time", "part_time", "contract", or null,
+  "hiring_term_season": one of "spring", "summer", "fall", "winter", or null,
+  "hiring_term_year": four-digit integer or null,
   "degree_level": one of "high_school", "associate", "bachelors", \
 "masters", "doctorate", or null,
   "degree_required": true if the degree is mandatory, false if only \
@@ -64,6 +71,18 @@ Rules:
 - Never invent or guess a value. If the posting does not state an
   attribute, or states it too ambiguously to be sure, use null (or an
   empty array for list fields).
+- "employment_type" is what the posting IS, not what it asks for.
+  "internship" for a fixed-term student placement; "co_op" only when the
+  posting says co-op; "new_grad" for permanent roles explicitly aimed at
+  recent graduates ("New Grad", "University Graduate", "Early Career");
+  "full_time" for ordinary permanent roles. Do not infer "internship"
+  from the word "intern" appearing inside another word — "Internal
+  Audit" and "International Tax" are full-time roles.
+- "hiring_term_season"/"hiring_term_year" only for a term the posting
+  actually names, e.g. "Summer 2027 Internship" -> "summer" + 2027,
+  "Intern (Fall 2026)" -> "fall" + 2026. A season with no year stated
+  ("Summer Intern") is the season and a null year — do NOT work out which
+  year is meant. Leave both null for a role with no academic term.
 - "work_authorization" describes the MINIMUM status the employer states
   it will accept (e.g. "requires_sponsorship" if the posting says
   sponsorship is available, "citizen" if it demands U.S. citizenship) —
@@ -90,6 +109,10 @@ class LlmJobRequirementsExtractor(JobRequirementsExtractorPort):
             max_years = None
 
         return JobRequirements(
+            employment_type=_as_enum(EmploymentType, payload.get("employment_type")),
+            hiring_term=_as_hiring_term(
+                payload.get("hiring_term_season"), payload.get("hiring_term_year")
+            ),
             degree_level=_as_enum(DegreeLevel, payload.get("degree_level")),
             degree_required=_as_bool(payload.get("degree_required")),
             clearance_level=_as_enum(ClearanceLevel, payload.get("clearance_level")),
@@ -153,6 +176,28 @@ def _as_enum(enum_cls: type, value: Any) -> Any:
         return enum_cls(value.strip().lower())
     except ValueError:
         return None
+
+
+def _as_hiring_term(season: Any, year: Any) -> HiringTerm | None:
+    """A `HiringTerm` from the two flat fields the prompt asks for, or None.
+
+    Two flat fields rather than a nested object because models answer flat
+    schemas more reliably, and the pairing is trivial to reassemble here.
+
+    A year with no season is dropped: "2027" alone does not say which term, and
+    `HiringTerm` requires a season. A season with no year is kept, because that is
+    the real and common case ("Summer Intern") the value object exists to hold. A
+    year outside `HiringTerm`'s range is dropped rather than raised on — a misread
+    year should cost the year, not the whole extraction.
+    """
+    parsed_season = _as_enum(TermSeason, season)
+    if parsed_season is None:
+        return None
+    parsed_year = year if isinstance(year, int) and not isinstance(year, bool) else None
+    try:
+        return HiringTerm(season=parsed_season, year=parsed_year)
+    except InvalidValueError:
+        return HiringTerm(season=parsed_season)
 
 
 def _as_str_list(value: Any) -> list[str]:

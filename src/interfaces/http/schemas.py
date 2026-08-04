@@ -102,6 +102,18 @@ class QualificationsResponse(BaseModel):
     highest_degree: str | None = None
 
 
+class TermResponse(BaseModel):
+    season: str
+    year: int | None = None
+    #: Rendered by the domain so every surface spells a term identically.
+    label: str
+
+
+class JobSearchPreferencesResponse(BaseModel):
+    employment_types: list[str] = Field(default_factory=list)
+    terms: list[TermResponse] = Field(default_factory=list)
+
+
 class ProfileResponse(BaseModel):
     """The whole profile, minus the EEO record — that has its own endpoint.
 
@@ -124,6 +136,7 @@ class ProfileResponse(BaseModel):
     address: AddressResponse | None = None
     links: ProfileLinksResponse | None = None
     qualifications: QualificationsResponse | None = None
+    job_search_preferences: JobSearchPreferencesResponse | None = None
     work_history: list[WorkHistoryResponse] = Field(default_factory=list)
     education: list[EducationResponse] = Field(default_factory=list)
     skills: list[SkillResponse] = Field(default_factory=list)
@@ -898,6 +911,25 @@ class ProfileLinksRequest(BaseModel):
     portfolio_url: str | None = Field(default=None, max_length=2048)
     linkedin_url: str | None = Field(default=None, max_length=2048)
     github_url: str | None = Field(default=None, max_length=2048)
+
+
+class TermRequest(BaseModel):
+    """One academic term. Omitting `year` means any year of that season."""
+
+    season: str = Field(min_length=1, max_length=16)
+    year: int | None = Field(default=None, ge=2000, le=2100)
+
+
+class JobSearchPreferencesRequest(BaseModel):
+    """What the candidate wants to see, replacing whatever was stored.
+
+    Empty lists are meaningful and are the documented way to stop filtering —
+    which is why neither field has a minimum length. The caps bound a payload,
+    they are not a rule about how many kinds of work a person may want.
+    """
+
+    employment_types: list[str] = Field(default_factory=list, max_length=8)
+    terms: list[TermRequest] = Field(default_factory=list, max_length=12)
 
 
 class QualificationsRequest(BaseModel):

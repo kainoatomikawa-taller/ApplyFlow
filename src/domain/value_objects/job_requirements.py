@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from src.domain.exceptions import InvalidValueError
 from src.domain.value_objects.clearance_level import ClearanceLevel
 from src.domain.value_objects.degree_level import DegreeLevel
+from src.domain.value_objects.employment_type import EmploymentType
+from src.domain.value_objects.hiring_term import HiringTerm
 from src.domain.value_objects.remote_type import RemoteType
 from src.domain.value_objects.work_authorization_status import (
     WorkAuthorizationStatus,
@@ -27,6 +29,14 @@ class JobRequirements:
     """Structured requirement attributes read from a job posting's
     description. Feeds downstream classification and scoring."""
 
+    #: The engagement the posting offers, and — for term-based roles — the term
+    #: it is hiring for. Unlike every other field here these are not demands on
+    #: the candidate; they are what the posting *is*, and they are matched against
+    #: the candidate's `JobSearchPreferences` rather than their qualifications
+    #: (see `JobSearchPreferenceFilter`). They live here because this is the
+    #: structured reading of a posting's text, which is exactly what they are.
+    employment_type: EmploymentType | None = None
+    hiring_term: HiringTerm | None = None
     degree_level: DegreeLevel | None = None
     #: Whether the stated `degree_level` is mandatory (True), merely
     #: preferred/nice-to-have (False), or the text doesn't say (None).

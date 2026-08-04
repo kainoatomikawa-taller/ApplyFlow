@@ -592,6 +592,7 @@ export interface Profile {
   address: ProfileAddress | null;
   links: ProfileLinks | null;
   qualifications: ProfileQualifications | null;
+  job_search_preferences: JobSearchPreferences | null;
   work_history: ProfileWorkHistoryEntry[];
   education: ProfileEducationEntry[];
   skills: ProfileSkill[];
@@ -610,6 +611,31 @@ export interface ContactDetailsInput {
 export type AddressInput = Omit<ProfileAddress, 'source'>;
 export type LinksInput = Omit<ProfileLinks, 'source'>;
 export type QualificationsInput = ProfileQualifications;
+
+/** One academic term. A null `year` means any year of that season. */
+export interface HiringTerm {
+  season: string;
+  year: number | null;
+  /** "Summer 2027", or "Summer". Rendered server-side so labels never diverge. */
+  label: string;
+}
+
+/**
+ * What the candidate wants to see, as opposed to what is true about them.
+ *
+ * Empty arrays mean "no preference stated", which is how filtering is turned
+ * off — not "show me nothing". The matching layer reads it the same way.
+ */
+export interface JobSearchPreferences {
+  employment_types: string[];
+  terms: HiringTerm[];
+}
+
+/** `label` is server-rendered, so writes send only the season and year. */
+export interface JobSearchPreferencesInput {
+  employment_types: string[];
+  terms: { season: string; year: number | null }[];
+}
 
 export type WorkHistoryInput = Omit<ProfileWorkHistoryEntry, 'id' | 'source'>;
 export type EducationInput = Omit<

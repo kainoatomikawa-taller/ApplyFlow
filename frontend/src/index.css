@@ -1149,3 +1149,17 @@ button.secondary {
   background: #fdf1dc;
   color: #8a5a00;
 }
+
+/* Checkbox rows inside a preference group — a label wrapping its own input, so
+   the text is part of the hit area. */
+.profile-checkbox-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+}
+
+.profile-checkbox-row input {
+  margin: 0;
+}

@@ -17,6 +17,8 @@ from src.application.exceptions import ExternalServiceError
 from src.application.ports.llm_client_port import LlmClientPort, LlmTaskType
 from src.domain.value_objects.clearance_level import ClearanceLevel
 from src.domain.value_objects.degree_level import DegreeLevel
+from src.domain.value_objects.employment_type import EmploymentType
+from src.domain.value_objects.hiring_term import HiringTerm, TermSeason
 from src.domain.value_objects.remote_type import RemoteType
 from src.domain.value_objects.work_authorization_status import (
     WorkAuthorizationStatus,
@@ -164,3 +166,85 @@ async def test_extract_drops_max_years_when_it_contradicts_min_years():
 
     assert result.min_years_experience == 8
     assert result.max_years_experience is None
+
+
+# ---- Employment type and hiring term -----------------------------------------
+#
+# Added in Phase 1. The two fields arrive flat (`hiring_term_season` +
+# `hiring_term_year`) because models answer flat schemas more reliably; pairing
+# them into a `HiringTerm` happens in the adapter.
+
+
+@pytest.mark.asyncio
+async def test_employment_type_and_term_are_read():
+    payload = {
+        "employment_type": "internship",
+        "hiring_term_season": "summer",
+        "hiring_term_year": 2027,
+    }
+    result = await LlmJobRequirementsExtractor(
+        FakeLlmClient(json.dumps(payload))
+    ).extract("text")
+
+    assert result.employment_type is EmploymentType.INTERNSHIP
+    assert result.hiring_term == HiringTerm(season=TermSeason.SUMMER, year=2027)
+    assert result.hiring_term is not None
+    assert result.hiring_term.label == "Summer 2027"
+
+
+@pytest.mark.asyncio
+async def test_a_season_with_no_year_keeps_the_season():
+    """ "Summer Intern" with no year is the common real case: the season is stated
+    and the year is genuinely unknown. Keeping the season is what lets the
+    posting still match a candidate looking for any summer."""
+    payload = {"employment_type": "internship", "hiring_term_season": "summer"}
+    result = await LlmJobRequirementsExtractor(
+        FakeLlmClient(json.dumps(payload))
+    ).extract("text")
+
+    assert result.hiring_term == HiringTerm(season=TermSeason.SUMMER)
+    assert result.hiring_term is not None
+    assert result.hiring_term.year is None
+
+
+@pytest.mark.asyncio
+async def test_a_year_with_no_season_is_dropped_entirely():
+    """ "2027" alone does not say which term, and `HiringTerm` cannot exist without
+    a season."""
+    payload = {"hiring_term_year": 2027}
+    result = await LlmJobRequirementsExtractor(
+        FakeLlmClient(json.dumps(payload))
+    ).extract("text")
+
+    assert result.hiring_term is None
+
+
+@pytest.mark.asyncio
+async def test_an_implausible_year_costs_the_year_not_the_term():
+    """A misread year should not throw away the season that was read correctly,
+    and must not raise — one bad field cannot fail a whole extraction."""
+    payload = {"hiring_term_season": "fall", "hiring_term_year": 27}
+    result = await LlmJobRequirementsExtractor(
+        FakeLlmClient(json.dumps(payload))
+    ).extract("text")
+
+    assert result.hiring_term == HiringTerm(season=TermSeason.FALL)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", ["permanent", "intern", "", None, 7])
+async def test_an_unrecognized_employment_type_is_dropped(value):
+    payload = {"employment_type": value}
+    result = await LlmJobRequirementsExtractor(
+        FakeLlmClient(json.dumps(payload))
+    ).extract("text")
+
+    assert result.employment_type is None
+
+
+@pytest.mark.asyncio
+async def test_a_posting_with_neither_field_extracts_neither():
+    result = await LlmJobRequirementsExtractor(FakeLlmClient("{}")).extract("text")
+
+    assert result.employment_type is None
+    assert result.hiring_term is None

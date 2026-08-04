@@ -37,6 +37,7 @@ from src.domain.value_objects.clearance_level import ClearanceLevel
 from src.domain.value_objects.degree_level import DegreeLevel
 from src.domain.value_objects.eeo_self_identification import EeoSelfIdentification
 from src.domain.value_objects.email_address import EmailAddress
+from src.domain.value_objects.job_search_preferences import JobSearchPreferences
 from src.domain.value_objects.profile_links import ProfileLinks
 from src.domain.value_objects.provenance_source import ProvenanceSource
 from src.domain.value_objects.work_authorization import WorkAuthorization
@@ -109,6 +110,13 @@ class UserProfile:
     # filtering never disqualifies over a gap in the candidate's own data.
     clearance_level: ClearanceLevel | None = None
     highest_degree: DegreeLevel | None = None
+    # What the candidate is looking for, as opposed to what is true about them.
+    # No provenance tag: a preference is never asserted to an employer and can
+    # only ever be the candidate's own statement — see `JobSearchPreferences`.
+    # Empty means "not stated", so matching narrows nothing.
+    job_search_preferences: JobSearchPreferences = field(
+        default_factory=JobSearchPreferences
+    )
     eeo_self_identification: EeoSelfIdentification | None = None
     work_history: list[WorkHistoryEntry] = field(default_factory=list)
     education: list[EducationEntry] = field(default_factory=list)
@@ -238,6 +246,21 @@ class UserProfile:
     def set_clearance_level(self, clearance_level: ClearanceLevel | None) -> None:
         """Set or clear the candidate's held security clearance."""
         self.clearance_level = clearance_level
+        self._touch()
+
+    def set_job_search_preferences(self, preferences: JobSearchPreferences) -> None:
+        """Replace what the candidate is looking for.
+
+        A whole-value replace rather than per-field edits: preferences are a
+        small set the candidate reviews together, and an empty
+        `JobSearchPreferences` is the meaningful way to say "stop filtering" —
+        which a merge-style update could not express.
+        """
+        if not isinstance(preferences, JobSearchPreferences):
+            raise InvalidValueError(
+                "set_job_search_preferences requires a JobSearchPreferences."
+            )
+        self.job_search_preferences = preferences
         self._touch()
 
     def set_highest_degree(self, highest_degree: DegreeLevel | None) -> None:

@@ -59,10 +59,12 @@ from src.application.dtos.profile_dtos import (
     EducationInput,
     EeoSelfIdentificationInput,
     EeoSelfIdentificationOutput,
+    JobSearchPreferencesInput,
     ProfileLinksInput,
     ProfileOutput,
     QualificationsInput,
     SkillInput,
+    TermInput,
     WorkAuthorizationInput,
     WorkAuthorizationOutput,
     WorkHistoryInput,
@@ -89,6 +91,9 @@ from src.application.use_cases.save_eeo_self_identification import (
 from src.application.use_cases.save_skill import SaveSkill
 from src.application.use_cases.save_work_authorization import SaveWorkAuthorization
 from src.application.use_cases.save_work_history_entry import SaveWorkHistoryEntry
+from src.application.use_cases.update_job_search_preferences import (
+    UpdateJobSearchPreferences,
+)
 from src.application.use_cases.update_profile_address import UpdateProfileAddress
 from src.application.use_cases.update_profile_links import UpdateProfileLinks
 from src.application.use_cases.update_profile_qualifications import (
@@ -114,6 +119,7 @@ from src.interfaces.http.dependencies import (
     get_save_skill_use_case,
     get_save_work_authorization_use_case,
     get_save_work_history_entry_use_case,
+    get_update_job_search_preferences_use_case,
     get_update_profile_address_use_case,
     get_update_profile_links_use_case,
     get_update_profile_qualifications_use_case,
@@ -125,6 +131,7 @@ from src.interfaces.http.schemas import (
     EducationRequest,
     EeoSelfIdentificationRequest,
     EeoSelfIdentificationResponse,
+    JobSearchPreferencesRequest,
     ProfileLinksRequest,
     ProfileResponse,
     QualificationsRequest,
@@ -290,6 +297,38 @@ async def update_qualifications(
     except UnknownProfileEnumValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     logger.info("Profile qualifications section saved for the authenticated user.")
+    return _profile_response(output)
+
+
+@router.put("/job-search-preferences", response_model=ProfileResponse)
+async def update_job_search_preferences(
+    request: JobSearchPreferencesRequest,
+    user: AuthenticatedUserDTO = Depends(get_current_user),
+    use_case: UpdateJobSearchPreferences = Depends(
+        get_update_job_search_preferences_use_case
+    ),
+) -> ProfileResponse:
+    """Replace what kinds of role and which terms the candidate wants to see.
+
+    Submitting empty lists clears the preferences, which is how filtering is
+    turned back off — so this is a full replace, not a merge.
+    """
+    try:
+        output = await use_case.execute(
+            JobSearchPreferencesInput(
+                user_id=user.subject,
+                employment_types=tuple(request.employment_types),
+                terms=tuple(
+                    TermInput(season=term.season, year=term.year)
+                    for term in request.terms
+                ),
+            )
+        )
+    except ProfileNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, _NO_PROFILE_DETAIL) from exc
+    except UnknownProfileEnumValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    logger.info("Job-search preferences saved for the authenticated user.")
     return _profile_response(output)
 
 

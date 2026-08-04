@@ -117,6 +117,19 @@ _REVIEWED_PLAINTEXT: dict[str, str] = {
         "A self-written professional tagline, same category as the CV facts "
         "above. See UserProfileModel, which states this decision."
     ),
+    # Search preferences, not facts about the candidate. "I want summer 2027
+    # internships" describes what someone is looking for; it identifies nobody,
+    # says nothing about their history, and is the kind of thing a job board shows
+    # in its own UI. Encrypting it would also make it unqueryable for no gain,
+    # since these are the columns a future "which terms are people searching for"
+    # question would read. Free-text-shaped only because they are JSON arrays —
+    # the contents are enum values and four-digit years, not prose.
+    "user_profiles.desired_employment_types": (
+        "A stated preference, not personal data — see the note above."
+    ),
+    "user_profiles.desired_terms": (
+        "A stated preference, not personal data — see the note above."
+    ),
     "user_profiles.portfolio_url": "A profile the candidate publishes publicly.",
     "user_profiles.linkedin_url": "A profile the candidate publishes publicly.",
     "user_profiles.github_url": "A profile the candidate publishes publicly.",

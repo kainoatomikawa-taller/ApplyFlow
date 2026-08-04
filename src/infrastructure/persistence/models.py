@@ -329,6 +329,17 @@ class UserProfileModel(Base):
     # means "unknown", never "candidate has none" (see UserProfile).
     clearance_level: Mapped[str | None] = mapped_column(String(32), nullable=True)
     highest_degree: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    #: What the candidate is looking for, not a fact about them — so no
+    #: `*_source` column, unlike address/links (see `JobSearchPreferences`).
+    #: JSON arrays because both are short lists nothing queries individually.
+    #: `none_as_null=True` for the reason `job_postings.requirements` documents.
+    desired_employment_types: Mapped[list[str] | None] = mapped_column(
+        JSON(none_as_null=True), nullable=True
+    )
+    #: `[{"season": "summer", "year": 2027}, ...]`. Year may be absent.
+    desired_terms: Mapped[list[dict[str, object]] | None] = mapped_column(
+        JSON(none_as_null=True), nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
