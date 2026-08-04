@@ -19,6 +19,43 @@ const EMPLOYMENT_TYPES = [
 
 const SEASONS = ['spring', 'summer', 'fall', 'winter'];
 
+/** Grouped only for scanning — the backend treats them as one flat set. */
+const FUNCTION_GROUPS: { label: string; functions: string[] }[] = [
+  {
+    label: 'Engineering & data',
+    functions: [
+      'software_engineering',
+      'data_analytics',
+      'data_science',
+      'hardware_engineering',
+      'research',
+    ],
+  },
+  {
+    label: 'Product & design',
+    functions: ['product_management', 'design'],
+  },
+  {
+    label: 'Finance',
+    functions: [
+      'quantitative_finance',
+      'investment_banking',
+      'finance_accounting',
+    ],
+  },
+  {
+    label: 'Business',
+    functions: [
+      'consulting',
+      'marketing',
+      'sales',
+      'operations',
+      'human_resources',
+      'legal',
+    ],
+  },
+];
+
 /** Years offered for a term. Terms are advertised well ahead, so this runs from
  *  last year (postings linger) to three years out. */
 function termYears(): number[] {
@@ -44,6 +81,9 @@ interface DraftTerm {
 export function JobSearchPreferencesSection({ profile, onSaved }: Props) {
   const current = profile?.job_search_preferences;
   const [types, setTypes] = useState<string[]>(current?.employment_types ?? []);
+  const [functions, setFunctions] = useState<string[]>(
+    current?.functions ?? [],
+  );
   const [terms, setTerms] = useState<DraftTerm[]>(
     (current?.terms ?? []).map((term) => ({
       season: term.season,
@@ -63,6 +103,13 @@ export function JobSearchPreferencesSection({ profile, onSaved }: Props) {
     );
   }
 
+  const toggleFunction = (value: string) =>
+    setFunctions((existing) =>
+      existing.includes(value)
+        ? existing.filter((item) => item !== value)
+        : [...existing, value],
+    );
+
   const toggleType = (value: string) =>
     setTypes((existing) =>
       existing.includes(value)
@@ -78,6 +125,7 @@ export function JobSearchPreferencesSection({ profile, onSaved }: Props) {
       onSaved(
         await applyFlowApi.saveJobSearchPreferences({
           employment_types: types,
+          functions,
           // A blank year is sent as null, meaning any year of that season —
           // not dropped, because the season alone is a real preference.
           terms: terms
@@ -96,7 +144,8 @@ export function JobSearchPreferencesSection({ profile, onSaved }: Props) {
     }
   };
 
-  const nothingSelected = types.length === 0 && terms.length === 0;
+  const nothingSelected =
+    types.length === 0 && terms.length === 0 && functions.length === 0;
 
   return (
     <section className="card profile-section">
@@ -118,6 +167,30 @@ export function JobSearchPreferencesSection({ profile, onSaved }: Props) {
             />
             {label(value)}
           </label>
+        ))}
+      </fieldset>
+
+      <fieldset className="profile-subject-list">
+        <legend>Kind of work</legend>
+        <p className="quiet">
+          What you want to do — not the employer's industry. A software role at a
+          hedge fund is software engineering, not quant finance.
+        </p>
+        {FUNCTION_GROUPS.map((group) => (
+          <div key={group.label}>
+            <span className="section-label">{group.label}</span>
+            {group.functions.map((value) => (
+              <label key={value} className="profile-checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={functions.includes(value)}
+                  disabled={busy}
+                  onChange={() => toggleFunction(value)}
+                />
+                {label(value)}
+              </label>
+            ))}
+          </div>
         ))}
       </fieldset>
 
@@ -200,7 +273,8 @@ export function JobSearchPreferencesSection({ profile, onSaved }: Props) {
 
       {nothingSelected ? (
         <p className="quiet">
-          Nothing selected, so every kind of role and every term will be shown.
+          Nothing selected, so every kind of role, every function and every
+          term will be shown.
         </p>
       ) : null}
       {error ? <p className="error">{error}</p> : null}

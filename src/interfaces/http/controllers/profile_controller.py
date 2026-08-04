@@ -358,6 +358,7 @@ async def update_job_search_preferences(
                     TermInput(season=term.season, year=term.year)
                     for term in request.terms
                 ),
+                functions=tuple(request.functions),
             )
         )
     except ProfileNotFoundError as exc:

@@ -650,12 +650,15 @@ export interface HiringTerm {
 export interface JobSearchPreferences {
   employment_types: string[];
   terms: HiringTerm[];
+  /** Kinds of work to show. Empty = every kind. */
+  functions: string[];
 }
 
 /** `label` is server-rendered, so writes send only the season and year. */
 export interface JobSearchPreferencesInput {
   employment_types: string[];
   terms: { season: string; year: number | null }[];
+  functions: string[];
 }
 
 export type WorkHistoryInput = Omit<ProfileWorkHistoryEntry, 'id' | 'source'>;

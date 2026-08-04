@@ -27,13 +27,15 @@ from typing import TypeVar
 from src.domain.exceptions import InvalidValueError
 from src.domain.value_objects.employment_type import EmploymentType
 from src.domain.value_objects.hiring_term import HiringTerm
+from src.domain.value_objects.job_function import JobFunction
 
 #: Ceilings, not rules about how many kinds of work a person may want — a bound
 #: so a malformed payload cannot store an unbounded list.
 MAX_EMPLOYMENT_TYPES = 8
 MAX_TERMS = 12
+MAX_FUNCTIONS = 16
 
-_ValueT = TypeVar("_ValueT", EmploymentType, HiringTerm)
+_ValueT = TypeVar("_ValueT", EmploymentType, HiringTerm, JobFunction)
 
 
 @dataclass(frozen=True)
@@ -44,6 +46,8 @@ class JobSearchPreferences:
     employment_types: tuple[EmploymentType, ...] = field(default_factory=tuple)
     #: Which academic terms to show, for term-based roles. Empty = no preference.
     terms: tuple[HiringTerm, ...] = field(default_factory=tuple)
+    #: Which kinds of work to show. Empty = no preference stated.
+    functions: tuple[JobFunction, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -52,17 +56,22 @@ class JobSearchPreferences:
             _deduplicate(self.employment_types, EmploymentType, "employment type"),
         )
         object.__setattr__(self, "terms", _deduplicate(self.terms, HiringTerm, "term"))
+        object.__setattr__(
+            self, "functions", _deduplicate(self.functions, JobFunction, "function")
+        )
         if len(self.employment_types) > MAX_EMPLOYMENT_TYPES:
             raise InvalidValueError(
                 f"At most {MAX_EMPLOYMENT_TYPES} employment types may be stated."
             )
         if len(self.terms) > MAX_TERMS:
             raise InvalidValueError(f"At most {MAX_TERMS} terms may be stated.")
+        if len(self.functions) > MAX_FUNCTIONS:
+            raise InvalidValueError(f"At most {MAX_FUNCTIONS} functions may be stated.")
 
     @property
     def is_empty(self) -> bool:
         """True when nothing has been stated, so nothing should be filtered."""
-        return not self.employment_types and not self.terms
+        return not self.employment_types and not self.terms and not self.functions
 
     @property
     def states_employment_types(self) -> bool:
@@ -71,6 +80,10 @@ class JobSearchPreferences:
     @property
     def states_terms(self) -> bool:
         return bool(self.terms)
+
+    @property
+    def states_functions(self) -> bool:
+        return bool(self.functions)
 
     def wants_employment_type(self, employment_type: EmploymentType) -> bool:
         """Whether this type is wanted. True when nothing was stated — silence is
@@ -84,6 +97,12 @@ class JobSearchPreferences:
         if not self.terms:
             return True
         return any(wanted.matches(term) for wanted in self.terms)
+
+    def wants_function(self, function: JobFunction) -> bool:
+        """Whether this kind of work is wanted. True when nothing was stated."""
+        if not self.functions:
+            return True
+        return function in self.functions
 
 
 def _deduplicate(

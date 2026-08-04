@@ -34,6 +34,7 @@ from src.domain.value_objects.eeo_self_identification import EeoSelfIdentificati
 from src.domain.value_objects.email_address import EmailAddress
 from src.domain.value_objects.employment_type import EmploymentType
 from src.domain.value_objects.hiring_term import HiringTerm, TermSeason
+from src.domain.value_objects.job_function import JobFunction
 from src.domain.value_objects.job_search_preferences import JobSearchPreferences
 from src.domain.value_objects.proficiency_level import ProficiencyLevel
 from src.domain.value_objects.profile_links import ProfileLinks
@@ -166,6 +167,10 @@ class SqlAlchemyProfileRepository(ProfileRepository):
                     preference.value
                     for preference in entity.job_search_preferences.employment_types
                 ]
+                or None
+            ),
+            desired_functions=(
+                [function.value for function in entity.job_search_preferences.functions]
                 or None
             ),
             desired_terms=(
@@ -325,6 +330,9 @@ class SqlAlchemyProfileRepository(ProfileRepository):
             employment_type.value
             for employment_type in entity.job_search_preferences.employment_types
         ] or None
+        model.desired_functions = [
+            function.value for function in entity.job_search_preferences.functions
+        ] or None
         model.desired_terms = [
             {"season": term.season.value, "year": term.year}
             for term in entity.job_search_preferences.terms
@@ -407,7 +415,9 @@ class SqlAlchemyProfileRepository(ProfileRepository):
                 model.expected_graduation,
             ),
             job_search_preferences=SqlAlchemyProfileRepository._preferences_to_entity(
-                model.desired_employment_types, model.desired_terms
+                model.desired_employment_types,
+                model.desired_terms,
+                model.desired_functions,
             ),
             work_authorization=(
                 SqlAlchemyProfileRepository._work_authorization_to_entity(
@@ -505,6 +515,7 @@ class SqlAlchemyProfileRepository(ProfileRepository):
     def _preferences_to_entity(
         employment_types: list[str] | None,
         terms: list[dict[str, object]] | None,
+        functions: list[str] | None,
     ) -> JobSearchPreferences:
         """Rebuild stated preferences from two JSON columns.
 
@@ -538,8 +549,17 @@ class SqlAlchemyProfileRepository(ProfileRepository):
             except (ValueError, InvalidValueError):
                 continue
 
+        parsed_functions: list[JobFunction] = []
+        for value in functions or []:
+            try:
+                parsed_functions.append(JobFunction(value))
+            except ValueError:
+                continue
+
         return JobSearchPreferences(
-            employment_types=tuple(parsed_types), terms=tuple(parsed_terms)
+            employment_types=tuple(parsed_types),
+            terms=tuple(parsed_terms),
+            functions=tuple(parsed_functions),
         )
 
     @staticmethod

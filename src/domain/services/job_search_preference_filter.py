@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 
 from src.domain.value_objects.employment_type import EmploymentType
 from src.domain.value_objects.hiring_term import HiringTerm
+from src.domain.value_objects.job_function import JobFunction
 from src.domain.value_objects.job_requirements import JobRequirements
 from src.domain.value_objects.job_search_preferences import JobSearchPreferences
 
@@ -56,6 +57,7 @@ class JobSearchPreferenceFilter:
         reasons: list[str] = []
         self._check_employment_type(preferences, requirements.employment_type, reasons)
         self._check_term(preferences, requirements.hiring_term, reasons)
+        self._check_function(preferences, requirements.job_function, reasons)
         return PreferenceFilterResult(matches=not reasons, reasons=tuple(reasons))
 
     @staticmethod
@@ -69,6 +71,25 @@ class JobSearchPreferenceFilter:
         if preferences.wants_employment_type(employment_type):
             return
         reasons.append(f"This is a {employment_type.value.replace('_', ' ')} role")
+
+    @staticmethod
+    def _check_function(
+        preferences: JobSearchPreferences,
+        job_function: JobFunction | None,
+        reasons: list[str],
+    ) -> None:
+        """Filter a posting whose kind of work the candidate did not ask for.
+
+        Same unknown rule as the other two, and it matters more here: a posting's
+        function is inferred from its prose by a model, so "could not tell" is a
+        genuinely common outcome. Hiding those would silently shrink the list in a
+        way indistinguishable from there being no such jobs.
+        """
+        if job_function is None or not preferences.states_functions:
+            return
+        if preferences.wants_function(job_function):
+            return
+        reasons.append(f"This is a {job_function.value.replace('_', ' ')} role")
 
     @staticmethod
     def _check_term(

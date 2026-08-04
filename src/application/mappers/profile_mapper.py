@@ -106,6 +106,10 @@ class ProfileMapper:
                     )
                     for term in profile.job_search_preferences.terms
                 ),
+                functions=tuple(
+                    function.value
+                    for function in profile.job_search_preferences.functions
+                ),
             ),
             work_history=[
                 ProfileMapper._work_history_to_output(entry)

@@ -18,6 +18,7 @@ from src.domain.value_objects.clearance_level import ClearanceLevel
 from src.domain.value_objects.degree_level import DegreeLevel
 from src.domain.value_objects.employment_type import EmploymentType
 from src.domain.value_objects.hiring_term import HiringTerm
+from src.domain.value_objects.job_function import JobFunction
 from src.domain.value_objects.remote_type import RemoteType
 from src.domain.value_objects.student_status_requirement import (
     StudentStatusRequirement,
@@ -40,6 +41,10 @@ class JobRequirements:
     #: structured reading of a posting's text, which is exactly what they are.
     employment_type: EmploymentType | None = None
     hiring_term: HiringTerm | None = None
+    #: What kind of work this is — the axis a candidate picks by. Matched
+    #: against their chosen functions, so it belongs with the other two
+    #: "what the posting is" fields rather than with the demands below.
+    job_function: JobFunction | None = None
     #: What the posting demands about the candidate's *standing*, separately
     #: from their degrees. "Must be a current graduate student" and "bachelor's
     #: required" are different questions, and only this field can tell an

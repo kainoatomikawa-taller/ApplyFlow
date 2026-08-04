@@ -122,6 +122,7 @@ class TermResponse(BaseModel):
 class JobSearchPreferencesResponse(BaseModel):
     employment_types: list[str] = Field(default_factory=list)
     terms: list[TermResponse] = Field(default_factory=list)
+    functions: list[str] = Field(default_factory=list)
 
 
 class ProfileResponse(BaseModel):
@@ -956,6 +957,7 @@ class JobSearchPreferencesRequest(BaseModel):
 
     employment_types: list[str] = Field(default_factory=list, max_length=8)
     terms: list[TermRequest] = Field(default_factory=list, max_length=12)
+    functions: list[str] = Field(default_factory=list, max_length=16)
 
 
 class QualificationsRequest(BaseModel):

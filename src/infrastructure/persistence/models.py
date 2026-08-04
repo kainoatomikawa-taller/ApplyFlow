@@ -343,6 +343,9 @@ class UserProfileModel(Base):
     desired_employment_types: Mapped[list[str] | None] = mapped_column(
         JSON(none_as_null=True), nullable=True
     )
+    desired_functions: Mapped[list[str] | None] = mapped_column(
+        JSON(none_as_null=True), nullable=True
+    )
     #: `[{"season": "summer", "year": 2027}, ...]`. Year may be absent.
     desired_terms: Mapped[list[dict[str, object]] | None] = mapped_column(
         JSON(none_as_null=True), nullable=True

@@ -23,6 +23,7 @@ from src.domain.exceptions import InvalidValueError, ProfileNotFoundError
 from src.domain.repositories.profile_repository import ProfileRepository
 from src.domain.value_objects.employment_type import EmploymentType
 from src.domain.value_objects.hiring_term import HiringTerm, TermSeason
+from src.domain.value_objects.job_function import JobFunction
 from src.domain.value_objects.job_search_preferences import JobSearchPreferences
 
 
@@ -43,6 +44,7 @@ class UpdateJobSearchPreferences:
                 terms=tuple(
                     _parse_term(term.season, term.year) for term in request.terms
                 ),
+                functions=tuple(_parse_function(value) for value in request.functions),
             )
         )
         await self._repository.update(profile)
@@ -65,6 +67,18 @@ def _parse_employment_type(value: str) -> EmploymentType:
             "employment type",
             value,
             tuple(member.value for member in EmploymentType),
+        ) from exc
+
+
+def _parse_function(value: str) -> JobFunction:
+    """Refused rather than dropped, for the same reason an employment type is: a
+    silently discarded function would leave the candidate believing they had
+    narrowed their list when they had not."""
+    try:
+        return JobFunction(value.strip().lower())
+    except ValueError as exc:
+        raise UnknownProfileEnumValueError(
+            "job function", value, tuple(member.value for member in JobFunction)
         ) from exc
 
 

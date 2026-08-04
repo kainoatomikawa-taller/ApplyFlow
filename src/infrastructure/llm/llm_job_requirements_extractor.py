@@ -29,6 +29,7 @@ from src.domain.value_objects.clearance_level import ClearanceLevel
 from src.domain.value_objects.degree_level import DegreeLevel
 from src.domain.value_objects.employment_type import EmploymentType
 from src.domain.value_objects.hiring_term import HiringTerm, TermSeason
+from src.domain.value_objects.job_function import JobFunction
 from src.domain.value_objects.job_requirements import JobRequirements
 from src.domain.value_objects.remote_type import RemoteType
 from src.domain.value_objects.student_status_requirement import (
@@ -47,6 +48,11 @@ return ONLY a single JSON object — no markdown code fences, no commentary
 {
   "employment_type": one of "internship", "co_op", "new_grad", \
 "full_time", "part_time", "contract", or null,
+  "job_function": one of "software_engineering", "data_analytics", \
+"data_science", "product_management", "design", "quantitative_finance", \
+"investment_banking", "consulting", "finance_accounting", "marketing", \
+"sales", "operations", "research", "hardware_engineering", \
+"human_resources", "legal", or null,
   "hiring_term_season": one of "spring", "summer", "fall", "winter", or null,
   "student_status_requirement": one of "current_student", \
 "current_undergraduate", "current_graduate_student", "graduated", or null,
@@ -83,6 +89,14 @@ Rules:
   "full_time" for ordinary permanent roles. Do not infer "internship"
   from the word "intern" appearing inside another word — "Internal
   Audit" and "International Tax" are full-time roles.
+- "job_function" is the kind of work the role does, judged from what the
+  posting says the person would spend their time on — not from the
+  employer's industry. A software role at a hedge fund is
+  "software_engineering", not "quantitative_finance"; a quant researcher
+  at the same fund is "quantitative_finance". Use "data_analytics" for
+  reporting/BI/SQL-analyst work and "data_science" for modelling and
+  machine learning. Use null when the posting is genuinely unclear or the
+  role spans several — do NOT pick the closest of a bad set.
 - "student_status_requirement" is what the posting demands about the
   candidate's *standing*, which is a different question from the degree.
   "must be enrolled in an accredited program" -> "current_student";
@@ -125,6 +139,7 @@ class LlmJobRequirementsExtractor(JobRequirementsExtractorPort):
 
         return JobRequirements(
             employment_type=_as_enum(EmploymentType, payload.get("employment_type")),
+            job_function=_as_enum(JobFunction, payload.get("job_function")),
             student_status_requirement=_as_enum(
                 StudentStatusRequirement, payload.get("student_status_requirement")
             ),

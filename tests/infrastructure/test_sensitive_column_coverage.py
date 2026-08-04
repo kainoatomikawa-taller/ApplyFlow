@@ -130,6 +130,9 @@ _REVIEWED_PLAINTEXT: dict[str, str] = {
     "user_profiles.desired_terms": (
         "A stated preference, not personal data — see the note above."
     ),
+    "user_profiles.desired_functions": (
+        "A stated preference, not personal data — see the note above."
+    ),
     "user_profiles.portfolio_url": "A profile the candidate publishes publicly.",
     "user_profiles.linkedin_url": "A profile the candidate publishes publicly.",
     "user_profiles.github_url": "A profile the candidate publishes publicly.",

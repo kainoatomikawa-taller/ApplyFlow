@@ -210,6 +210,7 @@ class JobSearchPreferencesInput:
     user_id: str
     employment_types: tuple[str, ...] = ()
     terms: tuple[TermInput, ...] = ()
+    functions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -225,6 +226,7 @@ class TermOutput:
 class JobSearchPreferencesOutput:
     employment_types: tuple[str, ...]
     terms: tuple[TermOutput, ...]
+    functions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

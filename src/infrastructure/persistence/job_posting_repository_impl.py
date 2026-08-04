@@ -16,6 +16,7 @@ from src.domain.value_objects.clearance_level import ClearanceLevel
 from src.domain.value_objects.degree_level import DegreeLevel
 from src.domain.value_objects.employment_type import EmploymentType
 from src.domain.value_objects.hiring_term import HiringTerm, TermSeason
+from src.domain.value_objects.job_function import JobFunction
 from src.domain.value_objects.job_posting_status import JobPostingStatus
 from src.domain.value_objects.job_requirements import JobRequirements
 from src.domain.value_objects.remote_type import RemoteType
@@ -194,6 +195,9 @@ class SqlAlchemyJobPostingRepository(JobPostingRepository):
             ),
             # Flattened rather than nested, matching the extractor's own schema and
             # keeping the stored shape one level deep like every other key here.
+            "job_function": (
+                requirements.job_function.value if requirements.job_function else None
+            ),
             "student_status_requirement": (
                 requirements.student_status_requirement.value
                 if requirements.student_status_requirement
@@ -269,6 +273,7 @@ class SqlAlchemyJobPostingRepository(JobPostingRepository):
 
         employment_type = data.get("employment_type")
         student_status = data.get("student_status_requirement")
+        job_function = data.get("job_function")
         term_season = data.get("hiring_term_season")
         term_year = data.get("hiring_term_year")
 
@@ -281,6 +286,9 @@ class SqlAlchemyJobPostingRepository(JobPostingRepository):
             # A stored year with no season cannot be reassembled — `HiringTerm`
             # requires a season — so the term reads as absent rather than raising
             # on a row written by an older or partial extraction.
+            job_function=(
+                JobFunction(job_function) if isinstance(job_function, str) else None
+            ),
             student_status_requirement=(
                 StudentStatusRequirement(student_status)
                 if isinstance(student_status, str)
