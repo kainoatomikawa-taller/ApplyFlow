@@ -415,9 +415,16 @@ def _recognize_by_label(label: str) -> ApplicationFieldSlot | None:
     module docstring on why a question mark is treated as "a company wrote
     this field", and why the always-asked legal and EEO questions are the
     exception.
+
+    First-match-wins is checked against `_CONFLICTING_LEGAL_SLOTS` before it
+    is trusted, because on one common phrasing the winner is the wrong
+    question — see that constant.
     """
     tokens = _tokenize(label)
     if not tokens:
+        return None
+
+    if _asks_more_than_one_legal_question(tokens):
         return None
 
     is_question = "?" in label
@@ -428,6 +435,53 @@ def _recognize_by_label(label: str) -> ApplicationFieldSlot | None:
             return None
         return slot
     return None
+
+
+#: The one pair of legal-attestation slots whose phrases routinely appear in
+#: the *same* label, asking a question that neither of them answers.
+#:
+#: "Are you legally authorized to work in the United States **without
+#: sponsorship**?" is a standard Greenhouse/Lever screening question, and it
+#: matches both the authorization rules and the sponsorship rules. Ordering
+#: decides the winner, and the winner is sponsorship — so a US citizen, whose
+#: record says "does not require sponsorship", gets **"No"** written into a
+#: field whose truthful answer is **"Yes"**. The two questions have opposite
+#: polarity, so picking either slot inverts the declaration for one group of
+#: candidates: the compound question asks for the *conjunction* (authorized
+#: AND needing no sponsor) and no single stored field states it.
+#:
+#: Inverting a legal declaration is the specific harm this whole module is
+#: ordered to avoid (see the module docstring, and `_SENSITIVE_ANSWER_KINDS`
+#: in `AtsFormFieldPlanner`, which excludes checkboxes for the same reason),
+#: so a label carrying both is refused outright and surfaced for the
+#: candidate to answer.
+#:
+#: Deliberately this pair and no other. A general "two sensitive slots
+#: matched" rule would surface the canonical sponsorship question itself —
+#: "Will you now or in the future require sponsorship for employment **visa
+#: status**?" also matches the `visa status` rule — and refusing to answer
+#: the most common sponsorship question on every portal is a worse outcome
+#: than the narrow gap this closes.
+#:
+#: Answering the compound question exactly, rather than surfacing it, needs a
+#: slot of its own with its own derivation — an Epic 01/05 change, tracked in
+#: `docs/sensitive-field-enforcement-check.md`.
+_CONFLICTING_LEGAL_SLOTS: frozenset[ApplicationFieldSlot] = frozenset(
+    {
+        ApplicationFieldSlot.WORK_AUTHORIZATION,
+        ApplicationFieldSlot.SPONSORSHIP_REQUIRED,
+    }
+)
+
+
+def _asks_more_than_one_legal_question(tokens: tuple[str, ...]) -> bool:
+    """Whether this label matches rules for both conflicting legal slots."""
+    matched = {
+        slot
+        for phrase, slot in _LABEL_RULES
+        if slot in _CONFLICTING_LEGAL_SLOTS and _contains_phrase(tokens, phrase)
+    }
+    return len(matched) > 1
 
 
 def _tokenize(label: str) -> tuple[str, ...]:
