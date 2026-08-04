@@ -1,4 +1,4 @@
-# config · 10
+# config · 11
 
 > Section index — this project's **config** memory. Open a concept below for the full detail.
 
@@ -12,3 +12,4 @@
 - [[config/the-app-s-web-search-provider-was-migrated-from]] — The app's web search provider was migrated from Brave Search (discontinued free tier) to…
 - [[config/the-frontend-frontend-src-has-zero-console-log-d]] — The frontend (frontend/src) has zero console.log/debug/info/warn/error call sites.
 - [[config/the-frontend-stores-its-supabase-access-token-in]] — The frontend stores its Supabase access token in `localStorage` (not…
+- [[config/the-ingest-cli-s-adzuna-path-passes-no-listing-r]] — The ingest CLI's Adzuna path passes no listing_resolver, so running it consumes zero…

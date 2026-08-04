@@ -1,4 +1,4 @@
-# architecture · 25
+# architecture · 26
 
 > Section index — this project's **architecture** memory. Open a concept below for the full detail.
 
@@ -19,6 +19,7 @@
 - [[architecture/encryption-at-rest-lives-in-a-new-src-infrastruc]] — Encryption-at-rest lives in a new src/infrastructure/security/ module
 - [[architecture/fieldcipher-stores-ciphertext-as-encv1-key-id-ba]] — FieldCipher stores ciphertext as `encv1:<key_id>:<base64url nonce>:<base64url…
 - [[architecture/job-matching-is-two-distinct-stages-with-differe]] — Job matching is two distinct stages with different semantics
+- [[architecture/jobrequirements-is-persisted-as-a-json-column-so]] — JobRequirements is persisted as a JSON column, so adding new fields (employment_type,…
 - [[architecture/new-sqlalchemy-column-types-encryptedstring-encr]] — New SQLAlchemy column types (EncryptedString/EncryptedBoolean/EncryptedJson) wrap…
 - [[architecture/only-one-code-path-can-press-a-real-submit-butto]] — Only one code path can press a real submit button on a company's application page
 - [[architecture/pii-log-redaction-is-installed-by-calling-instal]] — PII log redaction is installed by calling `install_pii_redaction()` at four separate…
