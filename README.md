@@ -1605,7 +1605,7 @@ All `/api/applications*` and `/api/resumes*` routes require
 | ------ | ----------------------------------- | ------------------------------------ | ------------- |
 | GET    | `/health`                           | Health check                         | No            |
 | POST   | `/api/applications`                 | Create a job application             | Yes           |
-| GET    | `/api/applications?candidate_email=`| List a candidate's ranked applications | Yes         |
+| GET    | `/api/applications`                 | List the current user's ranked applications (the candidate comes from the token's `email` claim — see ADR 0003) | Yes |
 | POST   | `/api/applications/{id}/analyze`    | AI resume/JD analysis + cover letter | Yes           |
 | POST   | `/api/applications/{id}/submit`     | Move DRAFT → APPLIED                 | Yes           |
 | POST   | `/api/resumes`                      | Upload a resume (PDF/DOCX/text); stores it and returns extracted text | Yes |
@@ -1637,6 +1637,125 @@ All `/api/applications*` and `/api/resumes*` routes require
 | GET    | `/api/tracked-applications/{id}`    | One application with its full status history | Yes |
 | GET    | `/api/tracked-applications/by-job/{job_posting_id}` | Every application this candidate sent to one posting | Yes |
 | PATCH  | `/api/tracked-applications/{id}/status` | Record what became of one application, with an optional note. 409 for a move the lifecycle forbids, 422 for a value that is not a status (or is `draft`) | Yes |
+| GET    | `/api/privacy/export`               | A complete, portable copy of the current user's data, plus the categories it cannot include and why (GDPR Art. 15/20) | Yes |
+| POST   | `/api/privacy/erasure`              | **Irreversible.** Erase everything erasable about the current user; returns a receipt of what went and what was retained. 400 without `acknowledged: true` | Yes |
+| GET    | `/api/privacy/consents`             | Every consent purpose and where it stands, including ones never answered | Yes |
+| PUT    | `/api/privacy/consents/{purpose}`   | Grant or withdraw one purpose. 409 for a purpose that is not processed on the basis of consent (erasure is the request that stops those) | Yes |
+
+The subject of every `/api/privacy` route is whoever the verified token names —
+none of them takes a user id or an email. See below.
+
+---
+
+## Data-subject rights (export, erasure, consent)
+
+ApplyFlow has one user, so none of GDPR or CCPA binds it today: there is no data
+subject who is not also the controller. The groundwork is here anyway, because
+the expensive part of these rights is not the endpoint — it is knowing
+exhaustively where a person's data is, and that enumeration is cheap to build at
+sixteen tables and wrong when reconstructed at forty. Full reasoning, and the
+ordered list of what full compliance at multi-user scale still needs, is in
+[`docs/decisions/0004-gdpr-ccpa-groundwork.md`](docs/decisions/0004-gdpr-ccpa-groundwork.md).
+
+### The inventory is the source of truth
+
+`src/domain/services/personal_data_inventory.py` declares every category of
+personal data this application is responsible for: what it is, which store holds
+it, the lawful basis, whether it is exportable, and what erasure does to it.
+Export and erasure both iterate that declaration — neither keeps its own list.
+
+Fourteen categories across five stores, and the two that a schema-walking
+implementation would miss are the point of declaring them: the résumé bytes in
+blob storage, and the data held by third parties (the model providers, and every
+employer the candidate has applied to).
+
+`tests/infrastructure/test_personal_data_inventory_covers_schema.py` keeps it
+honest. It computes from `Base.metadata` alone which tables hold data reachable
+from a person — a subject column, a `sensitive`-flagged column, or a foreign key
+into a table that qualifies, transitively — and fails if that set differs from
+what the inventory declares. **Adding a user-scoped table fails the build until
+it is declared and handled.** The same file checks the adapter both ways: a
+declared category with no handler, and a handler for a category nobody declared,
+are each a failure.
+
+### Export
+
+Reads rows and serializes every column, rather than going through the
+repositories: Art. 20 asks for all personal data, and an entity exposes the
+subset the domain needs. A column added to a table therefore lands in the export
+by default.
+
+Three properties worth knowing:
+
+- **It will not be partial.** A missing category raises rather than being
+  omitted — a copy short by one section is indistinguishable from a copy of
+  someone who had no data in it.
+- **It lists what it does not contain.** The processor and employer categories,
+  and the log sink that holds nothing, appear as `deferred_categories` with the
+  note saying who has to act.
+- **It states its own limitations.** `job_applications` predates the account
+  model and files rows under an email address, so a request from a token with no
+  `email` claim says so instead of reporting an empty section.
+
+Résumé files are exported as a manifest (name, type, size, key), with the
+extracted text of each in the `resumes` section — a portable copy is a JSON
+document, and an inlined base64 PDF makes it unopenable.
+
+### Erasure
+
+Deletes exactly the categories the inventory dispositions `ERASE`, and reports
+per-category counts plus a `retained` list with the reason for each. Ordering is
+the adapter's business, not the caller's: `tracked_applications` references
+`application_documents` with `ON DELETE RESTRICT`, so the tracker rows go first.
+Blob files are deleted before the rows that name them — a failure then leaves
+metadata for a file already gone, where the reverse would leave the résumé on
+disk with nothing pointing at it.
+
+Consent is withdrawn before anything is deleted, and the consent ledger is the
+one category deliberately **retained**: Art. 7(1) requires being able to
+demonstrate consent, and after an erasure the entry that matters most is the
+withdrawal that triggered it. What survives is a purpose, a yes/no, a timestamp,
+a notice version and an account id — no name, address, document or answer.
+`SqlAlchemyPersonalDataStore` has a reader for that category and no eraser at
+all, so the retention is a property of the code rather than of the caller's
+arguments.
+
+### Consent
+
+Five purposes, each carrying its own lawful basis, and three things fall out of
+the basis rather than being coded per purpose: whether it can be withdrawn,
+whether it is permitted before the user has answered (consent-based purposes
+start denied — an unanswered question is a "no"), and whether it appears as a
+toggle at all. `account_and_applications` is contract-based and is listed
+anyway, because the transparency obligation covers processing the user cannot
+switch off; withdrawing it returns 409 and points at erasure.
+
+The ledger is append-only, one row per decision, keyed
+`(user_id, purpose, sequence)`. A boolean says what the answer is now; a
+withdrawal destroys the fact that afterwards matters most. Every decision
+records the `PRIVACY_POLICY_VERSION` in force at the time — consent is only
+valid for what the user was told, so this is what makes "who has to be re-asked
+after the notice changed?" a query instead of a guess.
+
+Recording consent is done; **enforcing** it at the processing sites is not, and
+is item 6 in the ADR's list.
+
+### Also on the CLI
+
+```bash
+applyflow export-data --user-id <id> [--email <address>] [--output copy.json]
+applyflow erase-data  --user-id <id> [--email <address>] --confirm
+```
+
+Not a convenience. A subject access request has to be answerable when the API
+cannot answer it — no valid token, a frontend that is down, a request that
+arrived by email — and an authenticated endpoint alone would make the ordinary
+shape of a real request the one case the design cannot serve.
+
+Both entry points open a `sensitive_data_access` scope, because an export reads
+every encrypted column there is. Neither the use case nor the adapter opens one:
+a use case that granted itself decryption would be the hole that gate exists to
+close.
 
 ---
 

@@ -214,3 +214,69 @@ class ProfileMissingContactInfoError(DomainError):
             "Cannot create a profile: no full name and email could be "
             "extracted from this resume, and none exists yet."
         )
+
+
+class ConsentNotWithdrawableError(DomainError):
+    """Raised when a withdrawal was recorded against a purpose whose lawful
+    basis is not consent.
+
+    Not a validation nicety. A ledger entry saying the user turned off
+    something this application never stops doing would be a false record of
+    compliance — worse than having no record, because it is the record an
+    auditor would be shown. The purposes this application processes under
+    contract cannot be switched off in isolation; withdrawing them means
+    erasing the account, which is a different request with its own path.
+
+    Carries the purpose value, which names a category of processing rather
+    than anything about the person, so it is safe to log.
+    """
+
+    def __init__(self, purpose: str) -> None:
+        self.purpose = purpose
+        super().__init__(
+            f"Consent for '{purpose}' cannot be withdrawn: it is not processed "
+            "on the basis of consent. Turning it off means erasing the "
+            "account — request erasure instead."
+        )
+
+
+class ConsentLedgerOutOfOrderError(DomainError):
+    """Raised when a consent decision would be appended before the one it
+    follows.
+
+    The ledger's whole value is that the last entry is the current state (see
+    `ConsentRecord`). An entry dated earlier than its predecessor breaks that
+    reading — "is this purpose granted?" would then depend on insertion order
+    rather than on what the user last decided — so it is refused at append
+    time instead of producing a record whose meaning depends on how it was
+    written.
+    """
+
+    def __init__(self, purpose: str) -> None:
+        self.purpose = purpose
+        super().__init__(
+            f"A consent decision for '{purpose}' cannot be dated earlier than "
+            "the decision it follows; the ledger's last entry is what states "
+            "the current answer."
+        )
+
+
+class UnknownPersonalDataCategoryError(DomainError):
+    """Raised when something asked the personal-data inventory for a category
+    key it does not declare.
+
+    A programming error, surfaced as a domain error because the inventory is
+    the domain's statement of what personal data exists: a caller naming a
+    category that is not there is either working from a stale key or has added
+    a store without declaring it. Both are answered by editing the inventory,
+    never by skipping the category — which is what returning `None` here would
+    quietly encourage on an export or an erasure path.
+    """
+
+    def __init__(self, key: str) -> None:
+        self.key = key
+        super().__init__(
+            f"'{key}' is not a declared personal-data category. Every store "
+            "holding personal data has to be declared in "
+            "src/domain/services/personal_data_inventory.py."
+        )

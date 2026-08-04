@@ -20,6 +20,7 @@ from src.interfaces.http.controllers import (
     application_document_controller,
     application_review_controller,
     cover_letter_controller,
+    data_rights_controller,
     document_revision_controller,
     gap_resolution_controller,
     health_controller,
@@ -100,6 +101,10 @@ def create_app() -> FastAPI:
     app.include_router(portal_handoff_controller.router)
     app.include_router(application_review_controller.router)
     app.include_router(tracked_application_controller.router)
+    # Export, erasure, and consent. Registered last because it is the one router
+    # that reads across every other one's data — nothing else depends on it, and
+    # it depends on all of them being in the same schema.
+    app.include_router(data_rights_controller.router)
     return app
 
 

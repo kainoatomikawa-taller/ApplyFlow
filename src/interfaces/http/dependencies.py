@@ -46,6 +46,8 @@ from src.application.use_cases.detect_job_requirement_gaps import (
 from src.application.use_cases.discard_application_review import (
     DiscardApplicationReview,
 )
+from src.application.use_cases.erase_user_data import EraseUserData
+from src.application.use_cases.export_user_data import ExportUserData
 from src.application.use_cases.generate_cover_letter import GenerateCoverLetter
 from src.application.use_cases.generate_gap_resolution_questions import (
     GenerateGapResolutionQuestions,
@@ -74,11 +76,13 @@ from src.application.use_cases.list_job_match_feedback import (
 from src.application.use_cases.list_portal_handoffs import ListPortalHandoffs
 from src.application.use_cases.list_resumes import ListResumes
 from src.application.use_cases.list_tracked_applications import ListTrackedApplications
+from src.application.use_cases.list_user_consents import ListUserConsents
 from src.application.use_cases.open_application_review import OpenApplicationReview
 from src.application.use_cases.parse_resume import ParseResume
 from src.application.use_cases.rank_matched_job_postings import (
     RankMatchedJobPostings,
 )
+from src.application.use_cases.record_consent import RecordConsent
 from src.application.use_cases.resolve_gap_answer import ResolveGapAnswer
 from src.application.use_cases.resume_portal_handoff import ResumePortalHandoff
 from src.application.use_cases.revise_generated_document import (
@@ -134,6 +138,9 @@ from src.infrastructure.persistence.application_document_repository_impl import 
 from src.infrastructure.persistence.application_review_repository_impl import (
     SqlAlchemyApplicationReviewRepository,
 )
+from src.infrastructure.persistence.consent_repository_impl import (
+    SqlAlchemyConsentRepository,
+)
 from src.infrastructure.persistence.database import get_session
 from src.infrastructure.persistence.job_application_repository_impl import (
     SqlAlchemyJobApplicationRepository,
@@ -143,6 +150,9 @@ from src.infrastructure.persistence.job_match_feedback_repository_impl import (
 )
 from src.infrastructure.persistence.job_posting_repository_impl import (
     SqlAlchemyJobPostingRepository,
+)
+from src.infrastructure.persistence.personal_data_store_impl import (
+    SqlAlchemyPersonalDataStore,
 )
 from src.infrastructure.persistence.portal_handoff_repository_impl import (
     SqlAlchemyPortalHandoffRepository,
@@ -802,6 +812,73 @@ def get_list_applications_for_job_use_case(
     return ListApplicationsForJob(
         repository=repository, document_repository=document_repository
     )
+
+
+# -- Data-subject rights: export, erasure, consent ---------------------------
+#
+# The export and erasure use cases take one adapter for every store rather than
+# a fan of repositories, and the reasons are in `PersonalDataStorePort`: erasure
+# order is a foreign-key fact, and a portable copy has to carry stored columns
+# rather than what the entities expose. What is worth noticing here is what the
+# wiring makes impossible:
+#
+# - The store gets the *same* session as everything else, so an erasure commits
+#   as one transaction rather than as nine.
+# - `EraseUserData` gets the consent repository as well as the store, because it
+#   records the withdrawal before deleting — the ledger is the record that the
+#   erasure was lawful, and the store deliberately cannot delete it.
+# - Neither takes the inventory: they default to the declared one. A wiring
+#   mistake here therefore cannot narrow what gets exported or erased, which is
+#   the one class of bug in this subsystem that would look like success.
+
+
+def _consent_repository(
+    session: AsyncSession = Depends(get_session),
+) -> SqlAlchemyConsentRepository:
+    return SqlAlchemyConsentRepository(session)
+
+
+def _personal_data_store(
+    session: AsyncSession = Depends(get_session),
+    storage: LocalFileStorage = Depends(_file_storage),
+) -> SqlAlchemyPersonalDataStore:
+    return SqlAlchemyPersonalDataStore(session, storage)
+
+
+def get_privacy_policy_version() -> str:
+    """The privacy-notice version this deployment serves.
+
+    A dependency rather than a settings read inside the controller so a test can
+    override it, and so the two endpoints that stamp a consent decision cannot
+    end up reading it from different places.
+    """
+    return get_settings().privacy_policy_version
+
+
+def get_export_user_data_use_case(
+    store: SqlAlchemyPersonalDataStore = Depends(_personal_data_store),
+    consent_repository: SqlAlchemyConsentRepository = Depends(_consent_repository),
+) -> ExportUserData:
+    return ExportUserData(store=store, consent_repository=consent_repository)
+
+
+def get_erase_user_data_use_case(
+    store: SqlAlchemyPersonalDataStore = Depends(_personal_data_store),
+    consent_repository: SqlAlchemyConsentRepository = Depends(_consent_repository),
+) -> EraseUserData:
+    return EraseUserData(store=store, consent_repository=consent_repository)
+
+
+def get_record_consent_use_case(
+    repository: SqlAlchemyConsentRepository = Depends(_consent_repository),
+) -> RecordConsent:
+    return RecordConsent(repository=repository)
+
+
+def get_list_user_consents_use_case(
+    repository: SqlAlchemyConsentRepository = Depends(_consent_repository),
+) -> ListUserConsents:
+    return ListUserConsents(repository=repository)
 
 
 def _auth_verifier() -> AuthVerifierPort:

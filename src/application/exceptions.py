@@ -446,3 +446,74 @@ class UnattestedGenerationError(ApplicationError):
             f"No attested content survived provenance checks for {document_kind}. "
             f"Unsupported terms: {detail}."
         )
+
+
+class PersonalDataCoverageError(ApplicationError):
+    """Raised when the personal-data store adapter did not answer for every
+    category the inventory declares.
+
+    This is the check that makes an export "complete" and an erasure "across
+    stores" mean something. Both paths ask the adapter for a set of categories
+    taken from `PersonalDataInventory`; if the answer is missing one, the honest
+    outcomes are a failed request or a document that silently omits a section of
+    someone's data. The first is recoverable and the second is the kind of
+    incident this whole subsystem exists to prevent, so a gap raises rather than
+    degrading.
+
+    In practice it fires for one of two reasons: an inventory category was added
+    without a handler in the adapter (which a static test should have caught
+    first — see
+    `tests/infrastructure/test_personal_data_inventory_covers_schema.py`), or an
+    adapter returned a partial mapping at runtime.
+
+    Carries the category keys, which name kinds of data rather than any of it,
+    so this is safe to log.
+    """
+
+    def __init__(self, operation: str, missing: tuple[str, ...]) -> None:
+        self.operation = operation
+        self.missing = missing
+        listed = ", ".join(sorted(missing))
+        super().__init__(
+            f"Cannot complete the {operation}: the personal-data store did not "
+            f"account for these declared categories: {listed}. A partial "
+            f"{operation} is not delivered — every category has to be handled "
+            "or explicitly deferred in the inventory."
+        )
+
+
+class ErasureNotAcknowledgedError(ApplicationError):
+    """Raised when an erasure was requested without the caller confirming it.
+
+    Erasure is irreversible and total. The confirmation lives in the use case
+    rather than in one controller so every adapter — HTTP, CLI, anything later
+    — inherits it instead of each remembering to ask.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "An erasure request must be explicitly acknowledged: it deletes "
+            "every record this application holds about the subject and cannot "
+            "be undone."
+        )
+
+
+class UnknownConsentPurposeError(ApplicationError):
+    """Raised when a consent decision named a purpose this application does not
+    have.
+
+    An application-layer error rather than a domain one because the bad value
+    arrives from outside — a stale client, a hand-written request, a renamed
+    enum member — and the interface layer maps it to a 400. The domain's own
+    `ConsentPurpose` never sees it: parsing happens once, here, so no adapter
+    has to reimplement it.
+    """
+
+    def __init__(self, purpose: str, available: tuple[str, ...]) -> None:
+        self.purpose = purpose
+        self.available = available
+        listed = ", ".join(sorted(available))
+        super().__init__(
+            f"'{purpose}' is not a consent purpose this application asks "
+            f"about. Available purposes: {listed}."
+        )

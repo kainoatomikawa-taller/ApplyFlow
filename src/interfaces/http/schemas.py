@@ -7,7 +7,7 @@ happens here; business rules are enforced in the domain layer.
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -675,3 +675,146 @@ class TrackedApplicationListResponse(BaseModel):
 
     applications: list[TrackedApplicationResponse] = Field(default_factory=list)
     open_count: int = 0
+
+
+# -- Data-subject rights: export, erasure, consent ---------------------------
+#
+# The export and erasure responses carry more explanation than a typical
+# response schema, and deliberately: they are the artifacts a subject access
+# request is answered with, so each section states what the data is and why it
+# is held, and both list the categories this application does *not* hold or
+# cannot erase. A copy that is only rows is a copy the recipient cannot check.
+# See src/domain/services/personal_data_inventory.py.
+
+
+class ConsentStateResponse(BaseModel):
+    """One consent purpose and where it stands.
+
+    `granted` is the answer to act on; `decided` says whether the user has ever
+    been asked, which is a different question. A purpose that is granted because
+    it is contract-based rather than because anyone agreed to it reads as
+    `granted=true, decided=false`, and a UI that showed only `granted` would be
+    showing the user a "yes" they never gave.
+    """
+
+    purpose: str
+    description: str
+    lawful_basis: str
+    granted: bool
+    decided: bool
+    withdrawable: bool
+    decided_at: datetime | None = None
+    policy_version: str | None = None
+
+
+class ConsentDecisionResponse(BaseModel):
+    """One entry in the consent ledger — the demonstration record."""
+
+    purpose: str
+    granted: bool
+    decided_at: datetime
+    policy_version: str
+
+
+class RecordConsentRequest(BaseModel):
+    """A grant or a withdrawal for the purpose named in the path.
+
+    The purpose is not in the body: it is the resource being addressed. The
+    policy version is not in the body either — it is the version this deployment
+    is serving, which the client does not get to assert.
+    """
+
+    granted: bool
+
+
+class RecordConsentResponse(BaseModel):
+    """The resulting state, plus whether the ledger actually changed.
+
+    `changed` is false when the request restated what was already recorded — a
+    client re-sending the state of a toggle it had already rendered. Reported
+    rather than hidden so a caller can say "already set" without diffing, and so
+    the ledger stays a record of decisions rather than of clicks.
+    """
+
+    state: ConsentStateResponse
+    changed: bool
+
+
+class ExportedCategoryResponse(BaseModel):
+    """One section of a portable copy."""
+
+    key: str
+    description: str
+    store: str
+    lawful_basis: str
+    record_count: int
+    #: Stored records as column-name -> value. Untyped on purpose: this carries
+    #: everything held, which is what portability means, rather than the subset
+    #: some response model happens to describe.
+    records: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class DeferredCategoryResponse(BaseModel):
+    """A category that is not in the portable copy, or not erased here — with
+    the reason and whoever has to act."""
+
+    key: str
+    description: str
+    store: str
+    lawful_basis: str
+    disposition: str
+    note: str
+
+
+class PersonalDataExportResponse(BaseModel):
+    """A complete, portable copy of the authenticated user's data."""
+
+    format_version: str
+    subject_user_id: str
+    generated_at: datetime
+    consent_policy_version: str | None = None
+    categories: list[ExportedCategoryResponse] = Field(default_factory=list)
+    deferred_categories: list[DeferredCategoryResponse] = Field(default_factory=list)
+    consents: list[ConsentStateResponse] = Field(default_factory=list)
+    consent_history: list[ConsentDecisionResponse] = Field(default_factory=list)
+    #: Completeness caveats, stated in the document rather than logged: the
+    #: person holding the export is the one who needs to know it may be short.
+    limitations: list[str] = Field(default_factory=list)
+
+
+class ErasureRequest(BaseModel):
+    """A request to erase everything erasable about the authenticated user.
+
+    `acknowledged` has to be true, and the endpoint refuses without it. Erasure
+    is irreversible and total; an endpoint that ran on an empty body is one an
+    accidental POST can trigger.
+    """
+
+    acknowledged: bool = False
+    reason: str = Field(default="", max_length=1000)
+
+
+class ErasedCategoryResponse(BaseModel):
+    """One category the erasure deleted, and how much."""
+
+    key: str
+    description: str
+    store: str
+    records_erased: int
+
+
+class ErasureReceiptResponse(BaseModel):
+    """The receipt for an erasure request.
+
+    `retained` is beside `erased` for the same reason the export lists deferred
+    categories: a receipt of deletions alone invites the reader to conclude the
+    remainder was nothing.
+    """
+
+    subject_user_id: str
+    executed_at: datetime
+    total_records_erased: int
+    erased: list[ErasedCategoryResponse] = Field(default_factory=list)
+    retained: list[DeferredCategoryResponse] = Field(default_factory=list)
+    consents_withdrawn: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)

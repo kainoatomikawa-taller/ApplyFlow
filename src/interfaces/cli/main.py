@@ -8,20 +8,34 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
+from dataclasses import asdict
+from datetime import UTC, datetime
+from pathlib import Path
 
+from src.application.dtos.data_rights_dtos import (
+    DataSubjectRef,
+    ErasureRequestInput,
+)
 from src.application.dtos.job_application_dtos import CreateJobApplicationInput
 from src.application.dtos.job_ingestion_dtos import IngestAggregatorJobsInput
 from src.application.dtos.llm_dtos import LlmCompletionInput
+from src.application.exceptions import ErasureNotAcknowledgedError
 from src.application.ports.llm_client_port import LlmTaskType
 from src.application.use_cases.create_job_application import (
     CreateJobApplication,
 )
+from src.application.use_cases.erase_user_data import EraseUserData
+from src.application.use_cases.export_user_data import ExportUserData
 from src.application.use_cases.get_llm_completion import GetLlmCompletion
 from src.application.use_cases.ingest_aggregator_jobs import IngestAggregatorJobs
 from src.infrastructure.config import get_settings
 from src.infrastructure.job_aggregators.adzuna_client import AdzunaJobAggregatorClient
 from src.infrastructure.llm.anthropic_client import AnthropicLlmClient
 from src.infrastructure.observability import configure_logging
+from src.infrastructure.persistence.consent_repository_impl import (
+    SqlAlchemyConsentRepository,
+)
 from src.infrastructure.persistence.database import async_session_factory
 from src.infrastructure.persistence.job_application_repository_impl import (
     SqlAlchemyJobApplicationRepository,
@@ -29,8 +43,12 @@ from src.infrastructure.persistence.job_application_repository_impl import (
 from src.infrastructure.persistence.job_posting_repository_impl import (
     SqlAlchemyJobPostingRepository,
 )
+from src.infrastructure.persistence.personal_data_store_impl import (
+    SqlAlchemyPersonalDataStore,
+)
 from src.infrastructure.security.sensitive_access import sensitive_data_access
 from src.infrastructure.services.uuid_id_generator import UuidIdGenerator
+from src.infrastructure.storage.local_file_storage import LocalFileStorage
 
 
 async def _create(args: argparse.Namespace) -> None:
@@ -81,6 +99,96 @@ async def _ingest_adzuna(args: argparse.Namespace) -> None:
         )
 
 
+async def _export_data(args: argparse.Namespace) -> None:
+    """Write a complete portable copy of a user's data to stdout as JSON.
+
+    An authorized decryption path (Epic 07) for the same reason `_create` is: the
+    operator running this command locally is acting on their own data. The scope
+    names the subject it acts for, and the reason says which right is being
+    exercised, so an audit of `sensitive_access.py`'s call sites reads as a list
+    of purposes rather than a list of `True`s.
+
+    A CLI command as well as an endpoint because a data-subject request has to be
+    answerable when the API cannot answer it — no valid token, a frontend that is
+    down, or an operator handling a request that arrived by email. That is the
+    ordinary shape of a subject access request, and having only an authenticated
+    endpoint would make it the one case the design cannot serve.
+
+    JSON, so the copy is machine-readable in the sense GDPR Art. 20 means.
+    `--output` writes it to a file and is the option to prefer for two reasons:
+    with `DEBUG` on, SQLAlchemy echoes every statement to stdout and would
+    interleave itself into a redirected document; and printing a person's entire
+    record to a terminal puts it in a scrollback buffer, which is the one output
+    here as sensitive as the database itself.
+    """
+    with sensitive_data_access(
+        subject=args.user_id,
+        reason="applyflow export-data (subject access request, local CLI)",
+    ):
+        async with async_session_factory() as session:
+            use_case = ExportUserData(
+                store=SqlAlchemyPersonalDataStore(
+                    session, LocalFileStorage(Path(get_settings().resume_storage_dir))
+                ),
+                consent_repository=SqlAlchemyConsentRepository(session),
+            )
+            output = await use_case.execute(
+                DataSubjectRef(user_id=args.user_id, email=args.email),
+                generated_at=datetime.now(UTC),
+            )
+    document = json.dumps(asdict(output), indent=2, default=str)
+    if args.output:
+        # Written after the access scope has closed, so the plaintext is held
+        # only as long as it takes to serialize it.
+        Path(args.output).write_text(document, encoding="utf-8")
+        # The path and the counts, never the contents — the same rule the HTTP
+        # controller logs by.
+        print(
+            f"Wrote {len(output.categories)} categories "
+            f"({sum(c.record_count for c in output.categories)} records) "
+            f"to {args.output}"
+        )
+        return
+    print(document)
+
+
+async def _erase_data(args: argparse.Namespace) -> None:
+    """Erase everything erasable about a user, and print the receipt.
+
+    `--confirm` is required and unabbreviated on purpose. A shell history is one
+    arrow-key away from re-running an irreversible command, and the HTTP endpoint
+    at least involves a client someone wrote deliberately.
+
+    The flag is still passed through to the use case rather than checked here, so
+    the refusal stays in one place for every adapter; what this function adds is
+    presenting it as a message and an exit code instead of a traceback.
+    """
+    with sensitive_data_access(
+        subject=args.user_id,
+        reason="applyflow erase-data (erasure request, local CLI)",
+    ):
+        async with async_session_factory() as session:
+            use_case = EraseUserData(
+                store=SqlAlchemyPersonalDataStore(
+                    session, LocalFileStorage(Path(get_settings().resume_storage_dir))
+                ),
+                consent_repository=SqlAlchemyConsentRepository(session),
+            )
+            try:
+                output = await use_case.execute(
+                    ErasureRequestInput(
+                        subject=DataSubjectRef(user_id=args.user_id, email=args.email),
+                        requested_at=datetime.now(UTC),
+                        acknowledged=args.confirm,
+                        policy_version=get_settings().privacy_policy_version,
+                        reason=args.reason,
+                    )
+                )
+            except ErasureNotAcknowledgedError as exc:
+                raise SystemExit(f"{exc} Re-run with --confirm.") from exc
+            print(json.dumps(asdict(output), indent=2, default=str))
+
+
 async def _llm_ping(args: argparse.Namespace) -> None:
     use_case = GetLlmCompletion(llm_client=AnthropicLlmClient(get_settings()))
     output = await use_case.execute(
@@ -124,6 +232,50 @@ def main() -> None:
         help="Task intent, not a model name — the LLM layer picks the model tier",
     )
     llm_ping.set_defaults(func=_llm_ping)
+
+    # -- Data-subject rights. Both take the subject as an argument rather than
+    # inferring it: this application has one user today, but a command that
+    # erases "the account" without naming it is a command nobody can review in a
+    # shell history. `--email` is optional and reaches the one store that
+    # predates the account model (see the `legacy_applications` category); the
+    # output says so when it is absent rather than reporting an empty result.
+    export_data = sub.add_parser(
+        "export-data",
+        help="Write a portable copy of a user's data to stdout (GDPR Art. 15/20)",
+    )
+    export_data.add_argument("--user-id", required=True)
+    export_data.add_argument(
+        "--email",
+        default=None,
+        help="Reaches records filed under an address rather than an account id",
+    )
+    export_data.add_argument(
+        "--output",
+        default=None,
+        help=(
+            "Write the copy to this file instead of stdout. Preferred: with "
+            "DEBUG on, SQL echo shares stdout and would corrupt a redirect."
+        ),
+    )
+    export_data.set_defaults(func=_export_data)
+
+    erase_data = sub.add_parser(
+        "erase-data",
+        help="Erase everything erasable about a user (GDPR Art. 17) — irreversible",
+    )
+    erase_data.add_argument("--user-id", required=True)
+    erase_data.add_argument(
+        "--email",
+        default=None,
+        help="Reaches records filed under an address rather than an account id",
+    )
+    erase_data.add_argument("--reason", default="")
+    erase_data.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Required. Without it the request is refused rather than run.",
+    )
+    erase_data.set_defaults(func=_erase_data)
 
     args = parser.parse_args()
     asyncio.run(args.func(args))

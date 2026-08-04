@@ -245,6 +245,22 @@ class Settings(BaseSettings):
     autofill_review_ttl_seconds: float = 900.0
     autofill_max_parked_reviews: int = 8
 
+    # The privacy notice this deployment is serving. Stamped onto every consent
+    # decision, which is what makes the consent demonstrably *informed*: consent
+    # is only valid for what the user was actually told, so a materially changed
+    # notice invalidates consent collected under the old one and this is what
+    # makes "who has to be re-asked?" a query rather than a guess (GDPR Art.
+    # 7(1) — see `ConsentDecision`).
+    #
+    # Configuration rather than a constant because it changes with the notice,
+    # not with a release — and it comes from here rather than from the request
+    # body because a client that could assert which notice it had shown could
+    # record consent against a notice the user never saw.
+    #
+    # Date-stamped by convention: it has to sort and it has to be recognizable
+    # in a ledger row years later. Bump it when the notice changes materially.
+    privacy_policy_version: str = "2026-08-03"
+
     @model_validator(mode="after")
     def _require_secrets_outside_development(self) -> Settings:
         if self.environment == "development":

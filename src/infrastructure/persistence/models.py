@@ -1063,6 +1063,82 @@ class EeoSelfIdentificationModel(Base):
     )
 
 
+class ConsentDecisionModel(Base):
+    """One recorded consent decision — see `ConsentDecision`.
+
+    Append-only, and the one table in this schema that deliberately survives an
+    erasure request. GDPR Art. 7(1) requires this application to be able to
+    demonstrate that consent was given, and the entry that matters most after an
+    erasure is the withdrawal that triggered it: deleting the ledger destroys the
+    evidence that the erasure itself was lawful. See the `consents` category in
+    `src/domain/services/personal_data_inventory.py`, which is where that
+    decision is declared and where the multi-user follow-up (digest the subject
+    id so the retained ledger stops being linkable) is written down.
+
+    Keyed by (`user_id`, `purpose`, `sequence`) with no surrogate id, mirroring
+    `ApplicationStatusEventModel`: a decision has no identity of its own beyond
+    the ledger it belongs to and its position in it. `sequence` is 0-based and
+    gap-free, so the primary key doubles as the ordering — two decisions recorded
+    in the same clock tick still have a definite order, which `decided_at` alone
+    could not give them. It is also what makes appending the same entry twice a
+    constraint violation rather than a duplicated row.
+
+    No foreign key to `user_profiles`: a consent decision is about the account,
+    not the profile, and it has to be recordable before a profile exists (the
+    first thing a new user does is accept a notice) and to remain readable after
+    the profile is erased — which is the whole point of the table.
+
+    Not sensitive, and this is load-bearing rather than incidental. A purpose, a
+    yes/no, a timestamp and a notice version describe a *decision about* personal
+    data without containing any, which is what lets these columns stay
+    unencrypted, queryable, and safe to log — and what makes retaining them past
+    an erasure a defensible thing to do rather than a hole in it.
+    """
+
+    __tablename__ = "consent_decisions"
+    __table_args__ = (
+        # The read behind every consent screen and every export: one user's
+        # whole ledger, in order. The primary key already serves the
+        # per-purpose read.
+        Index(
+            "ix_consent_decisions_user_id_decided_at",
+            "user_id",
+            "decided_at",
+        ),
+    )
+
+    user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    purpose: Mapped[str] = mapped_column(
+        String(64),
+        primary_key=True,
+        comment=(
+            "What was decided about: account_and_applications | "
+            "ai_document_generation | answer_reuse | "
+            "sensitive_attribute_storage | automated_portal_interaction. See "
+            "src/domain/value_objects/consent_purpose.py."
+        ),
+    )
+    #: This decision's 0-based position in the ledger for (user, purpose).
+    sequence: Mapped[int] = mapped_column(Integer, primary_key=True)
+    #: True for a grant, False for a withdrawal. A withdrawal is only storable
+    #: for a purpose whose lawful basis is consent — enforced by
+    #: `ConsentDecision`, not by the schema, because the basis lives in the
+    #: domain rather than in a column here.
+    granted: Mapped[bool] = mapped_column(Boolean)
+    decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    #: The privacy-notice version the decision was made against. Required:
+    #: consent is only valid for what the user was actually told, so this is
+    #: what makes "who has to be re-asked after the notice changed?" a query
+    #: rather than a guess.
+    policy_version: Mapped[str] = mapped_column(
+        String(32),
+        comment=(
+            "The privacy-notice version this decision was made against — what "
+            "makes the consent demonstrably informed (GDPR Art. 7(1))."
+        ),
+    )
+
+
 class JobMatchFeedbackModel(Base):
     """A candidate's thumbs-up/down reaction to one ranked job match,
     tagged with the score they saw. Append-only — see
