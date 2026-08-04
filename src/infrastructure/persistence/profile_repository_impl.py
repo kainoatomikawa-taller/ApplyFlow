@@ -5,6 +5,8 @@ Maps DB rows <-> domain entities. Never leaks ORM types outward.
 
 from __future__ import annotations
 
+from datetime import date
+
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -18,6 +20,10 @@ from src.domain.repositories.profile_repository import ProfileRepository
 from src.domain.value_objects.address import Address
 from src.domain.value_objects.clearance_level import ClearanceLevel
 from src.domain.value_objects.degree_level import DegreeLevel
+from src.domain.value_objects.education_standing import (
+    EducationStanding,
+    EnrollmentStatus,
+)
 from src.domain.value_objects.eeo_categories import (
     DisabilityStatus,
     GenderIdentity,
@@ -140,6 +146,19 @@ class SqlAlchemyProfileRepository(ProfileRepository):
                 if entity.highest_degree is not None
                 else None
             ),
+            # `None` when nothing is stated, so "not asked" and "not enrolled
+            # with nothing else said" are one value rather than two.
+            enrollment_status=(
+                entity.education_standing.enrollment_status.value
+                if entity.education_standing.enrollment_status is not None
+                else None
+            ),
+            degree_in_progress=(
+                entity.education_standing.degree_in_progress.value
+                if entity.education_standing.degree_in_progress is not None
+                else None
+            ),
+            expected_graduation=entity.education_standing.expected_graduation,
             # `None` rather than `[]` when nothing is stated, so the column holds
             # SQL NULL and "not stated" is one value rather than two.
             desired_employment_types=(
@@ -291,6 +310,17 @@ class SqlAlchemyProfileRepository(ProfileRepository):
         model.highest_degree = (
             entity.highest_degree.value if entity.highest_degree is not None else None
         )
+        model.enrollment_status = (
+            entity.education_standing.enrollment_status.value
+            if entity.education_standing.enrollment_status is not None
+            else None
+        )
+        model.degree_in_progress = (
+            entity.education_standing.degree_in_progress.value
+            if entity.education_standing.degree_in_progress is not None
+            else None
+        )
+        model.expected_graduation = entity.education_standing.expected_graduation
         model.desired_employment_types = [
             employment_type.value
             for employment_type in entity.job_search_preferences.employment_types
@@ -371,6 +401,11 @@ class SqlAlchemyProfileRepository(ProfileRepository):
                 if model.highest_degree is not None
                 else None
             ),
+            education_standing=SqlAlchemyProfileRepository._standing_to_entity(
+                model.enrollment_status,
+                model.degree_in_progress,
+                model.expected_graduation,
+            ),
             job_search_preferences=SqlAlchemyProfileRepository._preferences_to_entity(
                 model.desired_employment_types, model.desired_terms
             ),
@@ -432,6 +467,39 @@ class SqlAlchemyProfileRepository(ProfileRepository):
             created_at=model.created_at,
             updated_at=model.updated_at,
         )
+
+    @staticmethod
+    def _standing_to_entity(
+        enrollment_status: str | None,
+        degree_in_progress: str | None,
+        expected_graduation: date | None,
+    ) -> EducationStanding:
+        """Rebuild the candidate's standing from three columns.
+
+        Falls back to a default standing when the stored combination no longer
+        satisfies the value object's own rules — a row written before a
+        constraint existed, or an enum member since removed. Losing one section is
+        better than a profile that cannot be loaded, and the candidate sees an
+        unanswered section rather than an error.
+        """
+        try:
+            status = (
+                EnrollmentStatus(enrollment_status)
+                if enrollment_status is not None
+                else None
+            )
+            degree = (
+                DegreeLevel(degree_in_progress)
+                if degree_in_progress is not None
+                else None
+            )
+            return EducationStanding(
+                enrollment_status=status,
+                degree_in_progress=degree,
+                expected_graduation=expected_graduation,
+            )
+        except (ValueError, InvalidValueError):
+            return EducationStanding()
 
     @staticmethod
     def _preferences_to_entity(

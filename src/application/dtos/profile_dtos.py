@@ -116,6 +116,7 @@ class ProfileOutput:
     qualifications: QualificationsOutput | None = None
     #: Defaulted for the same reason the two names above are: every existing
     #: construction of this DTO predates it.
+    education_standing: EducationStandingOutput | None = None
     job_search_preferences: JobSearchPreferencesOutput | None = None
     work_history: list[WorkHistoryOutput] = field(default_factory=list)
     education: list[EducationOutput] = field(default_factory=list)
@@ -164,6 +165,33 @@ class QualificationsInput:
     user_id: str
     clearance_level: str | None = None
     highest_degree: str | None = None
+
+
+@dataclass(frozen=True)
+class EducationStandingInput:
+    """The candidate's current standing as submitted.
+
+    All three are optional, and submitting nothing clears the section — the same
+    full-replace shape as every other profile section. `enrollment_status` of
+    "not_enrolled" with the other two empty is a real answer ("I have finished
+    studying"), distinct from omitting it.
+    """
+
+    user_id: str
+    enrollment_status: str | None = None
+    degree_in_progress: str | None = None
+    expected_graduation: date | None = None
+
+
+@dataclass(frozen=True)
+class EducationStandingOutput:
+    #: None when unanswered. Distinct from "not_enrolled", which is an answer.
+    enrollment_status: str | None
+    degree_in_progress: str | None
+    expected_graduation: date | None
+    #: False when nothing has been answered, so a client can tell "not enrolled"
+    #: from "not asked" without re-deriving the rule.
+    is_stated: bool
 
 
 @dataclass(frozen=True)

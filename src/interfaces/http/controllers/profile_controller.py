@@ -57,6 +57,7 @@ from src.application.dtos.profile_dtos import (
     AddressInput,
     ContactDetailsInput,
     EducationInput,
+    EducationStandingInput,
     EeoSelfIdentificationInput,
     EeoSelfIdentificationOutput,
     JobSearchPreferencesInput,
@@ -91,6 +92,9 @@ from src.application.use_cases.save_eeo_self_identification import (
 from src.application.use_cases.save_skill import SaveSkill
 from src.application.use_cases.save_work_authorization import SaveWorkAuthorization
 from src.application.use_cases.save_work_history_entry import SaveWorkHistoryEntry
+from src.application.use_cases.update_education_standing import (
+    UpdateEducationStanding,
+)
 from src.application.use_cases.update_job_search_preferences import (
     UpdateJobSearchPreferences,
 )
@@ -119,6 +123,7 @@ from src.interfaces.http.dependencies import (
     get_save_skill_use_case,
     get_save_work_authorization_use_case,
     get_save_work_history_entry_use_case,
+    get_update_education_standing_use_case,
     get_update_job_search_preferences_use_case,
     get_update_profile_address_use_case,
     get_update_profile_links_use_case,
@@ -129,6 +134,7 @@ from src.interfaces.http.schemas import (
     AddressRequest,
     ContactDetailsRequest,
     EducationRequest,
+    EducationStandingRequest,
     EeoSelfIdentificationRequest,
     EeoSelfIdentificationResponse,
     JobSearchPreferencesRequest,
@@ -297,6 +303,36 @@ async def update_qualifications(
     except UnknownProfileEnumValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     logger.info("Profile qualifications section saved for the authenticated user.")
+    return _profile_response(output)
+
+
+@router.put("/education-standing", response_model=ProfileResponse)
+async def update_education_standing(
+    request: EducationStandingRequest,
+    user: AuthenticatedUserDTO = Depends(get_current_user),
+    use_case: UpdateEducationStanding = Depends(get_update_education_standing_use_case),
+) -> ProfileResponse:
+    """Replace the candidate's current education standing.
+
+    Separate from `/qualifications`, which records the highest *completed* degree.
+    This one records what is in progress — the fact that lets a posting requiring
+    a bachelor's accept a current undergraduate, and lets a graduate-student-only
+    internship be filtered out for one.
+    """
+    try:
+        output = await use_case.execute(
+            EducationStandingInput(
+                user_id=user.subject,
+                enrollment_status=request.enrollment_status,
+                degree_in_progress=request.degree_in_progress,
+                expected_graduation=request.expected_graduation,
+            )
+        )
+    except ProfileNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, _NO_PROFILE_DETAIL) from exc
+    except UnknownProfileEnumValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    logger.info("Profile education standing saved for the authenticated user.")
     return _profile_response(output)
 
 

@@ -592,6 +592,7 @@ export interface Profile {
   address: ProfileAddress | null;
   links: ProfileLinks | null;
   qualifications: ProfileQualifications | null;
+  education_standing: EducationStanding | null;
   job_search_preferences: JobSearchPreferences | null;
   work_history: ProfileWorkHistoryEntry[];
   education: ProfileEducationEntry[];
@@ -611,6 +612,26 @@ export interface ContactDetailsInput {
 export type AddressInput = Omit<ProfileAddress, 'source'>;
 export type LinksInput = Omit<ProfileLinks, 'source'>;
 export type QualificationsInput = ProfileQualifications;
+
+/**
+ * Where the candidate is in their education now — as opposed to
+ * `qualifications.highest_degree`, which is what they have finished.
+ *
+ * `is_stated` distinguishes "not enrolled" (a real answer) from "not asked yet".
+ * Only the first affects filtering.
+ */
+export interface EducationStanding {
+  enrollment_status: string;
+  degree_in_progress: string | null;
+  expected_graduation: string | null;
+  is_stated: boolean;
+}
+
+export interface EducationStandingInput {
+  enrollment_status: string | null;
+  degree_in_progress: string | null;
+  expected_graduation: string | null;
+}
 
 /** One academic term. A null `year` means any year of that season. */
 export interface HiringTerm {

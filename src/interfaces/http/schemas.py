@@ -102,6 +102,16 @@ class QualificationsResponse(BaseModel):
     highest_degree: str | None = None
 
 
+class EducationStandingResponse(BaseModel):
+    #: None when unanswered — distinct from "not_enrolled", which is an answer.
+    enrollment_status: str | None = None
+    degree_in_progress: str | None = None
+    expected_graduation: date | None = None
+    #: False when nothing has been answered, so a client can tell "not enrolled"
+    #: from "not asked" without re-deriving the rule.
+    is_stated: bool = False
+
+
 class TermResponse(BaseModel):
     season: str
     year: int | None = None
@@ -136,6 +146,7 @@ class ProfileResponse(BaseModel):
     address: AddressResponse | None = None
     links: ProfileLinksResponse | None = None
     qualifications: QualificationsResponse | None = None
+    education_standing: EducationStandingResponse | None = None
     job_search_preferences: JobSearchPreferencesResponse | None = None
     work_history: list[WorkHistoryResponse] = Field(default_factory=list)
     education: list[EducationResponse] = Field(default_factory=list)
@@ -911,6 +922,21 @@ class ProfileLinksRequest(BaseModel):
     portfolio_url: str | None = Field(default=None, max_length=2048)
     linkedin_url: str | None = Field(default=None, max_length=2048)
     github_url: str | None = Field(default=None, max_length=2048)
+
+
+class EducationStandingRequest(BaseModel):
+    """Where the candidate is in their education now.
+
+    All three optional, and an all-empty submission clears the section — the same
+    full-replace shape as every other section. The combination is validated in the
+    domain, not here: "not enrolled" together with a graduation date is
+    individually valid and jointly contradictory, which is a rule rather than a
+    schema constraint.
+    """
+
+    enrollment_status: str | None = Field(default=None, max_length=32)
+    degree_in_progress: str | None = Field(default=None, max_length=32)
+    expected_graduation: date | None = None
 
 
 class TermRequest(BaseModel):

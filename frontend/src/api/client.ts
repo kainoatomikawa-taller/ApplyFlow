@@ -9,6 +9,7 @@ import type {
   CreateApplicationInput,
   DocumentKind,
   EducationInput,
+  EducationStandingInput,
   EeoSelfIdentification,
   EeoSelfIdentificationInput,
   FeedbackRating,
@@ -506,6 +507,17 @@ export const applyFlowApi = {
   /** Clearance and highest degree — used for matching, never to fill a form. */
   saveQualifications(input: QualificationsInput): Promise<Profile> {
     return request<Profile>('/api/profile/qualifications', {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    });
+  },
+
+  /**
+   * Replace the candidate's current education standing. Sending all nulls
+   * clears it, which is how the section is emptied.
+   */
+  saveEducationStanding(input: EducationStandingInput): Promise<Profile> {
+    return request<Profile>('/api/profile/education-standing', {
       method: 'PUT',
       body: JSON.stringify(input),
     });

@@ -32,6 +32,9 @@ from src.domain.value_objects.degree_level import DegreeLevel
 from src.domain.value_objects.job_requirements import JobRequirements
 from src.domain.value_objects.remote_type import RemoteType
 from src.domain.value_objects.requirement_category import RequirementCategory
+from src.domain.value_objects.student_status_requirement import (
+    StudentStatusRequirement,
+)
 from src.domain.value_objects.work_authorization_status import (
     WorkAuthorizationStatus,
 )
@@ -72,6 +75,16 @@ _WORK_AUTHORIZATION_LABELS: dict[WorkAuthorizationStatus, str] = {
 }
 
 
+_STUDENT_STATUS_LABELS: dict[StudentStatusRequirement, str] = {
+    StudentStatusRequirement.CURRENT_STUDENT: "Must be a current student",
+    StudentStatusRequirement.CURRENT_UNDERGRADUATE: "Must be a current undergraduate",
+    StudentStatusRequirement.CURRENT_GRADUATE_STUDENT: (
+        "Must be a current graduate student"
+    ),
+    StudentStatusRequirement.GRADUATED: "Must have already graduated",
+}
+
+
 @dataclass(frozen=True)
 class ClassifiedRequirement:
     """One attribute of a `JobRequirements`, tagged with the category it
@@ -99,6 +112,7 @@ class RequirementClassifier:
         hard: list[ClassifiedRequirement] = []
         soft: list[ClassifiedRequirement] = []
 
+        self._classify_student_status(requirements, hard)
         self._classify_degree(requirements, hard, soft)
         self._classify_clearance(requirements, hard, soft)
         self._classify_location(requirements, hard, soft)
@@ -108,6 +122,30 @@ class RequirementClassifier:
         self._classify_preferences(requirements, soft)
 
         return RequirementClassification(hard=tuple(hard), soft=tuple(soft))
+
+    @staticmethod
+    def _classify_student_status(
+        requirements: JobRequirements,
+        hard: list[ClassifiedRequirement],
+    ) -> None:
+        """Always hard, never soft — and that is the one interesting thing here.
+
+        Every other category can be stated as a preference ("bachelor's
+        preferred"), so the classifier has to decide which side it falls on. A
+        posting saying "must be currently enrolled" is not expressing a
+        preference: it is a rule about who may apply at all, usually because the
+        programme is funded or accredited for students. There is no soft version
+        to route to.
+        """
+        required = requirements.student_status_requirement
+        if required is None:
+            return
+        hard.append(
+            ClassifiedRequirement(
+                category=RequirementCategory.ELIGIBILITY,
+                description=_STUDENT_STATUS_LABELS[required],
+            )
+        )
 
     @staticmethod
     def _classify_degree(

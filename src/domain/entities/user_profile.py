@@ -35,6 +35,7 @@ from src.domain.exceptions import (
 from src.domain.value_objects.address import Address
 from src.domain.value_objects.clearance_level import ClearanceLevel
 from src.domain.value_objects.degree_level import DegreeLevel
+from src.domain.value_objects.education_standing import EducationStanding
 from src.domain.value_objects.eeo_self_identification import EeoSelfIdentification
 from src.domain.value_objects.email_address import EmailAddress
 from src.domain.value_objects.job_search_preferences import JobSearchPreferences
@@ -110,6 +111,10 @@ class UserProfile:
     # filtering never disqualifies over a gap in the candidate's own data.
     clearance_level: ClearanceLevel | None = None
     highest_degree: DegreeLevel | None = None
+    # Where the candidate is in their education *now*. `highest_degree` above
+    # is what they have finished; this is what they are doing. Both are needed
+    # because a posting can ask about either — see `EducationStanding`.
+    education_standing: EducationStanding = field(default_factory=EducationStanding)
     # What the candidate is looking for, as opposed to what is true about them.
     # No provenance tag: a preference is never asserted to an employer and can
     # only ever be the candidate's own statement — see `JobSearchPreferences`.
@@ -246,6 +251,20 @@ class UserProfile:
     def set_clearance_level(self, clearance_level: ClearanceLevel | None) -> None:
         """Set or clear the candidate's held security clearance."""
         self.clearance_level = clearance_level
+        self._touch()
+
+    def set_education_standing(self, standing: EducationStanding) -> None:
+        """Replace the candidate's current education standing.
+
+        A whole-value replace: the three parts constrain each other (see
+        `EducationStanding.__post_init__`), so they have to be validated together
+        rather than set one at a time through a half-valid intermediate state.
+        """
+        if not isinstance(standing, EducationStanding):
+            raise InvalidValueError(
+                "set_education_standing requires an EducationStanding."
+            )
+        self.education_standing = standing
         self._touch()
 
     def set_job_search_preferences(self, preferences: JobSearchPreferences) -> None:

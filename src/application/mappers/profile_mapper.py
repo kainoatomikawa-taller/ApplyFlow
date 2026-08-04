@@ -12,6 +12,7 @@ from __future__ import annotations
 from src.application.dtos.profile_dtos import (
     AddressOutput,
     EducationOutput,
+    EducationStandingOutput,
     JobSearchPreferencesOutput,
     ProfileLinksOutput,
     ProfileOutput,
@@ -77,6 +78,20 @@ class ProfileMapper:
                     if profile.highest_degree is not None
                     else None
                 ),
+            ),
+            education_standing=EducationStandingOutput(
+                enrollment_status=(
+                    profile.education_standing.enrollment_status.value
+                    if profile.education_standing.enrollment_status is not None
+                    else None
+                ),
+                degree_in_progress=(
+                    profile.education_standing.degree_in_progress.value
+                    if profile.education_standing.degree_in_progress is not None
+                    else None
+                ),
+                expected_graduation=profile.education_standing.expected_graduation,
+                is_stated=profile.education_standing.is_stated,
             ),
             job_search_preferences=JobSearchPreferencesOutput(
                 employment_types=tuple(

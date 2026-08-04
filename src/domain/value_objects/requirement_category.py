@@ -11,6 +11,9 @@ class RequirementCategory(StrEnum):
     CLEARANCE = "clearance"
     LOCATION = "location"
     WORK_AUTHORIZATION = "work_authorization"
+    #: A demand about the candidate's education standing rather than their
+    #: degrees — "must be currently enrolled", "must have graduated".
+    ELIGIBILITY = "eligibility"
     EXPERIENCE = "experience"
     SKILL = "skill"
     PREFERENCE = "preference"

@@ -31,6 +31,9 @@ from src.domain.value_objects.employment_type import EmploymentType
 from src.domain.value_objects.hiring_term import HiringTerm, TermSeason
 from src.domain.value_objects.job_requirements import JobRequirements
 from src.domain.value_objects.remote_type import RemoteType
+from src.domain.value_objects.student_status_requirement import (
+    StudentStatusRequirement,
+)
 from src.domain.value_objects.work_authorization_status import (
     WorkAuthorizationStatus,
 )
@@ -45,6 +48,8 @@ return ONLY a single JSON object — no markdown code fences, no commentary
   "employment_type": one of "internship", "co_op", "new_grad", \
 "full_time", "part_time", "contract", or null,
   "hiring_term_season": one of "spring", "summer", "fall", "winter", or null,
+  "student_status_requirement": one of "current_student", \
+"current_undergraduate", "current_graduate_student", "graduated", or null,
   "hiring_term_year": four-digit integer or null,
   "degree_level": one of "high_school", "associate", "bachelors", \
 "masters", "doctorate", or null,
@@ -78,6 +83,16 @@ Rules:
   "full_time" for ordinary permanent roles. Do not infer "internship"
   from the word "intern" appearing inside another word — "Internal
   Audit" and "International Tax" are full-time roles.
+- "student_status_requirement" is what the posting demands about the
+  candidate's *standing*, which is a different question from the degree.
+  "must be enrolled in an accredited program" -> "current_student";
+  "open to current undergraduates" -> "current_undergraduate"; "must be
+  pursuing a PhD or Master's" -> "current_graduate_student"; "must have
+  completed your degree before the start date" -> "graduated". Use null
+  when the posting says nothing about enrolment — most full-time roles do
+  not. A degree requirement on its own is NOT a standing requirement: an
+  internship saying "pursuing a Bachelor's" states a degree, and only
+  says "current_undergraduate" if it also restricts who may apply.
 - "hiring_term_season"/"hiring_term_year" only for a term the posting
   actually names, e.g. "Summer 2027 Internship" -> "summer" + 2027,
   "Intern (Fall 2026)" -> "fall" + 2026. A season with no year stated
@@ -110,6 +125,9 @@ class LlmJobRequirementsExtractor(JobRequirementsExtractorPort):
 
         return JobRequirements(
             employment_type=_as_enum(EmploymentType, payload.get("employment_type")),
+            student_status_requirement=_as_enum(
+                StudentStatusRequirement, payload.get("student_status_requirement")
+            ),
             hiring_term=_as_hiring_term(
                 payload.get("hiring_term_season"), payload.get("hiring_term_year")
             ),

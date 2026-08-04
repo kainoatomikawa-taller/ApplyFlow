@@ -19,6 +19,9 @@ from src.domain.value_objects.degree_level import DegreeLevel
 from src.domain.value_objects.employment_type import EmploymentType
 from src.domain.value_objects.hiring_term import HiringTerm
 from src.domain.value_objects.remote_type import RemoteType
+from src.domain.value_objects.student_status_requirement import (
+    StudentStatusRequirement,
+)
 from src.domain.value_objects.work_authorization_status import (
     WorkAuthorizationStatus,
 )
@@ -37,6 +40,12 @@ class JobRequirements:
     #: structured reading of a posting's text, which is exactly what they are.
     employment_type: EmploymentType | None = None
     hiring_term: HiringTerm | None = None
+    #: What the posting demands about the candidate's *standing*, separately
+    #: from their degrees. "Must be a current graduate student" and "bachelor's
+    #: required" are different questions, and only this field can tell an
+    #: undergraduate internship from a PhD-only one — see
+    #: `StudentStatusRequirement`.
+    student_status_requirement: StudentStatusRequirement | None = None
     degree_level: DegreeLevel | None = None
     #: Whether the stated `degree_level` is mandatory (True), merely
     #: preferred/nice-to-have (False), or the text doesn't say (None).

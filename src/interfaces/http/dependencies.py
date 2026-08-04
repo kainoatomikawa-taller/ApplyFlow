@@ -116,6 +116,9 @@ from src.application.use_cases.submit_job_match_feedback import (
     SubmitJobMatchFeedback,
 )
 from src.application.use_cases.update_application_status import UpdateApplicationStatus
+from src.application.use_cases.update_education_standing import (
+    UpdateEducationStanding,
+)
 from src.application.use_cases.update_job_search_preferences import (
     UpdateJobSearchPreferences,
 )
@@ -949,6 +952,12 @@ def get_update_profile_qualifications_use_case(
     repository: SqlAlchemyProfileRepository = Depends(_profile_repository),
 ) -> UpdateProfileQualifications:
     return UpdateProfileQualifications(repository=repository)
+
+
+def get_update_education_standing_use_case(
+    repository: SqlAlchemyProfileRepository = Depends(_profile_repository),
+) -> UpdateEducationStanding:
+    return UpdateEducationStanding(repository=repository)
 
 
 def get_update_job_search_preferences_use_case(

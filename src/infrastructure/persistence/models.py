@@ -329,6 +329,13 @@ class UserProfileModel(Base):
     # means "unknown", never "candidate has none" (see UserProfile).
     clearance_level: Mapped[str | None] = mapped_column(String(32), nullable=True)
     highest_degree: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    #: Where the candidate is in their education now, as opposed to
+    #: `highest_degree`, which is what they have finished. Plain columns rather
+    #: than JSON: each is a single scalar and `expected_graduation` is a real
+    #: date that a future "graduating before this term" query would compare on.
+    enrollment_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    degree_in_progress: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    expected_graduation: Mapped[date | None] = mapped_column(Date, nullable=True)
     #: What the candidate is looking for, not a fact about them — so no
     #: `*_source` column, unlike address/links (see `JobSearchPreferences`).
     #: JSON arrays because both are short lists nothing queries individually.

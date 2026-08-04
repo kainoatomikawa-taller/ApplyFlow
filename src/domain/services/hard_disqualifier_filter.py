@@ -28,9 +28,14 @@ from src.domain.services.requirement_classifier import (
 )
 from src.domain.value_objects.clearance_level import ClearanceLevel
 from src.domain.value_objects.degree_level import DegreeLevel
+from src.domain.value_objects.education_standing import EnrollmentStatus
 from src.domain.value_objects.job_requirements import JobRequirements
 from src.domain.value_objects.remote_type import RemoteType
 from src.domain.value_objects.requirement_category import RequirementCategory
+from src.domain.value_objects.student_status_requirement import (
+    ENROLLMENT_REQUIRING,
+    StudentStatusRequirement,
+)
 from src.domain.value_objects.work_authorization_status import (
     WorkAuthorizationStatus,
 )
@@ -106,6 +111,34 @@ def _canonical_country(text: str) -> str | None:
     return normalized
 
 
+_STUDENT_STATUS_LABELS: dict[StudentStatusRequirement, str] = {
+    StudentStatusRequirement.CURRENT_STUDENT: "Requires being a current student",
+    StudentStatusRequirement.CURRENT_UNDERGRADUATE: (
+        "Requires being a current undergraduate"
+    ),
+    StudentStatusRequirement.CURRENT_GRADUATE_STUDENT: (
+        "Requires being a current graduate student"
+    ),
+    StudentStatusRequirement.GRADUATED: "Requires having already graduated",
+}
+
+
+def _highest_of(
+    completed: DegreeLevel | None, in_progress: DegreeLevel | None
+) -> DegreeLevel | None:
+    """The higher of a finished and an in-progress degree, or whichever exists.
+
+    Used where a posting accepts a degree in progress, which is the normal case
+    for internships and new-grad roles. `max` on the rank rather than on the enum:
+    `DegreeLevel` is a `StrEnum`, so comparing members directly would compare
+    their *names* alphabetically and rank "doctorate" below "high_school".
+    """
+    present = [level for level in (completed, in_progress) if level is not None]
+    if not present:
+        return None
+    return max(present, key=lambda level: _DEGREE_RANK[level])
+
+
 @dataclass(frozen=True)
 class HardDisqualifierResult:
     """Whether a candidate qualifies against a job's hard disqualifiers,
@@ -131,6 +164,8 @@ class HardDisqualifierFilter:
         }
         failed: list[ClassifiedRequirement] = []
 
+        if RequirementCategory.ELIGIBILITY in hard_categories:
+            self._check_student_status(profile, requirements, failed)
         if RequirementCategory.DEGREE in hard_categories:
             self._check_degree(profile, requirements, failed)
         if RequirementCategory.CLEARANCE in hard_categories:
@@ -143,20 +178,102 @@ class HardDisqualifierFilter:
         return HardDisqualifierResult(qualifies=not failed, failed=tuple(failed))
 
     @staticmethod
+    def _check_student_status(
+        profile: UserProfile,
+        requirements: JobRequirements,
+        failed: list[ClassifiedRequirement],
+    ) -> None:
+        """Refuse a posting whose standing requirement the candidate provably
+        fails.
+
+        This is the check that separates an undergraduate internship from a
+        PhD-only one — postings that say the same thing about degrees and
+        opposite things about who may apply.
+
+        A candidate who has said nothing about their standing is left alone, the
+        same way an unset clearance or degree is: `EducationStanding` defaults to
+        `NOT_ENROLLED`, which is indistinguishable from "not asked yet", so
+        treating it as a statement would disqualify every profile that has never
+        opened the section.
+        """
+        required = requirements.student_status_requirement
+        standing = profile.education_standing
+        if required is None or not standing.is_stated:
+            return
+
+        if required is StudentStatusRequirement.GRADUATED:
+            # Enrolment is irrelevant here; the degree check below is what
+            # enforces this one, against completed degrees only.
+            return
+
+        if required in ENROLLMENT_REQUIRING and not standing.is_enrolled:
+            failed.append(
+                ClassifiedRequirement(
+                    category=RequirementCategory.ELIGIBILITY,
+                    description=_STUDENT_STATUS_LABELS[required],
+                )
+            )
+            return
+
+        wrong_level = (
+            required is StudentStatusRequirement.CURRENT_UNDERGRADUATE
+            and standing.enrollment_status is not EnrollmentStatus.UNDERGRADUATE
+        ) or (
+            required is StudentStatusRequirement.CURRENT_GRADUATE_STUDENT
+            and standing.enrollment_status is not EnrollmentStatus.GRADUATE
+        )
+        if wrong_level:
+            failed.append(
+                ClassifiedRequirement(
+                    category=RequirementCategory.ELIGIBILITY,
+                    description=_STUDENT_STATUS_LABELS[required],
+                )
+            )
+
+    @staticmethod
     def _check_degree(
         profile: UserProfile,
         requirements: JobRequirements,
         failed: list[ClassifiedRequirement],
     ) -> None:
+        """Compare the posting's degree requirement against what the candidate
+        has finished — or is working towards, when the posting allows it.
+
+        The in-progress half is the honest fix for a real defect. A current
+        undergraduate's highest *completed* degree is a high-school diploma, so
+        comparing that against "bachelor's required" disqualified them from most
+        new-grad roles and a great many internships — where "bachelor's required"
+        means *in progress*. The only way to get the right postings used to be to
+        claim a degree they had not finished.
+
+        A posting demanding `GRADUATED` is the case where an in-progress degree
+        must not count, and is why this method reads
+        `student_status_requirement` rather than degrees alone.
+        """
         required_level = requirements.degree_level
-        candidate_level = profile.highest_degree
-        if required_level is None or candidate_level is None:
+        if required_level is None:
+            return
+
+        completed = profile.highest_degree
+        in_progress = profile.education_standing.degree_in_progress
+        must_be_finished = (
+            requirements.student_status_requirement
+            is StudentStatusRequirement.GRADUATED
+        )
+        candidate_level = (
+            completed if must_be_finished else _highest_of(completed, in_progress)
+        )
+        if candidate_level is None:
             return
         if _DEGREE_RANK[candidate_level] < _DEGREE_RANK[required_level]:
             failed.append(
                 ClassifiedRequirement(
                     category=RequirementCategory.DEGREE,
-                    description=f"Requires {_DEGREE_LABELS[required_level]}",
+                    description=(
+                        f"Requires a completed {_DEGREE_LABELS[required_level]}"
+                        if must_be_finished
+                        else f"Requires {_DEGREE_LABELS[required_level]}"
+                    ),
                 )
             )
 

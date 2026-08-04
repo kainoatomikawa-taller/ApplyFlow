@@ -4,6 +4,7 @@ import type { Profile } from '../types';
 import { AddressSection } from './AddressSection';
 import { ContactSection } from './ContactSection';
 import { EducationSection } from './EducationSection';
+import { EducationStandingSection } from './EducationStandingSection';
 import { EeoSection } from './EeoSection';
 import { LinksSection } from './LinksSection';
 import { JobSearchPreferencesSection } from './JobSearchPreferencesSection';
@@ -66,6 +67,7 @@ export function ProfileEditor() {
       <EducationSection profile={profile} onSaved={setProfile} />
       <SkillsSection profile={profile} onSaved={setProfile} />
       <QualificationsSection profile={profile} onSaved={setProfile} />
+      <EducationStandingSection profile={profile} onSaved={setProfile} />
       <JobSearchPreferencesSection profile={profile} onSaved={setProfile} />
       <WorkAuthorizationSection hasProfile={profile !== null} />
       <EeoSection hasProfile={profile !== null} />
