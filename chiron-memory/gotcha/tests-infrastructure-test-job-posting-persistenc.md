@@ -1,14 +1,15 @@
 ---
-id: 8af16910-bbe2-4996-894d-d9d6c39f2aee-10
+id: 5e0cba71-7daa-46a2-a753-8759f3df92fb-8
 type: gotcha
 title: `tests/infrastructure/test_job_posting_persistence_smoke.py::test_requirements_round_trip_…
 tags: [gotcha]
 created: 2026-08-04
+resource: tests/infrastructure/test_job_posting_persistence_smoke.py.
 ---
-`tests/infrastructure/test_job_posting_persistence_smoke.py::test_requirements_round_trip_against_a_real_database` fails on a clean tree (confirmed via `git stash`) independent of this session's changes
+`tests/infrastructure/test_job_posting_persistence_smoke.py::test_requirements_round_trip_against_a_real_database` fails pre-existing and unrelated to sensitive-field work — a dev-DB row-accumulation issue.
 
 ## Why
-recorded as a known pre-existing gotcha in project memory (`chiron-memory/gotcha/`)
+documented in project memory already; do not treat this failure as a regression caused by sensitive-field or other unrelated changes.
 
-## Learned
-don't attribute this failure to new changes; verify against a stashed clean tree before investigating it as a regression.
+## Where
+tests/infrastructure/test_job_posting_persistence_smoke.py.

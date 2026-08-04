@@ -1,8 +1,10 @@
-# architecture · 6
+# architecture · 8
 
 > Section index — this project's **architecture** memory. Open a concept below for the full detail.
 
+- [[architecture/answerapplicationfield-the-use-case-that-stores]] — `AnswerApplicationField` (the use case that stores a candidate's own answer to a…
 - [[architecture/applyflow-is-a-single-user-application-the-authe]] — ApplyFlow is a single-user application
+- [[architecture/decide-sensitive-field-in-src-domain-services-se]] — `decide_sensitive_field` in src/domain/services/sensitive_field_policy.py is the single…
 - [[architecture/decryption-access-is-scoped-only-at-three-author]] — Decryption access is scoped only at three authorized entry points
 - [[architecture/encryption-at-rest-lives-in-a-new-src-infrastruc]] — Encryption-at-rest lives in a new src/infrastructure/security/ module
 - [[architecture/new-sqlalchemy-column-types-encryptedstring-encr]] — New SQLAlchemy column types (EncryptedString/EncryptedBoolean/EncryptedJson) wrap…
