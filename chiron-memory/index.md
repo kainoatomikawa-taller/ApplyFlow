@@ -6,6 +6,6 @@ This folder holds the project's canonical decisions, architecture and convention
 - [[architecture/_index]] · 26
 - [[config/_index]] · 11
 - [[contradiction/_index]] · 2
-- [[convention/_index]] · 26
-- [[decision/_index]] · 35
-- [[gotcha/_index]] · 48
+- [[convention/_index]] · 29
+- [[decision/_index]] · 37
+- [[gotcha/_index]] · 49

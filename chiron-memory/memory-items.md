@@ -200,7 +200,20 @@ New ADR `docs/decisions/0003-pii-out-of-logs-and-urls.md` was written referencin
 - **Learned:** don't add further references to ADR 0002 until it's either written or the gap is resolved; check docs/decisions/ numbering before citing an ADR by number.
 - **Where:** `docs/decisions/`
 
-## convention · 26
+## convention · 29
+
+### When a candidate has no *stated* completed degree, the hard disqualifier filter does not…
+When a candidate has no *stated* completed degree, the hard disqualifier filter does not disqualify them from postings requiring "must have graduated"
+- **Why:** absence of a stated fact can't prove a negative (the candidate may just not have filled it in yet) — the filter only disqualifies on provable failure to meet a requirement, consistently across all requirement categories, not just education
+- **Where:** `src/domain/services/hard_disqualifier_filter.py, tests/domain/test_education_standing_filtering.py`
+
+### Enrollment/education standing is never inferred from résumé parsing
+- **Why:** a résumé states past dates, not whether the candidate is enrolled today; inferring "still studying" from an open-ended entry would be exactly the guess the eligibility filter is meant to eliminate
+- **Where:** `résumé extraction pipeline vs. profile's education standing fields`
+
+### The ELIGIBILITY requirement category is always classified as hard, never soft
+- **Why:** every other category can be phrased as a preference ("bachelor's preferred") but a rule about who may apply cannot be softened, so no soft branch exists for it
+- **Where:** `src/domain/services/requirement_classifier.py`
 
 ### In HiringTerm, an unstated year means "any year" and still matches a specific-year…
 In HiringTerm, an unstated year means "any year" and still matches a specific-year preference (e.g. a posting saying just "Summer Intern" matches someone wanting Summer 2027)
@@ -335,7 +348,17 @@ Encrypted/sensitive ORM columns are stored as raw SQL Text regardless of their l
 - **Why:** the column holds an opaque ciphertext envelope, not the plaintext type.
 - **Where:** `src/infrastructure/persistence/models.py`
 
-## decision · 35
+## decision · 37
+
+### Education standing is modeled as two separate fields, enrollment_status and…
+Education standing is modeled as two separate fields, enrollment_status and degree_in_progress, rather than derived from one another
+- **Why:** a posting can require either independently — "must be a current student" concerns enrollment, "bachelor's required" concerns degree — deriving one from the other would reintroduce the inference this phase was built to remove
+- **Where:** `src/domain/value_objects/education_standing.py`
+
+### Eligibility requirements (e.g. "must be a current student") are enforced in…
+Eligibility requirements (e.g. "must be a current student") are enforced in HardDisqualifierFilter, not the Phase 1 preference filter
+- **Why:** eligibility is a demand the candidate meets or doesn't, same direction as degree/clearance checks — Phase 1's preference filter asks the opposite question (soft preferences)
+- **Where:** `src/domain/services/hard_disqualifier_filter.py`
 
 ### Job-search preference matching (employment type, hiring term) got a new domain service…
 Job-search preference matching (employment type, hiring term) got a new domain service JobSearchPreferenceFilter rather than extending HardDisqualifierFilter
@@ -518,7 +541,12 @@ Migration 0021 converts existing plaintext sensitive columns to ciphertext in pl
 - **Why:** retrofitting encryption later is painful (per task framing), so migration correctness was verified end-to-end against a real Postgres scratch DB seeded with plaintext rows rather than only unit-tested.
 - **Where:** `migrations/versions/0021_encrypt_sensitive_columns.py`
 
-## gotcha · 48
+## gotcha · 49
+
+### enrollment_status must be typed EnrollmentStatus | None, where None means "unanswered"…
+enrollment_status must be typed EnrollmentStatus | None, where None means "unanswered" and NOT_ENROLLED means "candidate has finished studying" — do not default to NOT_ENROLLED and infer answered-ness from other fields
+- **Why:** an earlier design defaulted the field to NOT_ENROLLED and inferred whether the user had answered based on whether other fields were set, which made a genuinely-graduated candidate indistinguishable from one who never opened the section, silently breaking student-only filtering for them
+- **Where:** `src/domain/value_objects/education_standing.py, src/application/mappers/profile_mapper.py`
 
 ### The requirements-extractor prompt must explicitly guard against matching the substring…
 The requirements-extractor prompt must explicitly guard against matching the substring "intern" inside unrelated words (e.g. "Internal Audit") to avoid false-positive internship classification
