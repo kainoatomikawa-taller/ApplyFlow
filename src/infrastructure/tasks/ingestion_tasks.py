@@ -66,7 +66,7 @@ def _build_listing_resolver(
     still missing an apply_url/description after this returns None."""
     if not settings.search_api_key.get_secret_value():
         return None
-    redis_client = redis.from_url(settings.redis_url)
+    redis_client = redis.from_url(settings.redis_url.get_secret_value())
     board_clients: dict[AtsProvider, AtsBoardClientPort] = {
         AtsProvider.GREENHOUSE: GreenhouseBoardClient(settings),
         AtsProvider.LEVER: LeverBoardClient(settings),

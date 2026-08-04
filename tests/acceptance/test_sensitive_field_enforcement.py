@@ -512,6 +512,77 @@ async def test_a_compound_legal_question_is_surfaced_rather_than_inverted(
     assert item.slot is None  # type: ignore[attr-defined]
 
 
+@pytest.mark.parametrize(
+    "label",
+    [
+        # Sponsorship *history* — the record stores current need, not history.
+        "Have you ever been sponsored for a visa?",
+        "Are you currently on a visa sponsored by your employer?",
+        "Have you previously required sponsorship?",
+        # A *date* — no legal slot stores one.
+        "Work permit expiry date",
+        "Visa expiration date",
+        "Visa valid until",
+    ],
+)
+async def test_a_legal_question_the_record_cannot_answer_is_surfaced(
+    label: str,
+) -> None:
+    """AC1 regression, closing findings F2 and F3 of
+    `docs/sensitive-field-enforcement-check.md` — both routed there and both
+    fixed by the Epic 07 hardening pass.
+
+    Same root cause as the compound question above: the sensitive label rules
+    are greedy, matching one phrase without asking whether the label poses a
+    *different* question than the slot's canonical one.
+
+    - "Have you ever been sponsored for a visa?" fell past the sponsorship
+      rules (which need `sponsor`/`sponsorship`, not `sponsored`) to the bare
+      `visa` rule, so a visa holder had `"H-1B"` written into a yes/no field.
+    - "Work permit expiry date" matched `work permit` and resolved to
+      `WORK_AUTHORIZATION`, which answers Yes/No — so `"Yes"` went into a field
+      asking for a date.
+
+    Both were contained on selects and radios, which refuse a value they have
+    no option for, and both were written on a **text** input. Neither question
+    is one the profile has a field for, so exact-or-refuse means refuse.
+    """
+    profile = candidate(
+        authorization=attested(
+            Status.REQUIRES_SPONSORSHIP, requires_sponsorship=True, visa_type="H-1B"
+        )
+    )
+    report, session, _ = await run_autofill(
+        profile, (question(label, handle="f-unanswerable"),)
+    )
+
+    assert session.filled == [], (
+        "a question the record does not answer must reach the candidate, not "
+        "receive the nearest stored value"
+    )
+    item = field_labelled(report, label)
+    assert item.outcome == FieldAutofillOutcome.SURFACED  # type: ignore[attr-defined]
+    assert item.slot is None  # type: ignore[attr-defined]
+
+
+async def test_a_current_state_legal_question_is_still_answered() -> None:
+    """The other half of the guard above, in the same spirit as the canonical
+    sponsorship test below: refusing dates and histories must not have cost the
+    present-tense questions the record genuinely answers.
+
+    "Is your work authorization valid?" contains `valid` — and `valid` is
+    deliberately *not* one of the disqualifying tokens, precisely so this keeps
+    working. Only `until` is.
+    """
+    profile = candidate(authorization=attested(Status.CITIZEN))
+    _, session, _ = await run_autofill(
+        profile,
+        (question("Is your work authorization valid? *", handle="f-valid"),),
+    )
+
+    assert dict(session.filled) == {"f-valid": "Yes"}
+
+
 async def test_the_canonical_sponsorship_question_is_still_answered() -> None:
     """The other half of the guard above: it must not have bought accuracy by
     surfacing the question it was meant to protect.

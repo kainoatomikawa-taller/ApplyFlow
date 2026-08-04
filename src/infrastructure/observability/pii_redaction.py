@@ -24,8 +24,10 @@ What it recognizes, and what it deliberately does not
 -----------------------------------------------------
 Redaction here is pattern-based, so it catches data with a *recognizable
 shape*: email addresses, phone numbers, national ID numbers, payment card
-numbers (Luhn-checked), bearer tokens and JWTs, whole URL query strings,
-and `key=value` pairs whose key names a sensitive field.
+numbers (Luhn-checked), bearer tokens and JWTs, whole URL query strings, the
+userinfo half of a URL (`postgresql://user:password@host` — every connection
+string in this deployment keeps its password there), and `key=value` pairs whose
+key names a sensitive field, in either snake_case or hyphenated spelling.
 
 It cannot catch data with no shape — a person's name, a street, a free-text
 answer. "Sarah Okonkwo" is indistinguishable from "Acme Robotics" to a
@@ -33,6 +35,13 @@ regex, and a scrubber that tried would either miss most names or redact
 half of every log line. Those are kept out by *not logging them*, which is
 what the call-site guard enforces and what the audit in
 `docs/decisions/0003-pii-out-of-logs-and-urls.md` records.
+
+The one place that guarantee used to be bypassed wholesale was SQLAlchemy's
+statement echo, which logs bound parameters as a positional tuple — no shape and
+no key names, so precisely the shapeless categories above passed straight
+through. Echo is now gated to development (see
+`persistence/database.sql_echo_enabled`); the reasoning, and the finding that
+prompted it, are in `docs/epic-07-hardening-check.md`.
 
 What it *can* do about shapeless data is act on the label: a value written
 as `full_name=Jane Doe` or `'street_address': '17 Bellwether Lane'` is
@@ -154,8 +163,18 @@ _SUFFIX_KEY_NAMES: Final[tuple[str, ...]] = (
 
 
 def _alternation(names: tuple[str, ...]) -> str:
-    """Longest-first, so `app_key` wins over `key` in a shared prefix."""
-    return "|".join(sorted(names, key=len, reverse=True))
+    """Longest-first, so `app_key` wins over `key` in a shared prefix.
+
+    Each `_` becomes `[-_]`, so a name spelled here in snake_case also matches
+    its hyphenated form. That is what makes the header spellings match —
+    `x-api-key: sk-...` and `x-auth-token: ...` are the shapes an HTTP client's
+    error or a debug dump prints, and `api_key` alone does not match `api-key`.
+    Only the separator is widened; the names themselves are unchanged, so this
+    cannot start matching a word that was not already on the list.
+    """
+    return "|".join(
+        name.replace("_", "[-_]") for name in sorted(names, key=len, reverse=True)
+    )
 
 
 _SENSITIVE_KEY_PATTERN: Final = (
@@ -202,6 +221,31 @@ _KEY_VALUE_RE: Final = re.compile(
 # path preserves everything the retry/backoff logs are actually for.
 _URL_QUERY_RE: Final = re.compile(
     r"(?P<prefix>\b(?:https?|wss?)://[^\s?#'\"<>]*)\?[^\s#'\"<>]*",
+    re.IGNORECASE,
+)
+
+# The *other* half of a URL that carries a secret, and the one the query-string
+# rule above does not reach: the userinfo component, `scheme://user:password@host`.
+#
+# This is where every connection string in this deployment keeps its password —
+# `postgresql+asyncpg://applyflow:pw@db:5432/applyflow`, `redis://:pw@cache:6379/0`,
+# `amqp://user:pw@broker//` — and connection strings reach logs readily. An
+# asyncpg or SQLAlchemy connection failure stringifies the DSN it was dialing;
+# so does this suite's own "no reachable database at DATABASE_URL: {exc}" skip
+# message. Leaving this uncovered meant the one credential guaranteed to be
+# present in every environment was the one credential nothing scrubbed.
+#
+# Any scheme, not just the four the query rule lists, because the leak is about
+# the shape rather than the protocol — and the schemes that matter here
+# (`postgresql+asyncpg`, `amqp`) are exactly the ones an http-only pattern
+# misses.
+#
+# A `:` inside the userinfo is required, so `mailto:` and a bare
+# `https://host@example.com` are left alone: no password, nothing to hide. The
+# host survives, which is all a connection-failure log line is for.
+_URL_CREDENTIAL_RE: Final = re.compile(
+    r"(?P<scheme>\b[a-z][a-z0-9+.\-]*://)"
+    r"(?P<userinfo>[^\s/?#@'\"<>]*:[^\s/?#@'\"<>]*)@",
     re.IGNORECASE,
 )
 
@@ -284,10 +328,27 @@ def _redact_url_query(match: re.Match[str]) -> str:
     return f"{match.group('prefix')}?{_mark('query')}"
 
 
+def _redact_url_credential(match: re.Match[str]) -> str:
+    """Drop the userinfo, keep the scheme and everything after the `@`.
+
+    The host and port are what a connection-failure line is diagnostic for, and
+    neither is a secret. The username goes with the password: it is half of a
+    credential pair, and knowing the database role adds nothing to a log that
+    already names the host.
+    """
+    return f"{match.group('scheme')}{_mark('credential')}@"
+
+
 # Order is deliberate, and each position earns its place.
 #
-# The URL rule is first, so a query string collapses whole rather than leaving
+# The URL rules are first, so a query string collapses whole rather than leaving
 # `?app_key=[redacted:value]&what=...` behind.
+#
+# The URL *credential* rule has to run before the email rule specifically. A
+# userinfo pair like `admin:pw@mail.example.com` contains something the email
+# pattern matches (`pw@mail.example.com`), so letting email go first would
+# rewrite the middle of the DSN and leave the password's leading characters
+# stranded outside the marker.
 #
 # The value-shape rules come next, ahead of the structural `key=value` rule.
 # That ordering is what lets `key=value` consume unquoted multi-word values
@@ -307,6 +368,7 @@ _Replacement = str | Callable[[re.Match[str]], str]
 
 _RULES: Final[tuple[tuple[re.Pattern[str], _Replacement], ...]] = (
     (_URL_QUERY_RE, _redact_url_query),
+    (_URL_CREDENTIAL_RE, _redact_url_credential),
     (_JWT_RE, _mark("credential")),
     (_BEARER_RE, _redact_bearer),
     (_NATIONAL_ID_RE, _mark("national_id")),

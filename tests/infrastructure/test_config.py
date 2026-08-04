@@ -152,3 +152,57 @@ def test_env_example_documents_every_key_without_real_values():
         line = next(line for line in lines if line.startswith(f"{key}="))
         _, _, value = line.partition("=")
         assert value == "", f"{key} must be a placeholder, not a real value"
+
+
+def test_every_credential_bearing_setting_is_a_secret_str():
+    """Credentials must not be spelled out by `repr(settings)`.
+
+    The four connection strings were plain `str` until the Epic 07 hardening
+    pass, which meant a debug dump, a stray `print`, or an exception rendering
+    its context wrote the database password into a log line. A DSN *is* a
+    credential — the password sits in its userinfo — so it belongs in the same
+    box as the API keys.
+
+    Asserted over `model_fields` rather than as a fixed list, so a fifth URL or
+    a new API key has to make the same decision. `supabase_url` is deliberately
+    excluded: it is a project's public API endpoint and carries no secret.
+    """
+    # Suffix-matched, never substring-matched: `"token" in name` would claim
+    # `anthropic_max_tokens`, which is a number. The same trap the log
+    # scrubber's key names document (`cache_read_input_tokens`).
+    credential_suffixes = (
+        "_url",
+        "_secret",
+        "_key",
+        "_keys",
+        "_token",
+        "_password",
+    )
+    #: URLs that are public endpoints rather than credentials.
+    public_urls = {"supabase_url", "job_aggregator_base_url", "search_api_base_url"}
+    credential_like = {
+        name
+        for name in Settings.model_fields
+        if (name.endswith(credential_suffixes) or name == "celery_result_backend")
+        and name not in public_urls
+    }
+    assert credential_like, "expected to find credential-bearing settings"
+
+    plain = {
+        name
+        for name in credential_like
+        if Settings.model_fields[name].annotation is not SecretStr
+    }
+    assert not plain, (
+        "These settings can carry a credential but are not SecretStr, so "
+        f"repr(settings) would print them: {sorted(plain)}"
+    )
+
+
+def test_the_database_password_is_not_in_the_settings_repr():
+    """The behaviour the typing above exists for, asserted directly."""
+    settings = Settings(database_url="postgresql+asyncpg://user:s3cret@db:5432/app")
+    assert "s3cret" not in repr(settings)
+    assert "s3cret" not in str(settings)
+    # And it is still readable by the one caller that needs it.
+    assert settings.database_url.get_secret_value().endswith("@db:5432/app")

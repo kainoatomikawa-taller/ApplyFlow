@@ -41,8 +41,8 @@ def _configure_worker_logging(
 
 celery_app = Celery(
     "applyflow",
-    broker=_settings.celery_broker_url,
-    backend=_settings.celery_result_backend,
+    broker=_settings.celery_broker_url.get_secret_value(),
+    backend=_settings.celery_result_backend.get_secret_value(),
     include=[
         "src.infrastructure.tasks.analysis_tasks",
         "src.infrastructure.tasks.ingestion_tasks",

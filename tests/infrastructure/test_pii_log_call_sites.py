@@ -91,6 +91,10 @@ BANNED_NAMES: frozenset[str] = frozenset(
         "resume_text",
         "extracted_text",
         "cover_letter_text",
+        # The cover letter stored on the original application record, encrypted
+        # by migration 0023. Distinct enough as an identifier to ban outright,
+        # unlike the bare `note` below.
+        "tailored_cover_letter",
         "original_filename",
         "submission_note",
         "resolution_note",
@@ -128,6 +132,13 @@ _UNMATCHABLE_SENSITIVE_COLUMNS: frozenset[str] = frozenset(
         "details",
         "embedding",
         "location",
+        # `application_status_events.note`, encrypted by migration 0023. Banning
+        # the bare identifier would hit every unrelated `note` in the codebase —
+        # a hand-off's own note count, a docstring variable, an ATS rule's
+        # explanatory note — and each false positive would be silenced with a
+        # `# pii-ok` until the guard stopped meaning anything. The runtime
+        # scrubber covers the labelled form (`note=...`, `'note': '...'`).
+        "note",
         "state_or_region",
         "status",
     }

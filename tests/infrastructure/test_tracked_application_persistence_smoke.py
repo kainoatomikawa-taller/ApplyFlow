@@ -52,6 +52,7 @@ from src.infrastructure.persistence.job_posting_repository_impl import (
 from src.infrastructure.persistence.tracked_application_repository_impl import (
     SqlAlchemyTrackedApplicationRepository,
 )
+from src.infrastructure.security.field_cipher import get_field_cipher
 from src.infrastructure.security.sensitive_access import SensitiveDataAccess
 
 _RESUME = "EXPERIENCE\nBackend Engineer at Acme Corp (2019-2022)"
@@ -670,7 +671,21 @@ async def test_recording_an_application_stores_its_first_history_entry(
             )
         ).all()
 
-    assert rows == [(0, "applied", None, "")]
+    assert len(rows) == 1
+    sequence, status, previous_status, note = rows[0]
+    assert (sequence, status, previous_status) == (0, "applied", None)
+    # Read through raw SQL rather than the repository, so `note` arrives as it
+    # actually sits in the database: ciphertext, as of migration 0023. The empty
+    # note the domain wrote is still an encrypted empty string rather than a
+    # plaintext '' — which is the assertion worth making here, since it proves
+    # the column is protected at rest and not merely on its way through Python.
+    # (Only a real NULL stays NULL; see `_EncryptedColumn`.)
+    assert get_field_cipher().is_encrypted(note)
+    assert note != ""
+    # The module's autouse scope is what permits this decryption.
+    assert (
+        get_field_cipher().decrypt(note, purpose="application_status_events.note") == ""
+    )
 
 
 @pytest.mark.asyncio

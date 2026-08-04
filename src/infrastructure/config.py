@@ -35,7 +35,16 @@ class Settings(BaseSettings):
 
     # Database (point this at Supabase's connection string outside of
     # local development — see README "Provisioning the database & auth".)
-    database_url: str = (
+    #
+    # A `SecretStr`, like the API keys below, because a connection string *is* a
+    # credential: the password sits in its userinfo. It was a plain `str` until
+    # the Epic 07 hardening pass, which meant any `repr(settings)` — a debug
+    # dump, a `print`, an exception rendering its context — spelled out the
+    # database password. The log scrubber now redacts URL userinfo wherever it
+    # appears (see `pii_redaction._URL_CREDENTIAL_RE`), so this is the second
+    # layer rather than the only one; both are cheap and they fail
+    # independently.
+    database_url: SecretStr = SecretStr(
         "postgresql+asyncpg://applyflow:applyflow@localhost:5432/applyflow"
     )
     db_pool_size: int = 5
@@ -71,10 +80,13 @@ class Settings(BaseSettings):
     field_encryption_keys: SecretStr = SecretStr("")
     field_blind_index_key: SecretStr = SecretStr("")
 
-    # Redis / Celery
-    redis_url: str = "redis://localhost:6379/0"
-    celery_broker_url: str = "redis://localhost:6379/1"
-    celery_result_backend: str = "redis://localhost:6379/2"
+    # Redis / Celery. `SecretStr` for the same reason as `database_url`: a
+    # managed Redis or broker URL carries its password inline
+    # (`redis://:pw@host:6379/0`), and these three are the URLs most likely to
+    # end up in a worker's startup banner.
+    redis_url: SecretStr = SecretStr("redis://localhost:6379/0")
+    celery_broker_url: SecretStr = SecretStr("redis://localhost:6379/1")
+    celery_result_backend: SecretStr = SecretStr("redis://localhost:6379/2")
 
     # LLM / LangChain (OpenAI — used by LangChainResumeAnalyzer)
     openai_api_key: SecretStr = SecretStr("")

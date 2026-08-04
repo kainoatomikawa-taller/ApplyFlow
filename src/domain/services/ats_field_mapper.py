@@ -433,6 +433,8 @@ def _recognize_by_label(label: str) -> ApplicationFieldSlot | None:
             continue
         if is_question and not is_sensitive_slot(slot):
             return None
+        if _asks_something_no_stored_field_states(tokens, slot):
+            return None
         return slot
     return None
 
@@ -482,6 +484,83 @@ def _asks_more_than_one_legal_question(tokens: tuple[str, ...]) -> bool:
         if slot in _CONFLICTING_LEGAL_SLOTS and _contains_phrase(tokens, phrase)
     }
     return len(matched) > 1
+
+
+#: Legal-attestation slots whose stored value answers exactly one question:
+#: "what is the candidate's position *right now*". None of them states a date,
+#: and none of them states a history.
+_CURRENT_STATE_LEGAL_SLOTS: frozenset[ApplicationFieldSlot] = frozenset(
+    {
+        ApplicationFieldSlot.WORK_AUTHORIZATION,
+        ApplicationFieldSlot.SPONSORSHIP_REQUIRED,
+        ApplicationFieldSlot.VISA_TYPE,
+    }
+)
+
+#: Words that turn one of those labels into a question the record cannot state.
+#:
+#: The second half of the `_CONFLICTING_LEGAL_SLOTS` problem, and the same root
+#: cause: the sensitive label rules are greedy. They match one phrase and never
+#: ask whether the label is posing a *different* question from the slot's
+#: canonical one. Two phrasings found by the Epic 07 hardening pass, both of
+#: which resolved to a legal slot and got a confident wrong answer written into
+#: a text input (a select or radio refuses the value and surfaces the field, so
+#: only free-text inputs were affected):
+#:
+#: - **History.** "Have you ever been sponsored for a visa?" and "Are you
+#:   currently on a visa sponsored by your employer?" fall past the sponsorship
+#:   rules — which need the token `sponsor`/`sponsorship`, not `sponsored` — to
+#:   the bare `visa` rule, and a visa holder got `"H-1B"` written into a yes/no
+#:   question. Sponsorship *history* is not something this record stores at all.
+#: - **Dates.** "Work permit expiry date" matches the `work permit` rule and
+#:   resolves to `WORK_AUTHORIZATION`, which answers "Yes"/"No" — so `"Yes"`
+#:   went into a field asking for a date. No legal slot stores a date.
+#:
+#: In both cases the truthful answer under exact-or-refuse is to refuse, so the
+#: label is surfaced for the candidate.
+#:
+#: Scoped to the three current-state slots deliberately, and matched as whole
+#: words, so this cannot reach the canonical phrasings the previous fix was
+#: careful to preserve: "Will you now or in the future require sponsorship for
+#: employment visa status?" carries none of these tokens, and neither does "Do
+#: you require visa sponsorship?" or "Are you legally authorized to work in the
+#: US?". `date` is included even though it is a common word, because no legal
+#: slot answers a date under any phrasing — and the cost of over-refusing is a
+#: question the candidate answers themselves, against a wrong legal declaration
+#: on a real application.
+_UNANSWERABLE_LEGAL_QUALIFIERS: frozenset[str] = frozenset(
+    {
+        # Asks when something lapses.
+        "expiry",
+        "expiration",
+        "expires",
+        "expire",
+        "expiring",
+        "date",
+        # "Visa valid until". `valid` alone is deliberately absent: "Is your
+        # work authorization valid?" is a legitimate current-state question and
+        # the record does answer it.
+        "until",
+        # Asks about the past rather than the present.
+        "sponsored",
+        "ever",
+        "previously",
+    }
+)
+
+
+def _asks_something_no_stored_field_states(
+    tokens: tuple[str, ...], slot: ApplicationFieldSlot
+) -> bool:
+    """Whether a matched legal label is asking for a date or a history.
+
+    Both are questions the profile has no field for, so the slot's canonical
+    answer would be a confident wrong value in a legal field. See
+    `_UNANSWERABLE_LEGAL_QUALIFIERS`.
+    """
+    if slot not in _CURRENT_STATE_LEGAL_SLOTS:
+        return False
+    return any(token in _UNANSWERABLE_LEGAL_QUALIFIERS for token in tokens)
 
 
 def _tokenize(label: str) -> tuple[str, ...]:

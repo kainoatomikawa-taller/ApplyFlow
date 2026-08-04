@@ -10,9 +10,13 @@ venv/
 env/
 .python-version
 
-# Environment
+# Environment. Every variant, then the template back in by name — the config
+# layer reads `.env` and `.env.local`, but a `.env.production` or `.env.staging`
+# holding real API keys and FIELD_ENCRYPTION_KEYS is just as easy to create and
+# was not covered before the Epic 07 hardening pass.
 .env
-.env.local
+.env.*
+!.env.example
 
 # Testing / tooling caches
 .pytest_cache/

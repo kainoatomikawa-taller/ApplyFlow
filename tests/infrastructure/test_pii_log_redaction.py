@@ -79,6 +79,27 @@ def captured() -> Iterator[tuple[logging.Logger, io.StringIO]]:
         ("street_address=17 Bellwether Lane", "Bellwether"),
         ("{'full_name': 'Jane Okonkwo', 'city': 'Lagos'}", "Jane Okonkwo"),
         ("visa_type=H-1B", "H-1B"),
+        # Connection-string credentials (the Epic 07 hardening pass found these
+        # uncovered). The query-string rule never reached them: a DSN keeps its
+        # password in the *userinfo*, before the `@`. These are the credentials
+        # guaranteed to exist in every environment, and they reach logs readily
+        # — an asyncpg or SQLAlchemy connection failure stringifies the DSN it
+        # was dialing.
+        (
+            "connecting to postgresql+asyncpg://applyflow:sup3rs3cret@db:5432/app",
+            "sup3rs3cret",
+        ),
+        ("redis://:myredispassword@cache:6379/0 unreachable", "myredispassword"),
+        ("broker amqp://guest:rabbitpw@broker:5672// down", "rabbitpw"),
+        (
+            "No reachable database at DATABASE_URL: "
+            "postgresql://applyflow:pw123@db:5432/app",
+            "pw123",
+        ),
+        # Hyphenated header spellings. `api_key` alone does not match
+        # `api-key`, so the key names now accept either separator.
+        ("x-api-key: sk-ant-api03-AbCdEf123456", "sk-ant-api03"),
+        ("x-auth-token: abc123def456", "abc123def456"),
     ],
 )
 def test_recognizable_personal_data_is_removed(text: str, leaked: str) -> None:
@@ -115,10 +136,38 @@ def test_redaction_is_idempotent() -> None:
         "epoch 1735689600000 limit=100 open_only=False",
         # A URL with no query string keeps its path.
         "board request to https://boards.greenhouse.io/embed/job_board failed",
+        # A DSN with no credentials in it is untouched: the userinfo rule
+        # requires a `user:password` pair, so there is nothing to hide here.
+        "connected to postgresql+asyncpg://db:5432/applyflow",
+        "redis://cache:6379/0 ready",
+        # `keyword` must not match the `api_key`/`app_key` family, and the
+        # hyphen widening must not have changed that.
+        "search keyword=engineer results=25",
+        # `input-tokens` hyphenated must survive for the same reason
+        # `input_tokens` does — the widening changed the separator, not the
+        # names.
+        "usage: cache-read-input-tokens=500 output-tokens=90",
     ],
 )
 def test_operational_detail_is_not_redacted(text: str) -> None:
     assert redact(text) == text
+
+
+def test_a_dsn_keeps_the_host_it_failed_to_reach() -> None:
+    """The whole diagnostic value of a connection-failure line is which host
+    was unreachable, and a host is not a secret. Only the userinfo goes."""
+    redacted = redact(
+        "could not connect to postgresql+asyncpg://applyflow:pw@db.internal:5432/app"
+    )
+    assert "db.internal:5432/app" in redacted
+    assert "postgresql+asyncpg://" in redacted
+    assert "pw" not in redacted.replace("[redacted:credential]", "")
+
+
+def test_a_dsn_username_goes_with_its_password() -> None:
+    """Half a credential pair is still half a credential, and knowing the
+    database role adds nothing to a line that already names the host."""
+    assert "applyflow" not in redact("postgresql://applyflow:pw@db:5432/app")
 
 
 def test_a_bare_request_path_has_its_sensitive_query_values_redacted() -> None:

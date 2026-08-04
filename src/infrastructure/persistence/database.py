@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import DeclarativeBase
 
-from src.infrastructure.config import get_settings
+from src.infrastructure.config import Settings, get_settings
 
 
 class Base(DeclarativeBase):
@@ -26,9 +26,39 @@ class Base(DeclarativeBase):
 
 _settings = get_settings()
 
+
+def sql_echo_enabled(settings: Settings) -> bool:
+    """Whether SQLAlchemy should log every statement and its parameters.
+
+    Gated on the environment and not on `DEBUG` alone, and this is a privacy
+    control rather than a noise preference.
+
+    Echo logs each statement *with its bound parameters*, and those arrive as a
+    positional tuple — `('Jane Okonkwo', '17 Bellwether Lane', ...)`. The PII
+    scrubber (ADR 0003) recognizes a value either by its shape or by an adjacent
+    key name, and a bare tuple offers neither, so exactly the categories that ADR
+    documents the scrubber as unable to see — a person's name, a street, the
+    prose of an answer — pass through echo untouched. One forgotten
+    `DEBUG=false` would therefore write whole candidate records into a log sink
+    that sits outside the encryption boundary and has no key rotation.
+
+    So `DEBUG` keeps its meaning everywhere else and loses this one power outside
+    development, where the rows are a developer's own fixtures. Deliberately not
+    solved by refusing `DEBUG=true` in production: verbose logging is a
+    legitimate thing to want during an incident, and a control that forces
+    someone to choose between diagnosis and privacy is a control that gets
+    switched off.
+
+    A function rather than an inline expression so the rule is testable without
+    re-importing this module under a different environment — see
+    `tests/infrastructure/test_sql_echo_is_gated.py`.
+    """
+    return settings.debug and settings.environment == "development"
+
+
 engine = create_async_engine(
-    _settings.database_url,
-    echo=_settings.debug,
+    _settings.database_url.get_secret_value(),
+    echo=sql_echo_enabled(_settings),
     future=True,
     pool_size=_settings.db_pool_size,
     max_overflow=_settings.db_max_overflow,

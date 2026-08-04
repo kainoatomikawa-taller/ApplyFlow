@@ -109,7 +109,20 @@ class JobApplicationModel(Base):
     job_description: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32))
     match_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    tailored_cover_letter: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: SENSITIVE. A cover letter written from this candidate's profile — their
+    #: name, contact details, and employment history in prose. Encrypted as of
+    #: migration 0023; the hardening pass found it in the clear while
+    #: `application_documents.content`, which holds the same class of document,
+    #: was encrypted. The reasoning on that column applies verbatim here: a
+    #: document derived from sensitive inputs inherits their classification
+    #: rather than a milder one. This column is the Epic 00/01 predecessor of
+    #: that table and was simply missed when the flags were drawn up.
+    tailored_cover_letter: Mapped[str | None] = mapped_column(
+        EncryptedString("job_applications.tailored_cover_letter"),
+        nullable=True,
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
@@ -691,13 +704,23 @@ class ApplicationStatusEventModel(Base):
         ),
     )
     changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    #: Free text the candidate wrote about this change. Not sensitive the way a
-    #: document is, but it is whatever they typed, so it is kept out of logs —
-    #: see `ApplicationStatusChange.note`.
+    #: SENSITIVE. Free text the candidate wrote about this change.
+    #:
+    #: Encrypted as of migration 0023. It was previously in the clear on the
+    #: reading that a note about a job search is "not sensitive the way a
+    #: document is" — but the hardening pass could find no principle separating
+    #: it from `application_reviews.submission_note` and
+    #: `portal_handoffs.resolution_note`, which are the same thing (a note the
+    #: candidate typed, unconstrained in content) and were both encrypted. Three
+    #: free-text note columns with two answers was an inconsistency, not a
+    #: distinction. The examples in `ApplicationStatusChange` settle it:
+    #: "referred by Dana" names a third party who never consented to being in
+    #: this database at all.
     note: Mapped[str] = mapped_column(
-        Text,
+        EncryptedString("application_status_events.note"),
         default="",
-        comment="The candidate's own note about this change. Do not log.",
+        info=_SENSITIVE_COLUMN_INFO,
+        comment=_SENSITIVE_COMMENT,
     )
 
 

@@ -157,7 +157,11 @@ from authorized-AND-not-requiring-sponsorship, refusing where either is
 unknown. Enum, mapper rules, policy, planner, tests — an Epic 01/05 change,
 out of scope for a verification pass.
 
-### F2 — sponsorship-history questions answered with a visa type — ROUTED
+### F2 — sponsorship-history questions answered with a visa type — FIXED LATER
+
+> **Closed by the Epic 07 hardening pass** — see
+> `docs/epic-07-hardening-check.md` (H10). The label is now surfaced instead of
+> answered. The original finding is left below as written.
 
 **Severity: medium.** `"Have you ever been sponsored for a visa?"` and `"Are
 you currently on a visa sponsored by your employer?"` fall through the
@@ -171,7 +175,11 @@ and the field is surfaced (`NOT_ACCEPTED`), so the common case is safe. On a
 field — and the underlying question (sponsorship *history*) is one the record
 does not store at all, so the right outcome is to surface it.
 
-### F3 — "Work permit expiry date" answered "Yes" — ROUTED
+### F3 — "Work permit expiry date" answered "Yes" — FIXED LATER
+
+> **Closed by the Epic 07 hardening pass** — see
+> `docs/epic-07-hardening-check.md` (H11). The label is now surfaced instead of
+> answered. The original finding is left below as written.
 
 **Severity: low.** The `work permit` rule claims the label and resolves to
 `WORK_AUTHORIZATION`, which answers "Yes"/"No". On a `DATE` widget the planner
@@ -184,6 +192,13 @@ greedy** — they match one phrase and never ask whether the label is posing a
 different question than the slot's canonical one. Fixing them properly means
 tightening those rules with their own test matrix, which is Epic 01/05
 rule-tuning rather than verification work.
+
+**Both were fixed in the Epic 07 hardening pass**, by the narrow route rather
+than the broad one: `_asks_something_no_stored_field_states` refuses a legal
+label carrying a date or a history qualifier, scoped to the three current-state
+legal slots, and leaves every canonical phrasing answered. See
+`docs/epic-07-hardening-check.md` (H10, H11) and the seven cases added to
+`tests/acceptance/test_sensitive_field_enforcement.py`.
 
 ## Confirmed non-issues
 

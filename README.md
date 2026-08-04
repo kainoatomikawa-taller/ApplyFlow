@@ -1789,7 +1789,13 @@ RUN_EPIC06_ACCEPTANCE_TEST=1 pytest tests/acceptance/test_epic06_tracker_pipelin
 
 See `docs/epic-03-acceptance-check.md`, `docs/epic-04-acceptance-check.md`,
 `docs/epic-05-acceptance-check.md`, and `docs/epic-06-acceptance-check.md`
-for what each one proves and which env vars it needs. Epic 05's needs no API
+for what each one proves and which env vars it needs. Epic 07's gate is
+[`docs/epic-07-hardening-check.md`](docs/epic-07-hardening-check.md) — the
+security and privacy hardening pass, which audited encryption coverage, log and
+URL PII hygiene, sensitive-field enforcement, secrets handling, and
+dependency/config posture. Its checks are *not* gated behind an env var and run
+on every `pytest`; the report lists them, the eleven defects it fixed, and the
+seven residual items it routed. Epic 05's needs no API
 keys and spends nothing: it drives a
 real Chromium against a local server that records what was submitted to it,
 with the portal host mapped to 127.0.0.1 so a real Greenhouse apply URL

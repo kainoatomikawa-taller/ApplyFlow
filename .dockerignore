@@ -4,7 +4,6 @@ __pycache__/
 *.pyc
 .venv/
 venv/
-.env
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -13,3 +12,17 @@ frontend/node_modules/
 frontend/dist/
 *.md
 tests/
+
+# Every environment file, not just `.env`. The config layer reads BOTH `.env`
+# and `.env.local` (see `Settings.model_config`), so a developer's `.env.local`
+# holds the same API keys and the same FIELD_ENCRYPTION_KEYS as `.env` — and
+# `COPY . .` would bake it into a distributable image. Only `.env` was listed
+# until the Epic 07 hardening pass; the file the application actually prefers
+# was not.
+.env
+.env.*
+
+# Locally stored résumé files (src/infrastructure/storage/local_file_storage.py).
+# Real candidate PDFs, and `COPY . .` would put them into an image layer, where
+# they outlive any erasure request and travel wherever the image does.
+var/

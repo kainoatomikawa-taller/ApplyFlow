@@ -2,7 +2,18 @@
 
 ## Status
 
-Accepted
+Accepted. **Amended** by the Epic 07 hardening pass — see
+`docs/epic-07-hardening-check.md`. The decisions below stand unchanged; three
+gaps in their *implementation* were found and closed:
+
+- the URL rule stripped query strings but not userinfo, so every connection
+  string's password (`postgresql://user:pw@host`) passed through unredacted (H4);
+- credential key names were snake_case only, so header spellings like
+  `x-api-key:` did not match (H5);
+- SQLAlchemy's statement echo, wired to `DEBUG` (default `True`), logged bound
+  parameters as a positional tuple — no shape, no key names — which bypassed
+  §3's guarantee for exactly the shapeless categories it names. Echo is now
+  gated to development (H6).
 
 ## Context
 
