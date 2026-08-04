@@ -72,8 +72,12 @@ def captured() -> Iterator[tuple[logging.Logger, io.StringIO]]:
             "GET https://api.adzuna.com/v1/api/jobs/gb/search/1?app_id=x&app_key=s3cret",
             "s3cret",
         ),
+        # A search term can be a person's name, so a query string carrying one
+        # must be scrubbed. Deliberately a generic host: the search provider is
+        # now Tavily, which takes the query in a POST body rather than a URL, so
+        # this case pins the URL rule itself rather than modelling one client.
         (
-            "GET https://api.search.brave.com/res/v1/web/search?q=jane+doe+resume",
+            "GET https://example.com/v1/web/search?q=jane+doe+resume",
             "jane+doe+resume",
         ),
         ("street_address=17 Bellwether Lane", "Bellwether"),
@@ -294,6 +298,6 @@ def test_configure_logging_is_idempotent() -> None:
 def test_the_suite_runs_with_redaction_installed() -> None:
     """`tests/conftest.py` installs it, so log-assertion tests elsewhere are
     asserting against the same behaviour the deployed processes have."""
-    assert (
-        pii_redaction_installed()
-    ), "expected tests/conftest.py to have installed PII redaction"
+    assert pii_redaction_installed(), (
+        "expected tests/conftest.py to have installed PII redaction"
+    )

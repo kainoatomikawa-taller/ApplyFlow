@@ -6,7 +6,7 @@ search snippet.
 Two genuinely different things are involved here, at two different costs:
   - WHICH board a company posts through (`ResolvedCompanyBoardRepository`)
     is the expensive, quota-limited thing to discover — finding it costs
-    one Brave Search API call, so once found it is cached permanently per
+    one Tavily search call, so once found it is cached permanently per
     company and that company is never searched again (see
     `DailySearchQuota`, a ~100/day free-tier budget).
   - The job-specific apply URL + full description is NOT cached — every
@@ -24,7 +24,7 @@ nothing there.
 
 Any failure along the way — quota exhausted, no board found, a board
 found but this title isn't listed on it, a transient HTTP error from
-Brave or from the ATS itself — degrades to `None` rather than raising:
+Tavily or from the ATS itself — degrades to `None` rather than raising:
 one company's unresolvable listing must never abort the rest of an
 ingestion run.
 """
@@ -46,13 +46,13 @@ from src.domain.repositories.resolved_company_board_repository import (
 from src.domain.services.ats_board_locator import identify_ats_board
 from src.domain.services.text_normalization import normalize_text
 from src.domain.value_objects.ats_provider import AtsProvider
-from src.infrastructure.search.brave_search_client import BraveSearchClient
 from src.infrastructure.search.daily_search_quota import DailySearchQuota
+from src.infrastructure.search.tavily_search_client import TavilySearchClient
 
 logger = logging.getLogger(__name__)
 
 #: Restricts the locate-the-board search to the three supported ATS
-#: platforms via Brave's `site:` operator — the search-side half of the
+#: platforms via Tavily's `site:` operator — the search-side half of the
 #: LinkedIn/Indeed exclusion; `identify_ats_board` is the structural half
 #: that holds even if a result slips past this filter.
 _BOARD_SITE_FILTER = (
@@ -66,7 +66,7 @@ class AtsListingResolver(ListingResolverPort):
         self,
         board_cache: ResolvedCompanyBoardRepository,
         quota: DailySearchQuota,
-        search_client: BraveSearchClient,
+        search_client: TavilySearchClient,
         board_clients: dict[AtsProvider, AtsBoardClientPort],
         result_count: int = 5,
     ) -> None:

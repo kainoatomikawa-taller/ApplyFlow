@@ -105,6 +105,8 @@ class ProfileMapper:
             id=entry.id,
             institution_name=entry.institution_name,
             degree=entry.degree,
+            majors=entry.majors,
+            minors=entry.minors,
             field_of_study=entry.field_of_study,
             start_date=entry.start_date,
             end_date=entry.end_date,

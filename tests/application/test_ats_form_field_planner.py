@@ -17,6 +17,7 @@ from src.application.services.ats_form_field_planner import (
 )
 from src.domain.entities.education_entry import EducationEntry
 from src.domain.entities.user_profile import UserProfile
+from src.domain.value_objects.address import Address
 from src.domain.value_objects.application_field_slot import (
     ApplicationFieldSlot,
     FieldSensitivity,
@@ -84,7 +85,7 @@ def profile() -> UserProfile:
             id="edu-1",
             institution_name="UT Austin",
             degree="B.S.",
-            field_of_study="Computer Science",
+            majors=("Computer Science",),
             start_date=date(2012, 8, 1),
             end_date=date(2016, 5, 15),
             source=ProvenanceSource.PARSED_RESUME,
@@ -190,8 +191,10 @@ def test_a_derived_value_is_planned_and_flagged(planner, profile):
 def test_a_select_is_filled_and_left_for_the_harness_to_accept_or_refuse(
     planner, profile
 ):
-    """The planner does not pre-check options against the value: matching an
-    option is the harness's job, and it refuses rather than approximates."""
+    """For every slot but the two field-of-study ones, the planner does not
+    pre-check options against the value: matching an option is the harness's job,
+    and it refuses rather than approximates. The exception is deliberate and
+    narrow — see the field-of-study dropdown section at the end of this file."""
     planned = plan_one(
         planner,
         profile,
@@ -651,3 +654,137 @@ def test_a_stated_preferred_name_is_not_reported_as_derived(planner, profile):
     )
     assert plan[0].value == "Dee"
     assert not plan[0].is_derived
+
+
+# ---- Field-of-study dropdowns ------------------------------------------------
+#
+# Forms list majors more coarsely than people study them. The planner answers a
+# dropdown with one of its own options, choosing a broader category only when the
+# exact subject is not offered. The matching rules themselves are pinned in
+# tests/domain/test_subject_option_matcher.py; what these cover is that the
+# planner applies them, flags an inexact answer, and leaves text boxes alone.
+
+
+def _subject_select(label="Major", *, options, name=""):
+    return field(
+        label,
+        handle=f"h-{label}-{name}",
+        kind=FormFieldKind.SELECT,
+        name=name,
+        options=tuple(FormFieldOption(value=o, label=o) for o in options),
+    )
+
+
+def _educated(profile, majors, minors=()):
+    profile.education.clear()
+    profile.add_education(
+        EducationEntry(
+            id="edu-subject",
+            institution_name="UT Austin",
+            degree="B.S.",
+            majors=majors,
+            minors=minors,
+            source=ProvenanceSource.USER_ENTERED,
+        )
+    )
+    return profile
+
+
+def test_a_major_dropdown_falls_back_to_the_broader_category(planner, profile):
+    """An Applied Mathematics graduate meeting a list that stops at
+    "Mathematics" gets Mathematics, rather than a refused field."""
+    _educated(profile, ("Applied Mathematics",))
+    planned = plan_one(
+        planner, profile, _subject_select(options=["", "Mathematics", "Biology"])
+    )
+    assert planned.disposition is FieldDisposition.FILL
+    assert planned.value == "Mathematics"
+    # Not what the candidate typed, so the review screen shows it as inferred.
+    assert planned.is_derived is True
+
+
+def test_the_exact_major_is_used_whenever_the_dropdown_offers_it(planner, profile):
+    """The "if and only if". The broader option is listed first to prove the
+    choice is not driven by the form's ordering."""
+    _educated(profile, ("Applied Mathematics",))
+    planned = plan_one(
+        planner,
+        profile,
+        _subject_select(options=["", "Mathematics", "Applied Mathematics"]),
+    )
+    assert planned.value == "Applied Mathematics"
+    assert planned.is_derived is False
+
+
+def test_a_text_field_of_study_keeps_the_exact_major(planner, profile):
+    """Broadening exists to satisfy a fixed list. A text box has no list, so
+    narrowing the answer there would lose accuracy for nothing."""
+    _educated(profile, ("Applied Mathematics",))
+    planned = plan_one(planner, profile, field("Field of Study"))
+    assert planned.value == "Applied Mathematics"
+    assert planned.is_derived is False
+
+
+def test_a_minor_dropdown_is_broadened_by_the_same_rule(planner, profile):
+    _educated(profile, ("Computer Science",), ("Applied Economics",))
+    planned = plan_one(
+        planner, profile, _subject_select("Minor", options=["", "Economics"])
+    )
+    assert planned.slot is Slot.MINOR
+    assert planned.value == "Economics"
+    assert planned.is_derived is True
+
+
+def test_a_double_major_picks_the_one_the_dropdown_lists(planner, profile):
+    """A single-choice dropdown cannot express a double major, and the joined
+    string matches no option, so one listed major is chosen."""
+    _educated(profile, ("Applied Mathematics", "Computer Science"))
+    planned = plan_one(
+        planner, profile, _subject_select(options=["", "Computer Science", "Biology"])
+    )
+    assert planned.value == "Computer Science"
+    # Flagged even though the value is exact: the other major is unrepresented,
+    # and that is something the candidate should see before submitting.
+    assert planned.is_derived is True
+
+
+def test_a_double_major_still_fills_a_text_box_with_both(planner, profile):
+    _educated(profile, ("Applied Mathematics", "Computer Science"))
+    planned = plan_one(planner, profile, field("Field of Study"))
+    assert planned.value == "Applied Mathematics, Computer Science"
+
+
+def test_a_dropdown_with_no_honest_option_is_surfaced(planner, profile):
+    """Refused before anything is written, and with its own reason: the profile
+    answers the question, the form's list simply cannot express it."""
+    _educated(profile, ("Basket Weaving",))
+    planned = plan_one(
+        planner, profile, _subject_select(options=["", "Mathematics", "Biology"])
+    )
+    assert planned.disposition is FieldDisposition.SURFACE
+    assert planned.surface_reason is SurfaceReason.NO_MATCHING_OPTION
+
+
+def test_a_wrong_end_word_is_not_treated_as_the_category(planner, profile):
+    """A Mathematics Education degree is in Education. With only "Mathematics"
+    offered, the field is surfaced rather than misstated."""
+    _educated(profile, ("Mathematics Education",))
+    planned = plan_one(
+        planner, profile, _subject_select(options=["", "Mathematics", "Biology"])
+    )
+    assert planned.disposition is FieldDisposition.SURFACE
+    assert planned.surface_reason is SurfaceReason.NO_MATCHING_OPTION
+
+
+def test_a_non_subject_dropdown_is_unaffected_by_subject_matching(planner, profile):
+    """The broadening is scoped to field-of-study slots. A country dropdown still
+    goes through the ordinary verbatim path."""
+    profile.set_address(Address(country="United States"), ProvenanceSource.USER_ENTERED)
+    planned = plan_one(
+        planner,
+        profile,
+        _subject_select("Country", options=["", "United States", "Canada"]),
+    )
+    assert planned.slot is Slot.COUNTRY
+    assert planned.value == "United States"
+    assert planned.is_derived is False

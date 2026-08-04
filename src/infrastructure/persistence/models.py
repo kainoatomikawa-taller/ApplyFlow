@@ -152,7 +152,9 @@ class JobPostingModel(Base):
     is_remote: Mapped[bool] = mapped_column(Boolean, default=False)
     description: Mapped[str] = mapped_column(Text)
     apply_url: Mapped[str] = mapped_column(String(2048))
-    salary: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
+    salary: Mapped[dict[str, object] | None] = mapped_column(
+        JSON(none_as_null=True), nullable=True
+    )
     posted_at: Mapped[date | None] = mapped_column(Date, nullable=True)
     normalized_company: Mapped[str] = mapped_column(String(255), index=True)
     normalized_title: Mapped[str] = mapped_column(String(255), index=True)
@@ -168,7 +170,16 @@ class JobPostingModel(Base):
     # Epic 03's structured requirement extraction result — NULL until that
     # pass has run for this posting (see `list_missing_requirements`, the
     # query the extraction sweep uses to find postings still needing it).
-    requirements: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
+    #
+    # `none_as_null=True` is load-bearing, not tidiness. Without it SQLAlchemy
+    # serializes Python `None` into the JSON literal `null`, which is a *value* —
+    # so `requirements IS NULL` matched nothing, `list_missing_requirements()`
+    # returned an empty list for every posting ever ingested, and the extraction
+    # sweep had no work to find. Requirements were therefore never extracted, and
+    # every downstream filter and score that reads them ran on nothing.
+    requirements: Mapped[dict[str, object] | None] = mapped_column(
+        JSON(none_as_null=True), nullable=True
+    )
 
 
 class ResolvedCompanyBoardModel(Base):
@@ -963,7 +974,19 @@ class EducationModel(Base):
     )
     institution_name: Mapped[str] = mapped_column(String(255))
     degree: Mapped[str] = mapped_column(String(255))
-    field_of_study: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: JSON arrays of subject names rather than a child table: nothing filters,
+    #: joins, or aggregates over an individual major, and they are only ever read
+    #: with the entry that owns them (cf. the child-table note on
+    #: `ApplicationStatusEventModel`). `NULL` and `[]` both mean "none stated".
+    #: `none_as_null=True` for the same reason as `job_postings.requirements`:
+    #: "none stated" has to be SQL NULL, not the JSON literal `null`, or any
+    #: future query asking which entries state no subjects silently matches none.
+    majors: Mapped[list[str] | None] = mapped_column(
+        JSON(none_as_null=True), nullable=True
+    )
+    minors: Mapped[list[str] | None] = mapped_column(
+        JSON(none_as_null=True), nullable=True
+    )
     start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)

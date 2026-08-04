@@ -129,3 +129,72 @@ async def test_returns_none_when_board_token_is_not_found():
     result = await client.find_job(board_token="nonexistent", title="Engineer")
 
     assert result is None
+
+
+# ---- list_jobs: the whole board ---------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_jobs_maps_levers_own_field_names():
+    """Lever differs three ways: the title is `text`, the location is nested under
+    `categories`, and `createdAt` is epoch milliseconds."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "text": "Backend Intern",
+                    "hostedUrl": "https://jobs.lever.co/acme/1",
+                    "descriptionPlain": "Write Go.",
+                    "categories": {"location": "Austin, TX", "team": "Platform"},
+                    "createdAt": 1782000000000,
+                },
+                {
+                    "text": "Remote Intern",
+                    "hostedUrl": "https://jobs.lever.co/acme/2",
+                    "descriptionPlain": "Anywhere.",
+                    "categories": {"location": "Remote"},
+                    "workplaceType": "remote",
+                },
+            ],
+        )
+
+    postings = await _client_with_handler(handler).list_jobs(board_token="acme")
+
+    assert [p.title for p in postings] == ["Backend Intern", "Remote Intern"]
+    assert postings[0].location == "Austin, TX"
+    assert postings[0].posted_at is not None
+    assert postings[0].is_remote is False
+    # Lever states remoteness, so it is read rather than guessed.
+    assert postings[1].is_remote is True
+
+
+@pytest.mark.asyncio
+async def test_list_jobs_falls_back_to_apply_url_and_html_description():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "text": "Intern",
+                    "applyUrl": "https://jobs.lever.co/acme/3/apply",
+                    "description": "<p>Write <i>Rust</i>.</p>",
+                }
+            ],
+        )
+
+    postings = await _client_with_handler(handler).list_jobs(board_token="acme")
+
+    assert postings[0].apply_url == "https://jobs.lever.co/acme/3/apply"
+    assert "Rust" in postings[0].description
+    assert "<i>" not in postings[0].description
+
+
+@pytest.mark.asyncio
+async def test_list_jobs_is_empty_when_the_board_is_not_an_array():
+    postings = await _client_with_handler(
+        lambda request: httpx.Response(200, json={"unexpected": "shape"})
+    ).list_jobs(board_token="acme")
+
+    assert postings == ()

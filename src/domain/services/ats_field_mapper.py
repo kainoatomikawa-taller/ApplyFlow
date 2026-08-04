@@ -305,6 +305,9 @@ _LABEL_RULES: tuple[tuple[tuple[str, ...], ApplicationFieldSlot], ...] = (
     (("field", "of", "study"), ApplicationFieldSlot.FIELD_OF_STUDY),
     (("discipline",), ApplicationFieldSlot.FIELD_OF_STUDY),
     (("major",), ApplicationFieldSlot.FIELD_OF_STUDY),
+    # Ordered after the "major" tokens above but matched on its own word, so a
+    # "Minor" box is answered from the minors and never from a major.
+    (("minor",), ApplicationFieldSlot.MINOR),
 )
 
 

@@ -34,7 +34,10 @@ class SaveEducationEntry:
             id=request.entry_id or self._id_generator.new_id(),
             institution_name=request.institution_name,
             degree=request.degree,
-            field_of_study=_clean(request.field_of_study),
+            # Blank and duplicate subjects are dropped by the entity, so the
+            # editor is free to submit an empty trailing row.
+            majors=request.majors,
+            minors=request.minors,
             start_date=request.start_date,
             end_date=request.end_date,
             description=_clean(request.description),

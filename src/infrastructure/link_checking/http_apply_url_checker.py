@@ -8,7 +8,7 @@ followed — an apply link that redirects to a real page is exactly as
 "reachable" as one that doesn't.
 
 Deliberately does NOT retry within a single call the way
-`AdzunaJobAggregatorClient`/`BraveSearchClient`/the ATS board clients do:
+`AdzunaJobAggregatorClient`/`TavilySearchClient`/the ATS board clients do:
 robustness against a one-off blip here comes from
 `JobPosting.apply_link_check`'s consecutive-failure threshold, spread
 across separate scheduled sweep runs, rather than from hammering a server

@@ -4,43 +4,37 @@ job-board API (`boards-api.greenhouse.io`).
 Unauthenticated: any company's public board can be read by token alone,
 no API key required. `content=true` is required on the request or
 Greenhouse omits each job's full HTML description entirely.
+
+Shape: `{"jobs": [{"title", "absolute_url", "content", "location": {"name"},
+"first_published", "updated_at"}]}`. The description is HTML, so it goes through
+`html_to_text`. Only `list_jobs` is implemented here — `find_job` comes from
+`BoardClientBase` and reads this same mapping.
 """
 
 from __future__ import annotations
 
 import logging
 
-import httpx
-
-from src.application.ports.ats_board_client_port import AtsBoardClientPort
-from src.application.ports.listing_resolver_port import ResolvedListingFields
-from src.domain.services.job_title_matching import titles_match
+from src.application.ports.ats_board_client_port import BoardJobPosting
 from src.domain.value_objects.ats_provider import AtsProvider
+from src.infrastructure.ats_boards.board_client_base import (
+    BoardClientBase,
+    build_posting,
+)
 from src.infrastructure.ats_boards.board_http import get_json_or_none
 from src.infrastructure.ats_boards.html_to_text import html_to_text
-from src.infrastructure.config import Settings
 
 logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://boards-api.greenhouse.io/v1/boards/{token}/jobs"
 
 
-class GreenhouseBoardClient(AtsBoardClientPort):
-    def __init__(
-        self, settings: Settings, http_client: httpx.AsyncClient | None = None
-    ) -> None:
-        self._max_retries = settings.ats_board_max_retries
-        self._retry_base_delay = settings.ats_board_retry_base_delay_seconds
-        self._retry_max_delay = settings.ats_board_retry_max_delay_seconds
-        self._client = http_client or httpx.AsyncClient(timeout=30.0)
-
+class GreenhouseBoardClient(BoardClientBase):
     @property
     def provider(self) -> AtsProvider:
         return AtsProvider.GREENHOUSE
 
-    async def find_job(
-        self, *, board_token: str, title: str
-    ) -> ResolvedListingFields | None:
+    async def list_jobs(self, *, board_token: str) -> tuple[BoardJobPosting, ...]:
         data = await get_json_or_none(
             self._client,
             _BASE_URL.format(token=board_token),
@@ -51,30 +45,36 @@ class GreenhouseBoardClient(AtsBoardClientPort):
             retry_max_delay=self._retry_max_delay,
         )
         if not isinstance(data, dict):
-            return None
+            return ()
 
         jobs = data.get("jobs")
         if not isinstance(jobs, list):
-            return None
+            return ()
 
+        postings: list[BoardJobPosting] = []
         for job in jobs:
             if not isinstance(job, dict):
                 continue
-            job_title = job.get("title")
-            if not isinstance(job_title, str) or not titles_match(job_title, title):
-                continue
-
-            apply_url = job.get("absolute_url")
             content = job.get("content")
-            if not isinstance(apply_url, str) or not apply_url.strip():
-                continue
-            if not isinstance(content, str) or not content.strip():
-                continue
+            posting = build_posting(
+                title=job.get("title"),
+                apply_url=job.get("absolute_url"),
+                description=html_to_text(content) if isinstance(content, str) else "",
+                location=_location_name(job.get("location")),
+                # Greenhouse publishes no remote flag. A role's remoteness shows
+                # up only in its location text or its prose, and inferring it from
+                # either would be inventing data.
+                is_remote=False,
+                posted_at=job.get("first_published") or job.get("updated_at"),
+            )
+            if posting is not None:
+                postings.append(posting)
+        return tuple(postings)
 
-            description = html_to_text(content)
-            if not description:
-                continue
 
-            return ResolvedListingFields(apply_url=apply_url, description=description)
-
-        return None
+def _location_name(value: object) -> str | None:
+    """Greenhouse nests the location as `{"name": "Austin, TX"}`."""
+    if isinstance(value, dict):
+        name = value.get("name")
+        return name if isinstance(name, str) else None
+    return None

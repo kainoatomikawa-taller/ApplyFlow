@@ -39,6 +39,15 @@ class ParsedEducationEntry:
 
     institution_name: str | None = None
     degree: str | None = None
+    #: Subjects read as majors and as minors. Separate because the domain keeps
+    #: them separate, and because promoting a minor to a major would overstate a
+    #: credential (see `EducationEntry`).
+    majors: list[str] = field(default_factory=list)
+    minors: list[str] = field(default_factory=list)
+    #: Retained as a fallback for a model that answers with the older single
+    #: field: `ParseResume` reads it as one major when `majors` is empty. Keeping
+    #: it costs one branch and avoids losing the subject entirely on a response
+    #: that drifts back to the previous shape.
     field_of_study: str | None = None
     start_date: date | None = None
     end_date: date | None = None
@@ -64,10 +73,27 @@ class ParsedResumeData:
     """
 
     full_name: str | None = None
+    middle_name: str | None = None
+    #: A name given in addition to the legal one — "Michael (Mike) Chen" — never
+    #: a shortening the parser thought up on its own.
+    preferred_name: str | None = None
     email: str | None = None
     phone: str | None = None
     headline: str | None = None
     location: str | None = None
+    #: Postal address, as far as the resume states it. Most give a city and
+    #: little else, which is why every part is independently optional.
+    street_address: str | None = None
+    city: str | None = None
+    state_or_region: str | None = None
+    postal_code: str | None = None
+    country: str | None = None
+    #: Profile URLs a resume header usually lists. Kept apart from each other
+    #: rather than as one "links" blob so an unrecognizable one can be dropped
+    #: without taking the others with it.
+    linkedin_url: str | None = None
+    github_url: str | None = None
+    portfolio_url: str | None = None
     work_history: list[ParsedWorkHistoryEntry] = field(default_factory=list)
     education: list[ParsedEducationEntry] = field(default_factory=list)
     skills: list[ParsedSkill] = field(default_factory=list)

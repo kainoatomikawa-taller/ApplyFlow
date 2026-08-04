@@ -140,8 +140,8 @@ class Settings(BaseSettings):
     job_aggregator_retry_base_delay_seconds: float = 1.0
     job_aggregator_retry_max_delay_seconds: float = 20.0
 
-    # Search API integration — Brave Search
-    # (src/infrastructure/search/brave_search_client.py). Used only to
+    # Search API integration — Tavily
+    # (src/infrastructure/search/tavily_search_client.py). Used only to
     # LOCATE which ATS board (Greenhouse/Lever/Ashby) a company posts
     # through (see AtsListingResolver) — never to answer a listing's
     # apply URL/description directly. The free tier is a tight daily quota
@@ -151,7 +151,7 @@ class Settings(BaseSettings):
     # tracked in Redis (DailySearchQuota) so exhausting it degrades
     # ingestion gracefully instead of failing it.
     search_api_key: SecretStr = SecretStr("")
-    search_api_base_url: str = "https://api.search.brave.com/res/v1/web/search"
+    search_api_base_url: str = "https://api.tavily.com/search"
     search_api_daily_quota: int = 100
     search_api_max_retries: int = 3
     search_api_retry_base_delay_seconds: float = 1.0

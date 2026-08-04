@@ -127,7 +127,7 @@ def profile() -> UserProfile:
             id="edu-1",
             institution_name="UT Austin",
             degree="B.S.",
-            field_of_study="Computer Science",
+            majors=("Computer Science",),
             start_date=date(2012, 8, 1),
             end_date=date(2016, 5, 15),
             source=ProvenanceSource.PARSED_RESUME,

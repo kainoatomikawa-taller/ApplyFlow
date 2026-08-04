@@ -62,7 +62,7 @@ def full_profile() -> UserProfile:
             id="edu-1",
             institution_name="UT Austin",
             degree="B.S.",
-            field_of_study="Computer Science",
+            majors=("Computer Science",),
             start_date=date(2012, 8, 1),
             end_date=date(2016, 5, 15),
             source=ProvenanceSource.PARSED_RESUME,
@@ -191,6 +191,7 @@ def test_an_explicit_location_is_preferred_over_the_composed_one(full_profile):
         Slot.SCHOOL,
         Slot.DEGREE,
         Slot.FIELD_OF_STUDY,
+        Slot.MINOR,
         Slot.EDUCATION_START_DATE,
         Slot.EDUCATION_END_DATE,
         Slot.CURRENT_COMPANY,
@@ -465,3 +466,52 @@ def test_only_the_middle_name_slot_may_answer_with_nothing():
             f"{slot} answered with an empty string; only "
             f"{sorted(_MAY_ANSWER_EMPTY)} may do that"
         )
+
+
+# ---- Majors and minors -------------------------------------------------------
+
+
+def _profile_with(majors, minors):
+    profile = make_profile()
+    profile.add_education(
+        EducationEntry(
+            id="edu-multi",
+            institution_name="UT Austin",
+            degree="B.S.",
+            majors=majors,
+            minors=minors,
+            source=ProvenanceSource.USER_ENTERED,
+        )
+    )
+    return profile
+
+
+def test_a_double_major_fills_one_field_of_study_box_with_both():
+    """A form offering a single box gets both majors rather than an arbitrarily
+    chosen one, which would silently drop a qualification the candidate holds."""
+    profile = _profile_with(("Computer Science", "Mathematics"), ())
+    value = resolve_profile_field(profile, Slot.FIELD_OF_STUDY)
+    assert value is not None
+    assert value.text == "Computer Science, Mathematics"
+
+
+def test_the_minor_slot_is_answered_from_the_minors_only():
+    profile = _profile_with(("Computer Science",), ("Economics", "Music"))
+    minor = resolve_profile_field(profile, Slot.MINOR)
+    assert minor is not None
+    assert minor.text == "Economics, Music"
+
+
+def test_a_major_never_answers_the_minor_slot():
+    """The point of holding the two apart. Answering a "Minor" box with a major
+    would understate a credential the candidate actually holds, and answering it
+    at all when they have no minor would invent one."""
+    profile = _profile_with(("Computer Science",), ())
+    assert resolve_profile_field(profile, Slot.MINOR) is None
+
+
+def test_a_minor_never_answers_the_field_of_study_slot():
+    """The opposite direction, which is the harmful one: it would promote a minor
+    to a major on an employer's form."""
+    profile = _profile_with((), ("Economics",))
+    assert resolve_profile_field(profile, Slot.FIELD_OF_STUDY) is None

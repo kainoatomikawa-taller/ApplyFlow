@@ -18,7 +18,11 @@ from src.application.dtos.data_rights_dtos import (
     ErasureRequestInput,
 )
 from src.application.dtos.job_application_dtos import CreateJobApplicationInput
-from src.application.dtos.job_ingestion_dtos import IngestAggregatorJobsInput
+from src.application.dtos.job_ingestion_dtos import (
+    IngestAggregatorJobsInput,
+    IngestBoardJobsInput,
+    TargetBoard,
+)
 from src.application.dtos.llm_dtos import LlmCompletionInput
 from src.application.exceptions import ErasureNotAcknowledgedError
 from src.application.ports.llm_client_port import LlmTaskType
@@ -29,6 +33,12 @@ from src.application.use_cases.erase_user_data import EraseUserData
 from src.application.use_cases.export_user_data import ExportUserData
 from src.application.use_cases.get_llm_completion import GetLlmCompletion
 from src.application.use_cases.ingest_aggregator_jobs import IngestAggregatorJobs
+from src.application.use_cases.ingest_board_jobs import IngestBoardJobs
+from src.domain.services.ats_board_locator import identify_ats_board
+from src.domain.value_objects.ats_provider import AtsProvider
+from src.infrastructure.ats_boards.ashby_board_client import AshbyBoardClient
+from src.infrastructure.ats_boards.greenhouse_board_client import GreenhouseBoardClient
+from src.infrastructure.ats_boards.lever_board_client import LeverBoardClient
 from src.infrastructure.config import get_settings
 from src.infrastructure.job_aggregators.adzuna_client import AdzunaJobAggregatorClient
 from src.infrastructure.llm.anthropic_client import AnthropicLlmClient
@@ -97,6 +107,117 @@ async def _ingest_adzuna(args: argparse.Namespace) -> None:
             f"{output.ingested_count}, skipped "
             f"{output.skipped_duplicate_count} duplicate(s)"
         )
+
+
+def _parse_board(company: str, locator: str) -> TargetBoard:
+    """One `--board COMPANY LOCATOR` pair, where the locator is either the
+    board's URL or `provider:token`.
+
+    Accepting the URL is the point: it is what a candidate already has in front
+    of them from the company's careers page, and `identify_ats_board` reads the
+    provider and token straight out of it — no search call, no guessing.
+    """
+    company = company.strip()
+    locator = locator.strip()
+    if not company:
+        raise SystemExit("--board needs a company name as its first value")
+
+    reference = identify_ats_board(locator)
+    if reference is not None:
+        return TargetBoard(
+            company=company,
+            provider=reference.provider,
+            board_token=reference.board_token,
+        )
+
+    if locator.lower().startswith(("http://", "https://")):
+        raise SystemExit(
+            f"{locator!r} is not a recognized Greenhouse, Lever or Ashby board "
+            "URL. Expected something like https://boards.greenhouse.io/stripe, "
+            "https://jobs.lever.co/acme or "
+            "https://jobs.ashbyhq.com/acme — or pass 'provider:token' instead."
+        )
+
+    provider_text, separator, token = locator.partition(":")
+    if not separator or not token.strip():
+        raise SystemExit(
+            f"Could not read a board from {locator!r}. Pass the board URL, or "
+            "'provider:token' (e.g. greenhouse:stripe)."
+        )
+    try:
+        provider = AtsProvider(provider_text.strip().lower())
+    except ValueError:
+        supported = ", ".join(provider.value for provider in AtsProvider)
+        raise SystemExit(
+            f"Unknown ATS provider {provider_text!r}. Supported: {supported}."
+        ) from None
+    return TargetBoard(company=company, provider=provider, board_token=token.strip())
+
+
+def _boards_from_file(path: str) -> list[TargetBoard]:
+    """Read a target list of `Company,locator` lines.
+
+    A file rather than a database table: the list of companies a candidate is
+    targeting is theirs to edit, changes constantly, and is worth nothing to
+    anyone else. A text file they can keep in version control answers that better
+    than a schema, and nothing else in the app needs to read it.
+    """
+    boards: list[TargetBoard] = []
+    with open(path, encoding="utf-8") as handle:
+        for number, raw in enumerate(handle, start=1):
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            company, separator, locator = line.partition(",")
+            if not separator:
+                raise SystemExit(
+                    f"{path}:{number}: expected 'Company,board-url-or-provider:token'"
+                )
+            boards.append(_parse_board(company, locator))
+    return boards
+
+
+async def _ingest_board(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    boards = [_parse_board(company, locator) for company, locator in args.board or []]
+    if args.boards_file:
+        boards.extend(_boards_from_file(args.boards_file))
+    if not boards:
+        raise SystemExit("Pass at least one --board or a --boards-file.")
+
+    async with async_session_factory() as session:
+        use_case = IngestBoardJobs(
+            repository=SqlAlchemyJobPostingRepository(session),
+            board_clients={
+                AtsProvider.GREENHOUSE: GreenhouseBoardClient(settings),
+                AtsProvider.LEVER: LeverBoardClient(settings),
+                AtsProvider.ASHBY: AshbyBoardClient(settings),
+            },
+            id_generator=UuidIdGenerator(),
+        )
+        output = await use_case.execute(IngestBoardJobsInput(boards=tuple(boards)))
+
+    for result in output.results:
+        if result.error is not None:
+            print(
+                f"  {result.company} ({result.provider.value}:"
+                f"{result.board_token}) FAILED: {result.error}"
+            )
+            continue
+        print(
+            f"  {result.company} ({result.provider.value}:{result.board_token}): "
+            f"saw {result.postings_seen}, ingested {result.ingested_count}, "
+            f"skipped {result.skipped_duplicate_count} duplicate(s)"
+        )
+    print(
+        f"Read {output.boards_read}/{len(output.results)} board(s), saw "
+        f"{output.postings_seen} posting(s): ingested {output.ingested_count}, "
+        f"skipped {output.skipped_duplicate_count} duplicate(s)"
+    )
+    if output.failed_boards:
+        # Non-zero exit so a scripted run notices, even though the rest of the
+        # boards were ingested successfully.
+        raise SystemExit(f"{len(output.failed_boards)} board(s) could not be read")
 
 
 async def _export_data(args: argparse.Namespace) -> None:
@@ -220,6 +341,30 @@ def main() -> None:
     ingest_adzuna.add_argument("--location", default=None)
     ingest_adzuna.add_argument("--max-pages", type=int, default=1)
     ingest_adzuna.set_defaults(func=_ingest_adzuna)
+
+    ingest_board = sub.add_parser(
+        "ingest-board",
+        help=(
+            "Read companies' own Greenhouse/Lever/Ashby boards directly. "
+            "Unauthenticated and unmetered — no search-API quota is used."
+        ),
+    )
+    ingest_board.add_argument(
+        "--board",
+        action="append",
+        nargs=2,
+        metavar=("COMPANY", "URL_OR_PROVIDER:TOKEN"),
+        help=(
+            "Repeatable. e.g. --board Stripe https://boards.greenhouse.io/stripe "
+            "or --board Ramp ashby:ramp"
+        ),
+    )
+    ingest_board.add_argument(
+        "--boards-file",
+        default=None,
+        help="File of 'Company,board-url-or-provider:token' lines; # comments allowed.",
+    )
+    ingest_board.set_defaults(func=_ingest_board)
 
     llm_ping = sub.add_parser(
         "llm-ping", help="Send one prompt through the LLM integration layer"

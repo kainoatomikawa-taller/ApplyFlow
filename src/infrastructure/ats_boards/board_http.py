@@ -2,7 +2,7 @@
 Lever/Ashby board clients.
 
 Same retry/backoff shape already used by `AdzunaJobAggregatorClient` and
-`BraveSearchClient` (retry only 429/5xx/connection errors, honor a 429's
+`TavilySearchClient` (retry only 429/5xx/connection errors, honor a 429's
 `Retry-After` header, exponential backoff capped at a max delay) —
 extracted here rather than duplicated a third time, since all three ATS
 clients need the identical loop. Those two pre-existing clients are left
@@ -80,8 +80,7 @@ async def get_json_or_none(
             )
 
         last_exc = ExternalServiceError(
-            f"{service_name} board request failed with status "
-            f"{response.status_code}"
+            f"{service_name} board request failed with status {response.status_code}"
         )
         if attempt == max_attempts:
             break
@@ -89,8 +88,7 @@ async def get_json_or_none(
             attempt, retry_base_delay, retry_max_delay
         )
         logger.warning(
-            "%s board request failed with status %d (attempt %d/%d), "
-            "retrying in %.1fs",
+            "%s board request failed with status %d (attempt %d/%d), retrying in %.1fs",
             service_name,
             response.status_code,
             attempt,

@@ -4,6 +4,8 @@ public job-board posting API.
 
 from __future__ import annotations
 
+from datetime import date
+
 import httpx
 import pytest
 from pydantic import SecretStr
@@ -116,3 +118,68 @@ async def test_returns_none_when_board_token_is_not_found():
     result = await client.find_job(board_token="nonexistent", title="Engineer")
 
     assert result is None
+
+
+# ---- list_jobs: the whole board ---------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_jobs_reads_ashbys_explicit_remote_flag():
+    """Ashby is the only one of the three that states remoteness as a boolean."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "jobs": [
+                    {
+                        "title": "Backend Intern",
+                        "jobUrl": "https://jobs.ashbyhq.com/acme/1",
+                        "descriptionPlain": "Write Python.",
+                        "location": "Austin, TX",
+                        "isRemote": True,
+                        "publishedAt": "2026-07-01T00:00:00.000Z",
+                    },
+                    {
+                        "title": "Onsite Intern",
+                        "jobUrl": "https://jobs.ashbyhq.com/acme/2",
+                        "descriptionPlain": "Come in.",
+                        "location": "NYC",
+                        "isRemote": False,
+                    },
+                ]
+            },
+        )
+
+    postings = await _client_with_handler(handler).list_jobs(board_token="acme")
+
+    assert postings[0].is_remote is True
+    assert postings[0].location == "Austin, TX"
+    assert postings[0].posted_at == date(2026, 7, 1)
+    assert postings[1].is_remote is False
+    # Absent rather than guessed when the board does not say.
+    assert postings[1].posted_at is None
+
+
+@pytest.mark.asyncio
+async def test_list_jobs_only_trusts_a_real_boolean_for_remote():
+    """A truthy string is not the company stating the role is remote."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "jobs": [
+                    {
+                        "title": "Intern",
+                        "jobUrl": "https://jobs.ashbyhq.com/acme/1",
+                        "descriptionPlain": "x",
+                        "isRemote": "yes",
+                    }
+                ]
+            },
+        )
+
+    postings = await _client_with_handler(handler).list_jobs(board_token="acme")
+
+    assert postings[0].is_remote is False

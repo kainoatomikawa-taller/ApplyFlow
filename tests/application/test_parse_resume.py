@@ -26,8 +26,10 @@ from src.domain.entities.work_history_entry import WorkHistoryEntry
 from src.domain.exceptions import ProfileMissingContactInfoError, ResumeNotFoundError
 from src.domain.repositories.profile_repository import ProfileRepository
 from src.domain.repositories.resume_repository import ResumeRepository
+from src.domain.value_objects.address import Address
 from src.domain.value_objects.email_address import EmailAddress
 from src.domain.value_objects.proficiency_level import ProficiencyLevel
+from src.domain.value_objects.profile_links import ProfileLinks
 from src.domain.value_objects.provenance_source import ProvenanceSource
 from tests.application.test_resume_use_cases import (
     FakeTextExtractor,
@@ -504,3 +506,281 @@ async def test_a_hand_typed_job_survives_a_later_resume_upload_unduplicated():
     assert len(stored.work_history) == 2, "the new job lands, the known one does not"
     known = next(e for e in stored.work_history if e.company_name == "Acme")
     assert known.source is ProvenanceSource.USER_ENTERED
+
+
+# ---- Filling gaps on a profile that already exists ---------------------------
+#
+# Parsing used to touch only work history, education and skills on an existing
+# profile: contact details were set when the profile was *created* and never
+# again, and links and address were never parsed at all. So a candidate who
+# created a profile by hand and then uploaded a résumé got no contact data from
+# it. These cover the two halves of the rule that replaced that — gaps are
+# filled, and nothing already answered is overwritten.
+
+
+async def _existing_profile(profile_repo, **overrides) -> UserProfile:
+    defaults = {
+        "id": "profile-existing",
+        "user_id": "user-1",
+        "full_name": "Jane Doe",
+        "email": EmailAddress("jane@example.com"),
+        "contact_source": ProvenanceSource.USER_ENTERED,
+    }
+    profile = UserProfile(**{**defaults, **overrides})
+    await profile_repo.add(profile)
+    return profile
+
+
+@pytest.mark.asyncio
+async def test_a_blank_contact_field_is_filled_from_the_resume():
+    profile_repo = InMemoryProfileRepo()
+    await _existing_profile(profile_repo)
+
+    await _parse(
+        profile_repo,
+        _parsed(
+            phone="555-1234",
+            headline="Staff Engineer",
+            location="Austin, TX",
+            middle_name="Quinn",
+            preferred_name="JD",
+        ),
+    )
+
+    profile = profile_repo.store["profile-existing"]
+    assert profile.phone == "555-1234"
+    assert profile.headline == "Staff Engineer"
+    assert profile.location == "Austin, TX"
+    assert profile.middle_name == "Quinn"
+    assert profile.preferred_name == "JD"
+
+
+@pytest.mark.asyncio
+async def test_a_contact_field_the_candidate_already_answered_is_not_overwritten():
+    """The candidate may have corrected what the résumé says. Re-uploading it
+    must not quietly put the old value back."""
+    profile_repo = InMemoryProfileRepo()
+    await _existing_profile(profile_repo, phone="+1 512 555 0100", location="Remote")
+
+    await _parse(profile_repo, _parsed(phone="555-1234", location="Austin, TX"))
+
+    profile = profile_repo.store["profile-existing"]
+    assert profile.phone == "+1 512 555 0100"
+    assert profile.location == "Remote"
+
+
+@pytest.mark.asyncio
+async def test_the_name_and_email_on_an_existing_profile_are_never_replaced():
+    profile_repo = InMemoryProfileRepo()
+    await _existing_profile(profile_repo)
+
+    await _parse(
+        profile_repo, _parsed(full_name="J. Doe", email="different@example.com")
+    )
+
+    profile = profile_repo.store["profile-existing"]
+    assert profile.full_name == "Jane Doe"
+    assert profile.email.value == "jane@example.com"
+
+
+@pytest.mark.asyncio
+async def test_filling_a_gap_does_not_downgrade_the_contact_provenance():
+    """The group carries one source. Keeping the stronger existing tag cannot
+    mislabel a fact the candidate did state — see `_fill_contact_gaps`."""
+    profile_repo = InMemoryProfileRepo()
+    await _existing_profile(profile_repo)
+
+    await _parse(profile_repo, _parsed(phone="555-1234"))
+
+    assert (
+        profile_repo.store["profile-existing"].contact_source
+        is ProvenanceSource.USER_ENTERED
+    )
+
+
+# ---- Address and links -------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_an_empty_address_is_filled_from_the_resume():
+    profile_repo = InMemoryProfileRepo()
+    await _existing_profile(profile_repo)
+
+    await _parse(
+        profile_repo,
+        _parsed(city="Austin", state_or_region="TX", country="United States"),
+    )
+
+    address = profile_repo.store["profile-existing"].address
+    assert address.city == "Austin"
+    assert address.state_or_region == "TX"
+    assert address.country == "United States"
+    # Not stated on the résumé, so left alone rather than guessed.
+    assert address.street_address is None
+    assert address.postal_code is None
+
+
+@pytest.mark.asyncio
+async def test_an_address_already_on_the_profile_is_left_untouched():
+    """All-or-nothing: merging a parsed address into a typed one would leave the
+    group's single source describing neither."""
+    profile_repo = InMemoryProfileRepo()
+    profile = await _existing_profile(profile_repo)
+    profile.set_address(Address(city="Lisbon"), ProvenanceSource.USER_ENTERED)
+
+    await _parse(profile_repo, _parsed(city="Austin", country="United States"))
+
+    address = profile_repo.store["profile-existing"].address
+    assert address.city == "Lisbon"
+    assert address.country is None
+
+
+@pytest.mark.asyncio
+async def test_links_are_filled_from_the_resume_and_tagged_as_parsed():
+    profile_repo = InMemoryProfileRepo()
+    await _existing_profile(profile_repo)
+
+    await _parse(
+        profile_repo,
+        _parsed(
+            linkedin_url="https://www.linkedin.com/in/janedoe",
+            github_url="https://github.com/janedoe",
+        ),
+    )
+
+    profile = profile_repo.store["profile-existing"]
+    assert profile.links.linkedin_url == "https://www.linkedin.com/in/janedoe"
+    assert profile.links.github_url == "https://github.com/janedoe"
+    assert profile.links_source is ProvenanceSource.PARSED_RESUME
+
+
+@pytest.mark.asyncio
+async def test_a_url_the_domain_refuses_is_dropped_without_failing_the_parse():
+    """One unusable link in a résumé header must not cost the candidate their
+    work history."""
+    profile_repo = InMemoryProfileRepo()
+    await _existing_profile(profile_repo)
+
+    await _parse(
+        profile_repo,
+        _parsed(
+            linkedin_url="not a url at all",
+            github_url="https://github.com/janedoe",
+            work_history=[_one_job()],
+        ),
+    )
+
+    profile = profile_repo.store["profile-existing"]
+    assert profile.links.linkedin_url is None
+    assert profile.links.github_url == "https://github.com/janedoe"
+    assert len(profile.work_history) == 1
+
+
+@pytest.mark.asyncio
+async def test_links_already_on_the_profile_are_left_untouched():
+    profile_repo = InMemoryProfileRepo()
+    profile = await _existing_profile(profile_repo)
+    profile.set_links(
+        ProfileLinks(linkedin_url="https://www.linkedin.com/in/typed"),
+        ProvenanceSource.USER_ENTERED,
+    )
+
+    await _parse(profile_repo, _parsed(github_url="https://github.com/janedoe"))
+
+    profile = profile_repo.store["profile-existing"]
+    assert profile.links.linkedin_url == "https://www.linkedin.com/in/typed"
+    assert profile.links.github_url is None
+
+
+# ---- Majors and minors -------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_parsed_majors_and_minors_land_on_the_education_entry():
+    profile_repo = InMemoryProfileRepo()
+    await _existing_profile(profile_repo)
+
+    await _parse(
+        profile_repo,
+        _parsed(
+            education=[
+                ParsedEducationEntry(
+                    institution_name="UT Austin",
+                    degree="B.S.",
+                    majors=["Computer Science", "Mathematics"],
+                    minors=["Economics"],
+                )
+            ]
+        ),
+    )
+
+    entry = profile_repo.store["profile-existing"].education[0]
+    assert entry.majors == ("Computer Science", "Mathematics")
+    assert entry.minors == ("Economics",)
+
+
+@pytest.mark.asyncio
+async def test_a_single_field_of_study_is_read_as_one_major():
+    """The fallback for a model answering in the older shape. Dropping it would
+    lose the subject entirely."""
+    profile_repo = InMemoryProfileRepo()
+    await _existing_profile(profile_repo)
+
+    await _parse(
+        profile_repo,
+        _parsed(
+            education=[
+                ParsedEducationEntry(
+                    institution_name="UT Austin",
+                    degree="B.S.",
+                    field_of_study="Computer Science",
+                )
+            ]
+        ),
+    )
+
+    entry = profile_repo.store["profile-existing"].education[0]
+    assert entry.majors == ("Computer Science",)
+    assert entry.minors == ()
+
+
+@pytest.mark.asyncio
+async def test_majors_win_over_the_legacy_field_when_both_are_present():
+    profile_repo = InMemoryProfileRepo()
+    await _existing_profile(profile_repo)
+
+    await _parse(
+        profile_repo,
+        _parsed(
+            education=[
+                ParsedEducationEntry(
+                    institution_name="UT Austin",
+                    degree="B.S.",
+                    majors=["Applied Mathematics"],
+                    field_of_study="Something Else",
+                )
+            ]
+        ),
+    )
+
+    assert profile_repo.store["profile-existing"].education[0].majors == (
+        "Applied Mathematics",
+    )
+
+
+# ---- What parsing must never write ------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_parsing_never_writes_work_authorization_or_eeo():
+    """The legal sections stay the candidate's own statement. `PARSED_RESUME` is
+    excluded from `WorkAuthorization.ATTESTING_SOURCES`, so a parsed answer would
+    be unusable for autofill anyway — but it must not be stored at all."""
+    profile_repo = InMemoryProfileRepo()
+    await _existing_profile(profile_repo)
+
+    await _parse(profile_repo, _parsed(phone="555-1234", city="Austin"))
+
+    profile = profile_repo.store["profile-existing"]
+    assert profile.work_authorization is None
+    assert profile.eeo_self_identification is None

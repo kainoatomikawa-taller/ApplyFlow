@@ -71,6 +71,13 @@ def test_missing_anthropic_api_key_fails_fast_outside_development():
 
 
 def test_get_settings_wraps_invalid_config_in_a_clear_error(monkeypatch):
+    # `get_settings()` builds its own `Settings`, so unlike every other test here
+    # this one cannot pass `_env_file=None` — it has to neutralise the env files
+    # from the outside. Without that, a developer's own .env/.env.local supplies
+    # some of the required secrets, which changes *which* one fails validation
+    # first and so which name appears in the message asserted on below. That made
+    # this test pass or fail depending on the machine it ran on.
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     get_settings.cache_clear()

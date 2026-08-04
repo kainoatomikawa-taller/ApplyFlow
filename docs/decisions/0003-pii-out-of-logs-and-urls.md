@@ -66,10 +66,17 @@ URL templates are scanned as source, because the backend cannot reject a
 parameter it never declared but the browser will still have recorded it.
 
 Outbound third-party calls are held to the same rule where the third party
-allows it — Brave Search takes its credential in an `X-Subscription-Token`
-header. Adzuna's public API accepts no header alternative, so its
-`app_id`/`app_key` stay in the query string; see below for how that is
-contained.
+allows it — the search provider takes its credential in an `Authorization:
+Bearer` header, and its query travels in a POST body rather than a query
+string, which matters because a search term can be a candidate's name. Adzuna's
+public API accepts no header alternative, so its `app_id`/`app_key` stay in the
+query string; see below for how that is contained.
+
+> **Provider change, 2026-08-04.** This originally read "Brave Search takes its
+> credential in an `X-Subscription-Token` header". Brave withdrew its free tier
+> and the implementation moved to Tavily (`TavilySearchClient`). The decision is
+> unchanged and Tavily satisfies it slightly better: Brave put the query in a
+> URL, Tavily puts it in a body.
 
 ### 2. Logging redacts PII process-wide
 

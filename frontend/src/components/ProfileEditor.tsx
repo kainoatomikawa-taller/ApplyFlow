@@ -7,6 +7,7 @@ import { EducationSection } from './EducationSection';
 import { EeoSection } from './EeoSection';
 import { LinksSection } from './LinksSection';
 import { QualificationsSection } from './QualificationsSection';
+import { ResumeImportSection } from './ResumeImportSection';
 import { SkillsSection } from './SkillsSection';
 import { WorkAuthorizationSection } from './WorkAuthorizationSection';
 import { WorkHistorySection } from './WorkHistorySection';
@@ -56,6 +57,7 @@ export function ProfileEditor() {
       </p>
       {error ? <p className="error">{error}</p> : null}
 
+      <ResumeImportSection profile={profile} onSaved={setProfile} />
       <ContactSection profile={profile} onSaved={setProfile} />
       <AddressSection profile={profile} onSaved={setProfile} />
       <LinksSection profile={profile} onSaved={setProfile} />

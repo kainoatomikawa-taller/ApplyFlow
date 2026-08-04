@@ -7,7 +7,7 @@ happens here; business rules are enforced in the domain layer.
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -63,6 +63,9 @@ class EducationResponse(BaseModel):
     id: str
     institution_name: str
     degree: str
+    majors: list[str]
+    minors: list[str]
+    #: The majors joined, as forms receive them. Read-only — writes send `majors`.
     field_of_study: str | None
     start_date: date | None
     end_date: date | None
@@ -921,7 +924,16 @@ class WorkHistoryRequest(BaseModel):
 class EducationRequest(BaseModel):
     institution_name: str = Field(min_length=1, max_length=255)
     degree: str = Field(min_length=1, max_length=255)
-    field_of_study: str | None = Field(default=None, max_length=255)
+    #: Blank and duplicate entries are dropped by the domain, so no `min_length`
+    #: on the items — an editor with one row per subject can submit a trailing
+    #: empty one. The list caps are there to stop an unbounded payload, not to
+    #: express a rule about how many degrees a person may hold.
+    majors: list[Annotated[str, Field(max_length=255)]] = Field(
+        default_factory=list, max_length=12
+    )
+    minors: list[Annotated[str, Field(max_length=255)]] = Field(
+        default_factory=list, max_length=12
+    )
     start_date: date | None = None
     end_date: date | None = None
     description: str | None = None

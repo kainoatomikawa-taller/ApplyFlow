@@ -139,7 +139,7 @@ def _full_profile(user_id: str) -> UserProfile:
             id=f"ed-{uuid.uuid4()}",
             institution_name="State University",
             degree="B.S. Computer Science",
-            field_of_study="Computer Science",
+            majors=("Computer Science",),
             start_date=date(2016, 9, 1),
             end_date=date(2020, 5, 1),
             source=ProvenanceSource.PARSED_RESUME,

@@ -539,10 +539,26 @@ export interface ProfileWorkHistoryEntry {
   source: string;
 }
 
+/** A résumé file stored for a candidate, with the text extracted from it. */
+export interface StoredResume {
+  id: string;
+  original_filename: string;
+  content_type: string;
+  size_bytes: number;
+  extracted_text: string;
+  created_at: string;
+}
+
 export interface ProfileEducationEntry {
   id: string;
   institution_name: string;
   degree: string;
+  majors: string[];
+  minors: string[];
+  /**
+   * The majors joined, exactly as employer forms receive them. Server-derived
+   * and read-only — writes send `majors`, which is why `EducationInput` omits it.
+   */
   field_of_study: string | null;
   start_date: string | null;
   end_date: string | null;
@@ -596,7 +612,10 @@ export type LinksInput = Omit<ProfileLinks, 'source'>;
 export type QualificationsInput = ProfileQualifications;
 
 export type WorkHistoryInput = Omit<ProfileWorkHistoryEntry, 'id' | 'source'>;
-export type EducationInput = Omit<ProfileEducationEntry, 'id' | 'source'>;
+export type EducationInput = Omit<
+  ProfileEducationEntry,
+  'id' | 'source' | 'field_of_study'
+>;
 export type SkillInput = Omit<ProfileSkill, 'id' | 'source'>;
 
 /**

@@ -81,7 +81,12 @@ class ApplicationFieldSlot(StrEnum):
     # ---- Education --------------------------------------------------------
     SCHOOL = "school"
     DEGREE = "degree"
+    #: The majors, joined. Named for the label forms actually use; a form
+    #: labelled "Major" maps here too (see `ats_field_mapper`).
     FIELD_OF_STUDY = "field_of_study"
+    #: Separate from `FIELD_OF_STUDY` because a minor is a weaker claim than a
+    #: major, and answering a "Minor" box with a major would overstate it.
+    MINOR = "minor"
     EDUCATION_START_DATE = "education_start_date"
     EDUCATION_END_DATE = "education_end_date"
 

@@ -38,6 +38,10 @@ const REASON_LABELS: Record<string, string> = {
   requires_candidate_signature:
     'This is where you sign. Nobody can sign for you, so it stays empty.',
   unsupported_field_kind: 'This widget cannot take the data ApplyFlow has.',
+  required_with_no_applicable_value:
+    'Your profile says you have none of this, but the form requires an answer — only you can decide what to put.',
+  no_matching_option:
+    "None of this dropdown's choices match your answer, or any broader category it falls under. Pick the closest one yourself.",
   document_not_generated: 'Generate this document above first, then autofill again.',
   value_too_long: 'The value is longer than this field accepts.',
 };

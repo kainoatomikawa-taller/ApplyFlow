@@ -158,3 +158,106 @@ async def test_parse_drops_malformed_entries_instead_of_crashing():
     assert result.skills[0].proficiency is None  # unknown enum value -> dropped
     assert result.skills[0].years_of_experience is None  # negative -> dropped
     assert result.skills[1].years_of_experience is None  # bool is not an int here
+
+
+# ---- Contact extras, links, and subject lists --------------------------------
+#
+# All added when the profile editor gained a résumé-import section: the parser had
+# been reading only name/email/phone/headline/location, so links and address never
+# reached the profile at all.
+
+
+@pytest.mark.asyncio
+async def test_address_links_and_name_extras_are_read():
+    payload = {
+        "full_name": "Jane Doe",
+        "middle_name": "Quinn",
+        "preferred_name": "JD",
+        "email": "jane@example.com",
+        "street_address": "120 Congress Ave",
+        "city": "Austin",
+        "state_or_region": "TX",
+        "postal_code": "78701",
+        "country": "United States",
+        "linkedin_url": "https://www.linkedin.com/in/janedoe",
+        "github_url": "https://github.com/janedoe",
+        "portfolio_url": "https://jane.dev",
+    }
+    result = await LlmResumeParser(FakeLlmClient(json.dumps(payload))).parse("text")
+
+    assert result.middle_name == "Quinn"
+    assert result.preferred_name == "JD"
+    assert result.street_address == "120 Congress Ave"
+    assert result.city == "Austin"
+    assert result.state_or_region == "TX"
+    assert result.postal_code == "78701"
+    assert result.country == "United States"
+    assert result.linkedin_url == "https://www.linkedin.com/in/janedoe"
+    assert result.github_url == "https://github.com/janedoe"
+    assert result.portfolio_url == "https://jane.dev"
+
+
+@pytest.mark.asyncio
+async def test_a_bare_host_gains_a_scheme():
+    """A résumé header printing "github.com/janedoe" is stating a URL, but
+    `ProfileLinks` refuses one with no scheme."""
+    payload = {"github_url": "github.com/janedoe"}
+    result = await LlmResumeParser(FakeLlmClient(json.dumps(payload))).parse("text")
+    assert result.github_url == "https://github.com/janedoe"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", ["janedoe", "not a url", "", None, 42])
+async def test_a_value_that_is_not_url_shaped_is_dropped(value):
+    """Never repaired into a guess: a constructed link points at a stranger's
+    profile, which is worse than an empty field."""
+    payload = {"linkedin_url": value}
+    result = await LlmResumeParser(FakeLlmClient(json.dumps(payload))).parse("text")
+    assert result.linkedin_url is None
+
+
+@pytest.mark.asyncio
+async def test_majors_and_minors_are_read_as_lists():
+    payload = {
+        "education": [
+            {
+                "institution_name": "UT Austin",
+                "degree": "B.S.",
+                "majors": ["Computer Science", "Mathematics"],
+                "minors": ["Economics"],
+            }
+        ]
+    }
+    result = await LlmResumeParser(FakeLlmClient(json.dumps(payload))).parse("text")
+
+    entry = result.education[0]
+    assert entry.majors == ["Computer Science", "Mathematics"]
+    assert entry.minors == ["Economics"]
+
+
+@pytest.mark.asyncio
+async def test_a_bare_string_where_a_subject_list_was_asked_for_is_accepted():
+    """The model has still named the subject; dropping it over the container type
+    would lose real information."""
+    payload = {
+        "education": [
+            {"institution_name": "UT", "degree": "B.S.", "majors": "Mathematics"}
+        ]
+    }
+    result = await LlmResumeParser(FakeLlmClient(json.dumps(payload))).parse("text")
+    assert result.education[0].majors == ["Mathematics"]
+
+
+@pytest.mark.asyncio
+async def test_junk_inside_a_subject_list_is_skipped_not_fatal():
+    payload = {
+        "education": [
+            {
+                "institution_name": "UT",
+                "degree": "B.S.",
+                "majors": ["Mathematics", None, 7, "  ", {"a": 1}, "Physics"],
+            }
+        ]
+    }
+    result = await LlmResumeParser(FakeLlmClient(json.dumps(payload))).parse("text")
+    assert result.education[0].majors == ["Mathematics", "Physics"]

@@ -28,6 +28,11 @@ class EducationOutput:
     id: str
     institution_name: str
     degree: str
+    majors: tuple[str, ...]
+    minors: tuple[str, ...]
+    #: The majors joined, as the domain derives it. Carried alongside the list so
+    #: a client rendering one "field of study" line does not have to re-invent
+    #: the join and risk formatting it differently from what forms receive.
     field_of_study: str | None
     start_date: date | None
     end_date: date | None
@@ -183,7 +188,8 @@ class EducationInput:
     institution_name: str
     degree: str
     entry_id: str | None = None
-    field_of_study: str | None = None
+    majors: tuple[str, ...] = ()
+    minors: tuple[str, ...] = ()
     start_date: date | None = None
     end_date: date | None = None
     description: str | None = None

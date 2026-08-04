@@ -58,6 +58,7 @@ from anthropic.types import Message, TextBlock, TextBlockParam, Usage
 
 from src.application.exceptions import ExternalServiceError
 from src.application.ports.llm_client_port import (
+    TASK_TYPE_MAX_TOKENS,
     TASK_TYPE_TIERS,
     LlmClientPort,
     LlmModelTier,
@@ -97,17 +98,44 @@ class AnthropicLlmClient(LlmClientPort):
     ) -> str:
         model = self._models[TASK_TYPE_TIERS[task_type]]
         response = await self._create_with_retry(
-            model=model, prompt=prompt, system=system
+            model=model,
+            prompt=prompt,
+            system=system,
+            max_tokens=self._max_tokens_for(task_type),
         )
 
         self._log_cache_usage(response.usage)
+
+        # A response that ran out of room is refused rather than returned. The
+        # text is real but incomplete, and every caller parses it — JSON, a
+        # résumé, a cover letter — so a truncated answer surfaces downstream as
+        # "invalid JSON" or as a document silently missing its end. Saying so here
+        # is the difference between a diagnosable error and a puzzling one.
+        if response.stop_reason == "max_tokens":
+            raise ExternalServiceError(
+                f"Anthropic truncated its {task_type.value} response at the "
+                f"{self._max_tokens_for(task_type)}-token limit, so the answer is "
+                "incomplete. Raise the budget for this task type "
+                "(TASK_TYPE_MAX_TOKENS) or shorten the input."
+            )
 
         return "".join(
             block.text for block in response.content if isinstance(block, TextBlock)
         )
 
+    def _max_tokens_for(self, task_type: LlmTaskType) -> int:
+        """The output ceiling for this task, never below the configured floor.
+
+        `ANTHROPIC_MAX_TOKENS` is treated as a floor rather than a cap so the
+        setting keeps its meaning — raising it still raises every task — while a
+        task whose own budget is larger is not silently clamped back down to it.
+        Clamping was the original defect: a 1024-token default truncated résumé
+        parses into unparseable JSON.
+        """
+        return max(TASK_TYPE_MAX_TOKENS[task_type], self._max_tokens)
+
     async def _create_with_retry(
-        self, *, model: str, prompt: str, system: str | None
+        self, *, model: str, prompt: str, system: str | None, max_tokens: int
     ) -> Message:
         max_attempts = self._max_retries + 1
         last_exc: Exception | None = None
@@ -116,7 +144,7 @@ class AnthropicLlmClient(LlmClientPort):
             try:
                 return await self._client.messages.create(
                     model=model,
-                    max_tokens=self._max_tokens,
+                    max_tokens=max_tokens,
                     messages=[{"role": "user", "content": prompt}],
                     system=self._to_system_param(system),
                 )

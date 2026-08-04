@@ -299,7 +299,7 @@ decisions above. This is the list, in the order it would have to be done.
    inventory rather than maintaining it separately is what stops the two from
    diverging.
 8. **Processor agreements and a records-of-processing register.** Art. 28 needs
-   a DPA with each of Anthropic, OpenAI, Adzuna and Brave; Art. 30 needs a
+   a DPA with each of Anthropic, OpenAI, Adzuna and Tavily; Art. 30 needs a
    register of processing activities. Both are documents rather than code, and
    both are largely transcriptions of the inventory.
 9. **Revisit client IP addresses.** ADR 0003 leaves IPs unredacted because the

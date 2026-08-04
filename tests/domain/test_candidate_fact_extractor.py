@@ -163,7 +163,7 @@ def test_education_is_included_so_a_resume_can_state_it():
                 id="edu-1",
                 institution_name="State University",
                 degree="Bachelor of Science",
-                field_of_study="Computer Science",
+                majors=("Computer Science",),
                 end_date=date(2020, 5, 1),
                 description="Graduated with honors.",
                 source=ProvenanceSource.PARSED_RESUME,

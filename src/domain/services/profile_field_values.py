@@ -279,7 +279,44 @@ def _degree(profile: UserProfile) -> ProfileFieldValue | None:
 
 def _field_of_study(profile: UserProfile) -> ProfileFieldValue | None:
     entry = _most_recent_education(profile)
+    # `field_of_study` is the majors joined — a form asking for one field of
+    # study on a double major gets both, which is accurate, where picking one
+    # would silently drop a qualification.
     return _verbatim(entry.field_of_study) if entry else None
+
+
+def _minor(profile: UserProfile) -> ProfileFieldValue | None:
+    entry = _most_recent_education(profile)
+    if entry is None or not entry.minors:
+        return None
+    return _verbatim(", ".join(entry.minors))
+
+
+#: Slots whose answer is a field of study, and which therefore have a list of
+#: individual subjects behind the single string `resolve_profile_field` returns.
+_SUBJECT_SLOTS: dict[ApplicationFieldSlot, str] = {
+    ApplicationFieldSlot.FIELD_OF_STUDY: "majors",
+    ApplicationFieldSlot.MINOR: "minors",
+}
+
+
+def subject_candidates(
+    profile: UserProfile, slot: ApplicationFieldSlot
+) -> tuple[str, ...]:
+    """The individual subjects behind a field-of-study slot, in the candidate's
+    own order — a first major before a second.
+
+    `resolve_profile_field` joins these for the single text box a form usually
+    offers. A caller facing a *dropdown* needs them apart, because one of them
+    may be listed while the joined string never is. Empty for every other slot,
+    so a caller can ask without first checking whether asking makes sense.
+    """
+    entry = _most_recent_education(profile)
+    attribute = _SUBJECT_SLOTS.get(slot)
+    if entry is None or attribute is None:
+        return ()
+    subjects: tuple[str, ...] = getattr(entry, attribute)
+    return subjects
 
 
 def _education_start_date(profile: UserProfile) -> ProfileFieldValue | None:
@@ -357,6 +394,7 @@ _RESOLVERS: dict[ApplicationFieldSlot, _SlotResolver] = {
     ApplicationFieldSlot.SCHOOL: _school,
     ApplicationFieldSlot.DEGREE: _degree,
     ApplicationFieldSlot.FIELD_OF_STUDY: _field_of_study,
+    ApplicationFieldSlot.MINOR: _minor,
     ApplicationFieldSlot.EDUCATION_START_DATE: _education_start_date,
     ApplicationFieldSlot.EDUCATION_END_DATE: _education_end_date,
 }

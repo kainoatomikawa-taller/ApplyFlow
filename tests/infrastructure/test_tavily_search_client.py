@@ -1,13 +1,14 @@
-"""Tests for BraveSearchClient — the Brave implementation of the raw
+"""Tests for TavilySearchClient — the Tavily implementation of the raw
 search-API call backing AtsListingResolver.
 
 No network calls: `httpx.AsyncClient` is given a `MockTransport` that
-simulates Brave's response shape (including rate-limit/error responses),
+simulates Tavily's response shape (including rate-limit/error responses),
 so these run offline and deterministically.
 """
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import httpx
@@ -16,7 +17,7 @@ from pydantic import SecretStr
 
 from src.application.exceptions import ExternalServiceError
 from src.infrastructure.config import Settings
-from src.infrastructure.search.brave_search_client import BraveSearchClient
+from src.infrastructure.search.tavily_search_client import TavilySearchClient
 
 
 def _settings(**overrides: object) -> Settings:
@@ -28,10 +29,10 @@ def _settings(**overrides: object) -> Settings:
     return Settings(**defaults)
 
 
-def _client_with_handler(handler, **settings_overrides: object) -> BraveSearchClient:
+def _client_with_handler(handler, **settings_overrides: object) -> TavilySearchClient:
     transport = httpx.MockTransport(handler)
     http_client = httpx.AsyncClient(transport=transport)
-    return BraveSearchClient(_settings(**settings_overrides), http_client=http_client)
+    return TavilySearchClient(_settings(**settings_overrides), http_client=http_client)
 
 
 @pytest.fixture
@@ -41,33 +42,71 @@ def no_sleep(monkeypatch):
 
     mock = AsyncMock()
     monkeypatch.setattr(
-        "src.infrastructure.search.brave_search_client.asyncio.sleep", mock
+        "src.infrastructure.search.tavily_search_client.asyncio.sleep", mock
     )
     return mock
 
 
 def test_missing_api_key_fails_closed():
     with pytest.raises(ExternalServiceError, match="SEARCH_API_KEY"):
-        BraveSearchClient(_settings(search_api_key=SecretStr("")))
+        TavilySearchClient(_settings(search_api_key=SecretStr("")))
 
 
 # ---- request construction ---------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_search_many_sends_the_subscription_token_header_and_query():
+async def test_the_key_travels_as_a_bearer_token_and_never_in_the_url():
+    """ADR 0003: a credential in a URL is a credential in every log between here
+    and there. Tavily accepts a header, so it gets one."""
     captured: dict[str, Any] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured["headers"] = dict(request.headers)
-        captured["params"] = dict(request.url.params)
-        return httpx.Response(200, json={"web": {"results": []}})
+        captured["url"] = str(request.url)
+        return httpx.Response(200, json={"results": []})
 
     client = _client_with_handler(handler)
     await client.search_many("Acme Corp careers apply")
 
-    assert captured["headers"]["x-subscription-token"] == "test-search-key"
-    assert captured["params"]["q"] == "Acme Corp careers apply"
+    assert captured["headers"]["authorization"] == "Bearer test-search-key"
+    assert "test-search-key" not in captured["url"]
+
+
+@pytest.mark.asyncio
+async def test_the_query_travels_in_a_post_body_not_a_query_string():
+    """Also ADR 0003, for the other half: a search term can be a candidate's own
+    name, so it must not end up in a URL either."""
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["url"] = str(request.url)
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"results": []})
+
+    client = _client_with_handler(handler)
+    await client.search_many("Jane Doe resume")
+
+    assert captured["method"] == "POST"
+    assert captured["body"]["query"] == "Jane Doe resume"
+    assert "Jane" not in captured["url"]
+
+
+@pytest.mark.asyncio
+async def test_search_depth_stays_on_the_cheaper_basic_setting():
+    """Credits are metered and the answer this client needs — which ATS hosts a
+    company's board — is on the first page of ordinary results."""
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"results": []})
+
+    client = _client_with_handler(handler)
+    await client.search_many("acme careers")
+
+    assert captured["body"]["search_depth"] == "basic"
 
 
 @pytest.mark.asyncio
@@ -75,13 +114,13 @@ async def test_search_many_sends_the_requested_count():
     captured: dict[str, Any] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        captured["params"] = dict(request.url.params)
-        return httpx.Response(200, json={"web": {"results": []}})
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"results": []})
 
     client = _client_with_handler(handler)
     await client.search_many("acme careers", count=7)
 
-    assert captured["params"]["count"] == "7"
+    assert captured["body"]["max_results"] == 7
 
 
 # ---- schema mapping ------------------------------------------------------
@@ -93,18 +132,16 @@ async def test_search_many_maps_every_result_in_ranking_order():
         return httpx.Response(
             200,
             json={
-                "web": {
-                    "results": [
-                        {
-                            "url": "https://acme.example.com",
-                            "description": "Acme's homepage.",
-                        },
-                        {
-                            "url": "https://boards.greenhouse.io/acme",
-                            "description": "Acme's careers board.",
-                        },
-                    ]
-                }
+                "results": [
+                    {
+                        "url": "https://acme.example.com",
+                        "content": "Acme's homepage.",
+                    },
+                    {
+                        "url": "https://boards.greenhouse.io/acme",
+                        "content": "Acme's careers board.",
+                    },
+                ]
             },
         )
 
@@ -124,16 +161,14 @@ async def test_search_many_skips_results_missing_url_or_description():
         return httpx.Response(
             200,
             json={
-                "web": {
-                    "results": [
-                        {"url": "https://acme.example.com"},
-                        {"description": "no url here"},
-                        {
-                            "url": "https://boards.greenhouse.io/acme",
-                            "description": "Acme's careers board.",
-                        },
-                    ]
-                }
+                "results": [
+                    {"url": "https://acme.example.com"},
+                    {"content": "no url here"},
+                    {
+                        "url": "https://boards.greenhouse.io/acme",
+                        "content": "Acme's careers board.",
+                    },
+                ]
             },
         )
 
@@ -145,9 +180,9 @@ async def test_search_many_skips_results_missing_url_or_description():
 
 
 @pytest.mark.asyncio
-async def test_search_many_returns_empty_list_when_brave_has_no_results():
+async def test_search_many_returns_empty_list_when_the_provider_has_no_results():
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"web": {"results": []}})
+        return httpx.Response(200, json={"results": []})
 
     client = _client_with_handler(handler)
     results = await client.search_many("a company that does not exist")
@@ -156,7 +191,7 @@ async def test_search_many_returns_empty_list_when_brave_has_no_results():
 
 
 @pytest.mark.asyncio
-async def test_search_many_handles_a_missing_web_key_without_crashing():
+async def test_search_many_handles_a_missing_results_key_without_crashing():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={})
 
@@ -177,7 +212,7 @@ async def test_retries_on_429_and_then_succeeds(no_sleep):
         calls["count"] += 1
         if calls["count"] == 1:
             return httpx.Response(429, text="rate limited")
-        return httpx.Response(200, json={"web": {"results": []}})
+        return httpx.Response(200, json={"results": []})
 
     client = _client_with_handler(handler)
     results = await client.search_many("acme")
@@ -238,7 +273,7 @@ async def test_connection_errors_are_retried(no_sleep):
         calls["count"] += 1
         if calls["count"] == 1:
             raise httpx.ConnectError("boom", request=request)
-        return httpx.Response(200, json={"web": {"results": []}})
+        return httpx.Response(200, json={"results": []})
 
     client = _client_with_handler(handler)
     await client.search_many("acme")

@@ -1041,6 +1041,48 @@ button.secondary {
   margin: 0;
 }
 
+/* Majors and minors: a bordered group so several rows read as one field rather
+   than as several unrelated inputs in the surrounding grid. */
+.profile-subject-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 6px;
+  padding: 0.5rem 0.6rem 0.6rem;
+  margin: 0;
+  min-width: 0;
+}
+
+.profile-subject-list legend {
+  font-size: 0.9rem;
+  padding: 0 0.25rem;
+}
+
+.profile-subject-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* min-width:0 so a flex input shrinks instead of overflowing the group. */
+.profile-subject-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.profile-subject-remove {
+  flex-shrink: 0;
+  line-height: 1;
+  padding: 0.25rem 0.5rem;
+}
+
+.profile-subject-add {
+  align-self: flex-start;
+  font-size: 0.85rem;
+  padding: 0.2rem 0.5rem;
+}
+
 .profile-section-actions {
   display: flex;
   align-items: center;

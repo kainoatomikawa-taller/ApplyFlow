@@ -53,6 +53,32 @@ TASK_TYPE_TIERS: dict[LlmTaskType, LlmModelTier] = {
 }
 
 
+#: How much output each task type needs room for, in tokens. Alongside the tier
+#: map because it is the same kind of decision — a property of the task, decided
+#: once, rather than something each call site guesses.
+#:
+#: These exist because one global ceiling cannot fit every task. A two-page
+#: résumé parsed into JSON runs to several thousand tokens, while a fit rationale
+#: is a paragraph; a limit generous enough for the first is waste on the second,
+#: and a limit sized for the second truncates the first. Truncation is the
+#: expensive failure: a cut-off JSON object is not partially useful, it is
+#: unparseable, and the whole call is billed and wasted.
+#:
+#: Ceilings, not targets — a task that finishes sooner costs only what it used.
+TASK_TYPE_MAX_TOKENS: dict[LlmTaskType, int] = {
+    # A job description's requirements: bounded, but lists can be long.
+    LlmTaskType.EXTRACTION: 4096,
+    # A rationale or a short list of questions.
+    LlmTaskType.MATCHING: 2048,
+    # A whole résumé restated as JSON — every job, every bullet, every skill.
+    # The largest structured output in the app.
+    LlmTaskType.PARSING: 8192,
+    # A full tailored résumé.
+    LlmTaskType.RESUME_WRITING: 8192,
+    LlmTaskType.COVER_LETTER_WRITING: 4096,
+}
+
+
 class LlmClientPort(ABC):
     """Sends a prompt to an LLM and returns its text completion."""
 

@@ -67,11 +67,15 @@ from src.domain.entities.user_profile import UserProfile
 from src.domain.services.application_boundary_detector import is_signature_field
 from src.domain.services.ats_field_mapper import recognize_application_field
 from src.domain.services.human_only_field_policy import HumanOnlyFieldPolicy
-from src.domain.services.profile_field_values import resolve_profile_field
+from src.domain.services.profile_field_values import (
+    resolve_profile_field,
+    subject_candidates,
+)
 from src.domain.services.sensitive_field_policy import (
     SensitiveFieldRefusal,
     decide_sensitive_field,
 )
+from src.domain.services.subject_option_matcher import match_subject_options
 from src.domain.value_objects.application_field_slot import (
     ApplicationFieldSlot,
     FieldSensitivity,
@@ -87,6 +91,11 @@ from src.domain.value_objects.generated_document_kind import GeneratedDocumentKi
 #: because a value either names one of its options exactly or is refused by
 #: the harness (see `RejectedFieldValueError`) — country and state dropdowns
 #: are filled this way routinely and safely.
+#:
+#: The field-of-study slots are the one exception to leaving option matching to
+#: the harness: their dropdowns list majors more coarsely than people study them,
+#: so `_plan_value_field` reconciles the profile against the offered options
+#: first. See `match_subject_options` for why that belongs to the domain.
 #:
 #: `CHECKBOX` and `RADIO` are excluded on purpose. Writing a profile string
 #: into a tick box means asking the harness to interpret "Austin, TX" as
@@ -214,6 +223,14 @@ class SurfaceReason(StrEnum):
     #: The field is where the candidate signs. Never filled, by anything,
     #: under any circumstances — see `is_signature_field`.
     REQUIRES_CANDIDATE_SIGNATURE = "requires_candidate_signature"
+    #: A dropdown whose listed choices include neither the candidate's own
+    #: answer nor any category it honestly falls under — a "Major" list with no
+    #: entry for their field and no broader heading either (see
+    #: `match_subject_options`). Distinct from `NO_PROFILE_DATA`, because the
+    #: profile does answer the question and it is the form's list that cannot
+    #: express it, and from the harness's own `NOT_ACCEPTED`, because this is
+    #: known before anything is written rather than discovered by trying.
+    NO_MATCHING_OPTION = "no_matching_option"
 
 
 #: The domain's refusal reasons, translated into the review vocabulary.
@@ -442,12 +459,51 @@ class AtsFormFieldPlanner:
         if field.kind not in _TEXT_VALUE_KINDS:
             return self._surface(field, SurfaceReason.UNSUPPORTED_FIELD_KIND, slot=slot)
 
+        value, is_derived = resolved.text, resolved.is_derived
+
+        # A field-of-study dropdown rarely lists majors at the grain people study
+        # them, and the joined text of a double major matches no option at all. So
+        # when the form enumerates its choices, answer with one of them: the exact
+        # subject if it is offered, and only otherwise a broader category. The
+        # domain owns that judgement (see `match_subject_options`); this only
+        # applies its verdict.
+        #
+        # Confined to forms that declare options. A text box keeps the verbatim
+        # value — there is nothing to reconcile against, and narrowing "Applied
+        # Mathematics" to "Mathematics" where the form would have accepted the
+        # real answer would be a loss of accuracy for nothing.
+        if field.options:
+            subjects = subject_candidates(profile, slot)
+            if subjects:
+                chosen = match_subject_options(
+                    subjects, [option.label or option.value for option in field.options]
+                )
+                if chosen is None:
+                    # Nothing on the list fits. Surfaced now rather than written
+                    # and refused by the harness: the outcome for the candidate is
+                    # the same field to answer either way, and attempting a value
+                    # already known not to be on the list would report it as the
+                    # form rejecting us rather than as a question we cannot answer.
+                    return self._surface(
+                        field, SurfaceReason.NO_MATCHING_OPTION, slot=slot
+                    )
+                # Flagged for review when the answer is not simply the
+                # candidate's own single subject written back:
+                #
+                # - `not chosen.is_exact` — a broader or re-spelled category.
+                # - `len(subjects) > 1` — a single-choice dropdown cannot express
+                #   a double major, so one subject was picked and the other is
+                #   unrepresented. The chosen one is true, which is why it is
+                #   filled; it is not the whole truth, which is why it is flagged.
+                value = chosen.option
+                is_derived = is_derived or not chosen.is_exact or len(subjects) > 1
+
         return PlannedField(
             field=field,
             disposition=FieldDisposition.FILL,
             slot=slot,
-            value=resolved.text,
-            is_derived=resolved.is_derived,
+            value=value,
+            is_derived=is_derived,
         )
 
     @staticmethod

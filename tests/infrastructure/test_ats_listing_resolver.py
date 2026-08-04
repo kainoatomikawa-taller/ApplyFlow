@@ -2,7 +2,7 @@
 orchestrating the board cache, quota, search client, and per-provider ATS
 board clients.
 
-`ResolvedCompanyBoardRepository`, `DailySearchQuota`, `BraveSearchClient`,
+`ResolvedCompanyBoardRepository`, `DailySearchQuota`, `TavilySearchClient`,
 and `AtsBoardClientPort` are all replaced with in-memory fakes, so these
 run offline and prove: cache-first board lookup, quota enforcement,
 board-discovery via a domain-restricted search, per-listing (uncached)
@@ -23,7 +23,7 @@ from src.domain.repositories.resolved_company_board_repository import (
 from src.domain.services.text_normalization import normalize_text
 from src.domain.value_objects.ats_provider import AtsProvider
 from src.infrastructure.search.ats_listing_resolver import AtsListingResolver
-from src.infrastructure.search.brave_search_client import BraveSearchResult
+from src.infrastructure.search.tavily_search_client import WebSearchResult
 
 
 class FakeBoardRepository(ResolvedCompanyBoardRepository):
@@ -55,14 +55,14 @@ class FakeQuota:
 class FakeSearchClient:
     def __init__(
         self,
-        results: list[BraveSearchResult] | None = None,
+        results: list[WebSearchResult] | None = None,
         error: Exception | None = None,
     ) -> None:
         self._results = results or []
         self._error = error
         self.queries: list[str] = []
 
-    async def search_many(self, query: str, count: int = 5) -> list[BraveSearchResult]:
+    async def search_many(self, query: str, count: int = 5) -> list[WebSearchResult]:
         self.queries.append(query)
         if self._error is not None:
             raise self._error
@@ -130,10 +130,10 @@ async def test_board_cache_miss_locates_board_via_search_then_queries_it():
     quota = FakeQuota(allowed=True)
     search_client = FakeSearchClient(
         results=[
-            BraveSearchResult(
+            WebSearchResult(
                 url="https://acme.example.com", description="Acme's homepage."
             ),
-            BraveSearchResult(
+            WebSearchResult(
                 url="https://boards.greenhouse.io/acme",
                 description="Acme's careers board.",
             ),
@@ -165,7 +165,7 @@ async def test_discovered_board_is_saved_to_the_cache():
     quota = FakeQuota(allowed=True)
     search_client = FakeSearchClient(
         results=[
-            BraveSearchResult(
+            WebSearchResult(
                 url="https://jobs.lever.co/acme", description="Acme's board."
             )
         ]
@@ -192,10 +192,10 @@ async def test_linkedin_and_indeed_results_are_never_recognized_as_a_board():
     quota = FakeQuota(allowed=True)
     search_client = FakeSearchClient(
         results=[
-            BraveSearchResult(
+            WebSearchResult(
                 url="https://www.linkedin.com/jobs/view/1", description="LinkedIn."
             ),
-            BraveSearchResult(
+            WebSearchResult(
                 url="https://www.indeed.com/viewjob?jk=1", description="Indeed."
             ),
         ]
@@ -227,7 +227,7 @@ async def test_no_recognized_board_in_search_results_returns_none():
     quota = FakeQuota(allowed=True)
     search_client = FakeSearchClient(
         results=[
-            BraveSearchResult(
+            WebSearchResult(
                 url="https://acme.example.com", description="Acme's homepage."
             )
         ]

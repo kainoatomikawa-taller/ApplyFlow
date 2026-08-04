@@ -4,43 +4,37 @@ posting API (`api.ashbyhq.com/posting-api/job-board/{token}`).
 Unauthenticated. `descriptionPlain` is preferred over the HTML
 `descriptionHtml` field when Ashby provides it, so no HTML stripping is
 needed for the common case.
+
+Shape: `{"jobs": [{"title", "jobUrl", "descriptionPlain", "location",
+"isRemote", "publishedAt"}]}`. Ashby is the only one of the three that states
+remoteness as a boolean. Only `list_jobs` is implemented here — `find_job` comes
+from `BoardClientBase` and reads this same mapping.
 """
 
 from __future__ import annotations
 
 import logging
 
-import httpx
-
-from src.application.ports.ats_board_client_port import AtsBoardClientPort
-from src.application.ports.listing_resolver_port import ResolvedListingFields
-from src.domain.services.job_title_matching import titles_match
+from src.application.ports.ats_board_client_port import BoardJobPosting
 from src.domain.value_objects.ats_provider import AtsProvider
+from src.infrastructure.ats_boards.board_client_base import (
+    BoardClientBase,
+    build_posting,
+)
 from src.infrastructure.ats_boards.board_http import get_json_or_none
 from src.infrastructure.ats_boards.html_to_text import html_to_text
-from src.infrastructure.config import Settings
 
 logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://api.ashbyhq.com/posting-api/job-board/{token}"
 
 
-class AshbyBoardClient(AtsBoardClientPort):
-    def __init__(
-        self, settings: Settings, http_client: httpx.AsyncClient | None = None
-    ) -> None:
-        self._max_retries = settings.ats_board_max_retries
-        self._retry_base_delay = settings.ats_board_retry_base_delay_seconds
-        self._retry_max_delay = settings.ats_board_retry_max_delay_seconds
-        self._client = http_client or httpx.AsyncClient(timeout=30.0)
-
+class AshbyBoardClient(BoardClientBase):
     @property
     def provider(self) -> AtsProvider:
         return AtsProvider.ASHBY
 
-    async def find_job(
-        self, *, board_token: str, title: str
-    ) -> ResolvedListingFields | None:
+    async def list_jobs(self, *, board_token: str) -> tuple[BoardJobPosting, ...]:
         data = await get_json_or_none(
             self._client,
             _BASE_URL.format(token=board_token),
@@ -50,30 +44,27 @@ class AshbyBoardClient(AtsBoardClientPort):
             retry_max_delay=self._retry_max_delay,
         )
         if not isinstance(data, dict):
-            return None
+            return ()
 
         jobs = data.get("jobs")
         if not isinstance(jobs, list):
-            return None
+            return ()
 
+        postings: list[BoardJobPosting] = []
         for job in jobs:
             if not isinstance(job, dict):
                 continue
-            job_title = job.get("title")
-            if not isinstance(job_title, str) or not titles_match(job_title, title):
-                continue
-
-            apply_url = job.get("jobUrl") or job.get("applyUrl")
-            if not isinstance(apply_url, str) or not apply_url.strip():
-                continue
-
-            description = _extract_description(job)
-            if not description:
-                continue
-
-            return ResolvedListingFields(apply_url=apply_url, description=description)
-
-        return None
+            posting = build_posting(
+                title=job.get("title"),
+                apply_url=job.get("jobUrl") or job.get("applyUrl"),
+                description=_extract_description(job),
+                location=job.get("location"),
+                is_remote=job.get("isRemote"),
+                posted_at=job.get("publishedAt") or job.get("updatedAt"),
+            )
+            if posting is not None:
+                postings.append(posting)
+        return tuple(postings)
 
 
 def _extract_description(job: dict[str, object]) -> str:

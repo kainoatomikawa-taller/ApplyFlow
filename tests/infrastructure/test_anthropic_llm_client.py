@@ -456,3 +456,93 @@ async def test_sdk_internal_retries_are_disabled_in_favor_of_our_own():
     client = AnthropicLlmClient(_settings())
 
     assert client._client.max_retries == 0
+
+
+# ---- Per-task output budget ---------------------------------------------------
+#
+# One global ceiling truncated résumé parses into unparseable JSON: a real résumé
+# needs several thousand output tokens and the default was 1024. Each task now
+# carries its own budget, and a truncated response is refused rather than handed
+# on as if it were complete.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("task_type", "expected"),
+    [
+        (LlmTaskType.PARSING, 8192),
+        (LlmTaskType.RESUME_WRITING, 8192),
+        (LlmTaskType.EXTRACTION, 4096),
+        (LlmTaskType.COVER_LETTER_WRITING, 4096),
+        (LlmTaskType.MATCHING, 2048),
+    ],
+)
+async def test_each_task_type_gets_its_own_output_budget(task_type, expected):
+    client = AnthropicLlmClient(_settings())
+    mock = _mock_create(client)
+
+    await client.complete("hi", task_type=task_type)
+
+    assert mock.await_args.kwargs["max_tokens"] == expected
+
+
+@pytest.mark.asyncio
+async def test_a_parse_is_not_clamped_to_the_configured_default():
+    """The regression this fixes. `anthropic_max_tokens` defaults to 1024, which
+    is a fraction of what a résumé parse needs."""
+    client = AnthropicLlmClient(_settings(anthropic_max_tokens=1024))
+    mock = _mock_create(client)
+
+    await client.complete("resume text", task_type=LlmTaskType.PARSING)
+
+    assert mock.await_args.kwargs["max_tokens"] == 8192
+
+
+@pytest.mark.asyncio
+async def test_the_configured_value_acts_as_a_floor_and_can_raise_every_task():
+    """Kept meaningful rather than ignored: raising the setting still raises
+    tasks whose own budget is smaller."""
+    client = AnthropicLlmClient(_settings(anthropic_max_tokens=16000))
+    mock = _mock_create(client)
+
+    await client.complete("hi", task_type=LlmTaskType.MATCHING)
+
+    assert mock.await_args.kwargs["max_tokens"] == 16000
+
+
+@pytest.mark.asyncio
+async def test_a_truncated_response_is_refused_rather_than_returned():
+    """Returning it produced the original bug's symptom: the caller reported
+    "invalid JSON" for what was really a response cut off mid-string."""
+    client = AnthropicLlmClient(_settings())
+    truncated = _fake_response('{"full_name": "Jane Doe", "email": "jane@exa')
+    truncated.stop_reason = "max_tokens"
+    client._client.messages.create = AsyncMock(return_value=truncated)  # type: ignore[method-assign]
+
+    with pytest.raises(ExternalServiceError) as caught:
+        await client.complete("resume text", task_type=LlmTaskType.PARSING)
+
+    message = str(caught.value)
+    assert "truncated" in message
+    assert "8192" in message
+    # Names the task so the budget to raise is obvious from the error alone.
+    assert "parsing" in message
+
+
+@pytest.mark.asyncio
+async def test_a_complete_response_is_returned_normally():
+    """The guard keys off `stop_reason`, not off the content, so an ordinary
+    answer is unaffected."""
+    client = AnthropicLlmClient(_settings())
+    _mock_create(client, text="all done")
+
+    assert await client.complete("hi", task_type=LlmTaskType.PARSING) == "all done"
+
+
+def test_every_task_type_has_a_budget():
+    """Asserted over the enum so adding a task type forces the decision rather
+    than failing with a KeyError on its first call."""
+    from src.application.ports.llm_client_port import TASK_TYPE_MAX_TOKENS
+
+    for task_type in LlmTaskType:
+        assert TASK_TYPE_MAX_TOKENS[task_type] > 0

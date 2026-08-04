@@ -106,7 +106,11 @@ _REVIEWED_PLAINTEXT: dict[str, str] = {
     "work_history_entries.description": "CV fact — see the note above.",
     "education_entries.institution_name": "CV fact — see the note above.",
     "education_entries.degree": "CV fact — see the note above.",
-    "education_entries.field_of_study": "CV fact — see the note above.",
+    # Replaced `field_of_study` in migration 0025. Same category and the same
+    # decision — a JSON array of subject names is no more or less sensitive than
+    # the single string it supersedes.
+    "education_entries.majors": "CV fact — see the note above.",
+    "education_entries.minors": "CV fact — see the note above.",
     "education_entries.description": "CV fact — see the note above.",
     "skills.name": "CV fact — see the note above.",
     "user_profiles.headline": (

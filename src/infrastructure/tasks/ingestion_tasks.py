@@ -35,8 +35,8 @@ from src.infrastructure.persistence.resolved_company_board_repository_impl impor
     SqlAlchemyResolvedCompanyBoardRepository,
 )
 from src.infrastructure.search.ats_listing_resolver import AtsListingResolver
-from src.infrastructure.search.brave_search_client import BraveSearchClient
 from src.infrastructure.search.daily_search_quota import DailySearchQuota
+from src.infrastructure.search.tavily_search_client import TavilySearchClient
 from src.infrastructure.services.uuid_id_generator import UuidIdGenerator
 from src.infrastructure.tasks.celery_app import celery_app
 
@@ -75,7 +75,7 @@ def _build_listing_resolver(
     return AtsListingResolver(
         board_cache=SqlAlchemyResolvedCompanyBoardRepository(session),
         quota=DailySearchQuota(redis_client, settings.search_api_daily_quota),
-        search_client=BraveSearchClient(settings),
+        search_client=TavilySearchClient(settings),
         board_clients=board_clients,
         result_count=settings.search_api_board_locate_result_count,
     )

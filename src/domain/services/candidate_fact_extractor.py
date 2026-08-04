@@ -107,8 +107,13 @@ def _skill_text(skill: Skill) -> str:
 
 def _education_text(entry: EducationEntry) -> str:
     text = f"Studied {entry.degree}"
-    if entry.field_of_study:
-        text += f" in {entry.field_of_study}"
+    if entry.majors:
+        text += f" with a major in {' and '.join(entry.majors)}"
+    if entry.minors:
+        # Stated as a minor explicitly. This text is the ground truth a tailored
+        # resume is checked against, so a minor recorded here as though it were a
+        # major would license the model to claim the stronger credential.
+        text += f" and a minor in {' and '.join(entry.minors)}"
     text += f" at {entry.institution_name}"
     if entry.end_date is not None:
         text += f" (completed {entry.end_date.isoformat()})"
@@ -222,8 +227,7 @@ class CandidateFactExtractor:
                 )
             if entry.description:
                 add(
-                    f"{entry.job_title} at {entry.company_name}: "
-                    f"{entry.description}",
+                    f"{entry.job_title} at {entry.company_name}: {entry.description}",
                     entry.source,
                 )
 

@@ -185,7 +185,11 @@ class SqlAlchemyProfileRepository(ProfileRepository):
             id=entry.id,
             institution_name=entry.institution_name,
             degree=entry.degree,
-            field_of_study=entry.field_of_study,
+            # Stored as lists, not the joined `field_of_study` property: that
+            # rendering is for form boxes, and persisting it would make the join
+            # format a migration concern.
+            majors=list(entry.majors),
+            minors=list(entry.minors),
             start_date=entry.start_date,
             end_date=entry.end_date,
             description=entry.description,
@@ -371,7 +375,8 @@ class SqlAlchemyProfileRepository(ProfileRepository):
                     id=m.id,
                     institution_name=m.institution_name,
                     degree=m.degree,
-                    field_of_study=m.field_of_study,
+                    majors=tuple(m.majors or ()),
+                    minors=tuple(m.minors or ()),
                     start_date=m.start_date,
                     end_date=m.end_date,
                     description=m.description,
