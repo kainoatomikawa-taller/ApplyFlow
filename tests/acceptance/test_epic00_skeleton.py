@@ -122,11 +122,15 @@ async def schema_ready() -> None:
         pytest.skip(f"No reachable database at DATABASE_URL: {exc}")
 
 
-def _mint_bearer_token(secret: str) -> str:
+def _mint_bearer_token(secret: str, email: str) -> str:
+    # The email is a parameter because `GET /api/applications` reads the
+    # candidate from this claim rather than from a query string (Epic 07 — no
+    # PII in URLs). Passing the run's unique address in keeps each run's rows
+    # isolated, which is what the random address used to do.
     payload = {
         "sub": f"epic00-acceptance-{uuid.uuid4()}",
         "aud": "authenticated",
-        "email": "epic00-acceptance@example.com",
+        "email": email,
     }
     return jwt.encode(payload, secret, algorithm="HS256")
 
@@ -151,9 +155,9 @@ async def test_epic00_definition_of_done(schema_ready: None, caplog) -> None:
     if not settings.anthropic_api_key.get_secret_value():
         pytest.skip("ANTHROPIC_API_KEY is not configured")
 
-    token = _mint_bearer_token(jwt_secret)
-    http_client = TestClient(create_app())
     candidate_email = f"epic00-{uuid.uuid4()}@example.com"
+    token = _mint_bearer_token(jwt_secret, candidate_email)
+    http_client = TestClient(create_app())
     application_id: str | None = None
 
     try:
@@ -175,19 +179,18 @@ async def test_epic00_definition_of_done(schema_ready: None, caplog) -> None:
         application_id = create_response.json()["id"]
 
         # ---- 1. authenticate + read from the DB ----------------------------
+        # No query string: the candidate is identified by the token's `email`
+        # claim (Epic 07 — no PII in URLs).
         list_response = http_client.get(
             "/api/applications",
             headers={"Authorization": f"Bearer {token}"},
-            params={"candidate_email": candidate_email},
         )
         assert list_response.status_code == 200
         assert any(a["id"] == application_id for a in list_response.json())
 
         # The same route must still reject an unauthenticated caller —
         # proving this flow exercises the real auth gate, not a bypass.
-        unauthenticated = http_client.get(
-            "/api/applications", params={"candidate_email": candidate_email}
-        )
+        unauthenticated = http_client.get("/api/applications")
         assert unauthenticated.status_code == 401
 
         # ---- 2/3. routed, cached LLM call with cost logging -----------------

@@ -13,10 +13,18 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.infrastructure.observability import install_pii_redaction  # noqa: E402
 from src.infrastructure.security.sensitive_access import (  # noqa: E402
     SensitiveDataAccess,
     sensitive_data_access,
 )
+
+# The suite runs under the same redaction the deployed processes do (Epic 07).
+# Without this, a test that asserts on a log line would be asserting against
+# behaviour no real process has — and `caplog`-based tests are how the log
+# sites in this codebase are covered. Only the record factory is installed,
+# not a handler: pytest's own capture owns the root handler.
+install_pii_redaction()
 
 
 @pytest.fixture

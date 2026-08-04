@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from src.application.dtos.auth_dtos import AuthenticatedUserDTO
 from src.application.dtos.job_application_dtos import (
     AnalyzeApplicationInput,
     CreateJobApplicationInput,
@@ -106,8 +107,35 @@ async def submit_application(
 
 @router.get("", response_model=list[ApplicationResponse])
 async def list_applications(
-    candidate_email: str,
+    user: AuthenticatedUserDTO = Depends(get_current_user),
     use_case: ListCandidateApplications = Depends(get_list_use_case),
 ) -> list[ApplicationResponse]:
-    outputs = await use_case.execute(candidate_email)
+    """List the authenticated candidate's applications.
+
+    The email comes from the verified bearer token, not from a
+    `?candidate_email=` query parameter as it once did. Two reasons, and the
+    second is the one that forced the change:
+
+    * A query string is the least private part of a request. It lands in
+      access logs, proxy and CDN logs, browser history, and `Referer` headers
+      sent to third parties — none of which this application controls, and
+      all of which sit outside the encryption-at-rest boundary that every
+      other copy of this address lives behind.
+    * It was never really an input. This is a single-user application (see
+      `AuthenticatedUserDTO`), so the only email the caller could legitimately
+      pass is the one already on their token — the parameter was a way to ask
+      for someone else's applications, answered by whatever the repository
+      happened to hold.
+
+    A token with no `email` claim gets a 400 rather than an empty list, so a
+    misconfigured auth provider is a loud failure instead of a page that
+    silently shows nothing.
+    """
+    if not user.email:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "The authenticated token carries no email claim, so there is no "
+            "candidate to list applications for.",
+        )
+    outputs = await use_case.execute(user.email)
     return [ApplicationResponse(**o.__dict__) for o in outputs]

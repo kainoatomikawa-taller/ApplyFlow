@@ -15,11 +15,8 @@ import type {
   RankedJob,
 } from './types';
 
-const DEMO_EMAIL = 'demo@example.com';
-
 export function App() {
   const [applications, setApplications] = useState<JobApplication[]>([]);
-  const [email, setEmail] = useState(DEMO_EMAIL);
   const [error, setError] = useState<string | null>(null);
 
   const [matchedJobs, setMatchedJobs] = useState<RankedJob[]>([]);
@@ -32,10 +29,14 @@ export function App() {
   // Bumped when the token changes, so the loaders below re-run against it.
   const [authGeneration, setAuthGeneration] = useState(0);
 
-  const load = useCallback(async (candidateEmail: string) => {
+  // Takes no email: the backend identifies the candidate from the bearer
+  // token. There is nothing for the UI to choose here — one account, one set
+  // of applications — and asking would have meant putting the address in the
+  // request URL, which is what this stopped doing.
+  const load = useCallback(async () => {
     try {
       setError(null);
-      const data = await applyFlowApi.listApplications(candidateEmail);
+      const data = await applyFlowApi.listApplications();
       setApplications(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
@@ -54,8 +55,8 @@ export function App() {
 
   useEffect(() => {
     if (!hasAccessToken()) return;
-    void load(email);
-  }, [email, load, authGeneration]);
+    void load();
+  }, [load, authGeneration]);
 
   useEffect(() => {
     if (!hasAccessToken()) return;
@@ -84,8 +85,7 @@ export function App() {
   const handleCreate = async (input: CreateApplicationInput) => {
     try {
       await applyFlowApi.createApplication(input);
-      await load(input.candidate_email);
-      setEmail(input.candidate_email);
+      await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
     }
@@ -94,7 +94,7 @@ export function App() {
   const handleSubmit = async (id: string) => {
     try {
       await applyFlowApi.submitApplication(id);
-      await load(email);
+      await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
     }
@@ -118,11 +118,6 @@ export function App() {
         <TailoringReview job={tailoringJob} onClose={() => setTailoringJobId(null)} />
       ) : (
         <>
-          <div className="field">
-            <label>Viewing applications for</label>
-            <input value={email} onChange={(e) => setEmail(e.target.value)} />
-          </div>
-
           {error && <p className="error">{error}</p>}
 
           <ApplicationForm onCreate={handleCreate} />

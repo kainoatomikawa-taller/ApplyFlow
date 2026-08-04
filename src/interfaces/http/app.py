@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.infrastructure.observability import configure_logging, harden_existing_handlers
 from src.infrastructure.persistence.database import dispose_engine
 from src.interfaces.http.controllers import (
     application_autofill_controller,
@@ -37,6 +38,12 @@ from src.interfaces.http.dependencies import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # uvicorn installs its own handlers (including `uvicorn.access`, which does
+    # not propagate to root) when the server starts — after `create_app` ran.
+    # Startup is the first hook that fires later than that, so redaction gets
+    # re-applied here to cover them. The record factory installed in
+    # `create_app` already covers the messages; this covers the formatters.
+    harden_existing_handlers()
     yield
     # Close the portal automation first: a parked review holds a browser
     # context, and a browser process outliving the API is what takes a host
@@ -53,6 +60,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
+    # First thing in the composition root, before any router import side effect
+    # or request can log: installs the PII scrubber process-wide (Epic 07 —
+    # see src/infrastructure/observability/pii_redaction.py). `force_handler`
+    # is False because uvicorn owns stdout here; `configure_logging` still
+    # retrofits redaction onto uvicorn's own handlers, including the
+    # `uvicorn.access` logger, which does not propagate to root.
+    configure_logging(force_handler=False)
+
     app = FastAPI(
         title="ApplyFlow API",
         description="AI-assisted job application tracking & tailoring.",

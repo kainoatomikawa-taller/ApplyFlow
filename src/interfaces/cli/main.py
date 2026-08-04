@@ -21,6 +21,7 @@ from src.application.use_cases.ingest_aggregator_jobs import IngestAggregatorJob
 from src.infrastructure.config import get_settings
 from src.infrastructure.job_aggregators.adzuna_client import AdzunaJobAggregatorClient
 from src.infrastructure.llm.anthropic_client import AnthropicLlmClient
+from src.infrastructure.observability import configure_logging
 from src.infrastructure.persistence.database import async_session_factory
 from src.infrastructure.persistence.job_application_repository_impl import (
     SqlAlchemyJobApplicationRepository,
@@ -89,6 +90,11 @@ async def _llm_ping(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    # Before anything can log. The CLI owns its stdout, so unlike the API this
+    # entry point does want a handler installed (Epic 07 — see
+    # src/infrastructure/observability/pii_redaction.py).
+    configure_logging()
+
     parser = argparse.ArgumentParser(prog="applyflow")
     sub = parser.add_subparsers(dest="command", required=True)
 

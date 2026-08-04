@@ -73,10 +73,17 @@ export const applyFlowApi = {
     return request<HealthStatus>('/health');
   },
 
-  listApplications(email: string): Promise<JobApplication[]> {
-    return request<JobApplication[]>(
-      `/api/applications?candidate_email=${encodeURIComponent(email)}`,
-    );
+  /**
+   * The signed-in candidate's applications.
+   *
+   * Takes no email: the backend reads it from the bearer token. It used to be
+   * sent as `?candidate_email=`, which put the address into access logs,
+   * browser history, and any `Referer` a third party received — so the
+   * parameter is gone rather than relocated. This is a single-user app, so
+   * the token's identity is the only one that was ever correct here.
+   */
+  listApplications(): Promise<JobApplication[]> {
+    return request<JobApplication[]>('/api/applications');
   },
 
   createApplication(input: CreateApplicationInput): Promise<JobApplication> {

@@ -29,7 +29,7 @@ def _record(guarded: GuardedContent, kind=GeneratedDocumentKind.TAILORED_RESUME)
     )
 
 
-def test_a_violation_is_logged_at_warning_with_terms_line_and_identifiers(caplog):
+def test_a_violation_is_logged_at_warning_with_its_terms_and_identifiers(caplog):
     guarded = GuardedContent(
         violations=(
             ProvenanceViolation(
@@ -48,7 +48,27 @@ def test_a_violation_is_logged_at_warning_with_terms_line_and_identifiers(caplog
     assert "user-1" in logged
     assert "job-1" in logged
     assert "staff,initech" in logged
-    assert "Staff Engineer at Initech (2016-2019)" in logged
+
+
+def test_the_stripped_line_itself_is_not_logged(caplog):
+    """A line is stripped because its *claim* is unsupported, which says
+    nothing about the other words in it — a real name in front of an invented
+    achievement is still a real name (Epic 07 — no PII in logs). The
+    actionable part, `unsupported_terms`, is logged in full instead."""
+    guarded = GuardedContent(
+        violations=(
+            ProvenanceViolation(
+                line="Sarah Okonkwo led a team of 40 at Initech",
+                unsupported_terms=("led a team of 40",),
+            ),
+        )
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        _record(guarded)
+
+    assert "Sarah Okonkwo" not in caplog.text
+    assert "led a team of 40" in caplog.text
 
 
 def test_every_violation_gets_its_own_line_plus_a_summary(caplog):
@@ -111,9 +131,9 @@ def test_a_clean_run_still_records_its_provenance_at_debug(caplog):
     assert "parsed_resume" in caplog.text
 
 
-def test_content_that_passed_the_guard_is_never_logged_as_a_violation(caplog):
-    """Surviving text is the candidate's own data; only what was removed —
-    model invention by definition — is written out."""
+def test_content_that_passed_the_guard_is_never_logged(caplog):
+    """Surviving text is the candidate's own data. Neither it nor the stripped
+    line is written out — only the terms that failed."""
     guarded = GuardedContent(
         lines=(SupportedLine(text="Email: dana@example.com"),),
         violations=(
@@ -127,4 +147,5 @@ def test_content_that_passed_the_guard_is_never_logged_as_a_violation(caplog):
         _record(guarded)
 
     assert "dana@example.com" not in caplog.text
-    assert "Fabricated line" in caplog.text
+    assert "Fabricated line" not in caplog.text
+    assert "fabricated" in caplog.text

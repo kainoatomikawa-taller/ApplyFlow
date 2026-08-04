@@ -14,12 +14,23 @@ Log levels carry meaning: a stripped line is a WARNING because generation
 misbehaved even though the request succeeded, while a clean run logs at
 DEBUG so a healthy pipeline stays quiet.
 
-On what gets written: the stripped line is logged verbatim. It reads like
-candidate data but is the opposite — by definition nothing in the
-provenance-backed record supports it, so it is model invention rather than
-anything the candidate provided, and withholding it would leave the one
-class of bug this pipeline exists to prevent undebuggable. Content that
-*is* the candidate's (the surviving document) is never logged.
+On what gets written: the unsupported *terms* are logged, and the stripped
+line is not. This reverses an earlier decision here, which logged the line
+verbatim on the reasoning that nothing in the provenance-backed record
+supports it, so it must be model invention rather than candidate data.
+
+That reasoning does not hold, and the gap is worth stating so it is not
+re-argued: the guard strips a line because the *claim* is unsupported, which
+says nothing about the rest of the words in it. "Sarah Okonkwo led a team of
+40 at Initech" is stripped for the team of 40; the name in front of it is
+real, and logging the line published it (Epic 07 — no PII in logs).
+
+Little is lost, because the actionable signal was never the prose. This
+module's whole reason for existing is that a debugger needs "the exact terms
+that failed, not a count" — and `violation.unsupported_terms` *is* those
+terms, logged in full. The document kind, the job, and the count come with
+it. Content that is the candidate's own (the surviving document) was never
+logged and still is not.
 """
 
 from __future__ import annotations
@@ -64,13 +75,18 @@ class GenerationGuardAudit:
             user_id,
             job_posting_id,
         )
-        for violation in guarded.violations:
+        # Numbered by position in the violation list rather than by document
+        # line: `ProvenanceViolation` carries no line number, and inventing one
+        # would mean handling the stripped text here, which is the thing this
+        # is avoiding.
+        for index, violation in enumerate(guarded.violations, start=1):
             logger.warning(
-                "provenance violation in %s for user=%s job=%s: "
-                "unsupported terms %s in stripped line %r",
+                "provenance violation %d/%d in %s for user=%s job=%s: "
+                "unsupported terms %s",
+                index,
+                len(guarded.violations),
                 document_kind.value,
                 user_id,
                 job_posting_id,
                 ",".join(violation.unsupported_terms),
-                violation.line,
             )

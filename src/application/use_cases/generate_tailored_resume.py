@@ -243,8 +243,23 @@ class GenerateTailoredResume:
         *, report: AtsSafetyReport, user_id: str, job_posting_id: str
     ) -> None:
         """A finding means the formatter let something through, so it is
-        logged as a defect rather than passed over. The offending line is
-        included because the rule name alone doesn't say what to fix."""
+        logged as a defect rather than passed over.
+
+        What is *not* logged is the offending line. It used to be, on the
+        reasoning that a rule name alone doesn't say what to fix — but the line
+        is a line of the candidate's résumé, so this was writing their
+        employment history and possibly their name into every log sink the
+        deployment has (Epic 07 — no PII in logs).
+
+        The rule, its `detail` sentence, and the 1-indexed line number are
+        enough to act on without that, because every rule here is about
+        *formatting* — markdown syntax, table markup, decorative glyphs,
+        unrenderable characters — so what to fix is described by the rule
+        rather than by the prose it fired on. The document itself is stored
+        (`application_documents.content`, encrypted at rest) and readable
+        through an authorized access path, which is where someone who needs to
+        see line 12 should go.
+        """
         if report.is_safe:
             logger.debug(
                 "ats safety check passed for tailored_resume user=%s job=%s",
@@ -263,8 +278,8 @@ class GenerateTailoredResume:
         )
         for violation in report.violations:
             logger.warning(
-                "ats safety violation [%s] at line %d: %r",
+                "ats safety violation [%s] at line %d: %s",
                 violation.rule,
                 violation.line_number,
-                violation.line,
+                violation.detail,
             )

@@ -171,7 +171,9 @@ async def test_violations_are_logged_with_the_terms_that_failed(
     assert "user-1" in logged
     assert "job-posting-1" in logged
     assert "initech" in logged
-    assert "Staff Engineer at Initech (2016-2019)" in logged
+    # The terms, not the line: see GenerationGuardAudit's module docstring
+    # (Epic 07 — no PII in logs).
+    assert "Staff Engineer at Initech (2016-2019)" not in logged
 
 
 @pytest.mark.asyncio

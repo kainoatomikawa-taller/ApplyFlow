@@ -9,6 +9,20 @@ Authentication is Adzuna's `app_id`/`app_key` pair, both sourced from the
 Epic 00 config layer (`Settings.job_aggregator_app_id` /
 `.job_aggregator_api_key`), passed as query parameters per Adzuna's API.
 
+That is the one exception to this codebase's rule that secrets travel in
+headers, not URLs (Epic 07), and it is not ours to fix: Adzuna's public API
+accepts no header alternative, so the choice is a query string or no job
+ingestion. What *is* in scope is the consequence — an httpx error
+stringifies the request URL, and logging that exception would have written
+`app_key` into the logs. Query strings are therefore stripped from every
+URL before it reaches a handler (see
+`src/infrastructure/observability/pii_redaction.py`), which is why the retry
+logging below can pass `exc` straight through. No credential is logged here
+deliberately, and none can be logged accidentally.
+
+The outbound request also carries no candidate data: the search terms are
+keywords and a location, never the profile they were derived from.
+
 Pagination: Adzuna's `/search/{page}` endpoint is 1-indexed and reports a
 total `count`; `has_more` is derived by comparing how many results have
 been seen so far against that count, so a caller walking pages via

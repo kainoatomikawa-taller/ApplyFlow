@@ -214,10 +214,15 @@ class SupportedLine:
 
 @dataclass(frozen=True)
 class ProvenanceViolation:
-    """One dropped line, naming the terms that nothing in the corpus
-    backed. Carries the line verbatim: it is precisely what a developer
-    needs to see, and being unbacked, it is model invention rather than
-    candidate data."""
+    """One dropped line, naming the terms that nothing in the corpus backed.
+
+    Carries the line verbatim because a caller reviewing or re-generating the
+    document needs it. It must not be treated as safe to *publish*, though:
+    the line is unbacked because the claim in it is unsupported, which says
+    nothing about the other words — a real name in front of an invented
+    achievement is still a real name. `GenerationGuardAudit` logs
+    `unsupported_terms` and deliberately not this field; see its module
+    docstring."""
 
     line: str
     unsupported_terms: tuple[str, ...]
