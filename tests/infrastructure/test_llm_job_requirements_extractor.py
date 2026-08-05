@@ -45,10 +45,29 @@ async def test_extract_routes_through_the_cheap_extraction_task_type():
     client = FakeLlmClient(json.dumps({}))
     extractor = LlmJobRequirementsExtractor(client)
 
-    await extractor.extract("job description")
+    await extractor.extract(title="A Title", description="job description")
 
-    assert client.calls[0][0] == "job description"
     assert client.calls[0][1] == LlmTaskType.EXTRACTION
+
+
+@pytest.mark.asyncio
+async def test_the_title_reaches_the_model_alongside_the_description():
+    """The title used not to be sent at all, and the hiring term is usually
+    stated *only* there — "Accounting Intern (Fall 2026)". Extracting from the
+    description alone silently returned no term for those postings."""
+    client = FakeLlmClient(json.dumps({}))
+    extractor = LlmJobRequirementsExtractor(client)
+
+    await extractor.extract(
+        title="Accounting Intern (Fall 2026)", description="Join our team."
+    )
+
+    prompt = client.calls[0][0]
+    assert "Accounting Intern (Fall 2026)" in prompt
+    assert "Join our team." in prompt
+    # Labelled rather than concatenated, so the model reads the title as the
+    # posting's headline and not as the first line of the body.
+    assert prompt.index("Accounting Intern") < prompt.index("Join our team.")
 
 
 @pytest.mark.asyncio
@@ -70,7 +89,7 @@ async def test_extract_parses_a_full_structured_payload():
     client = FakeLlmClient(json.dumps(payload))
     extractor = LlmJobRequirementsExtractor(client)
 
-    result = await extractor.extract("job description")
+    result = await extractor.extract(title="A Title", description="job description")
 
     assert result.degree_level == DegreeLevel.BACHELORS
     assert result.degree_required is True
@@ -91,7 +110,7 @@ async def test_extract_strips_markdown_code_fences():
     client = FakeLlmClient(fenced)
     extractor = LlmJobRequirementsExtractor(client)
 
-    result = await extractor.extract("job description")
+    result = await extractor.extract(title="A Title", description="job description")
 
     assert result.degree_level == DegreeLevel.MASTERS
 
@@ -102,7 +121,7 @@ async def test_extract_raises_external_service_error_on_invalid_json():
     extractor = LlmJobRequirementsExtractor(client)
 
     with pytest.raises(ExternalServiceError, match="invalid JSON"):
-        await extractor.extract("job description")
+        await extractor.extract(title="A Title", description="job description")
 
 
 @pytest.mark.asyncio
@@ -111,7 +130,7 @@ async def test_extract_raises_external_service_error_when_payload_is_not_an_obje
     extractor = LlmJobRequirementsExtractor(client)
 
     with pytest.raises(ExternalServiceError, match="wasn't an object"):
-        await extractor.extract("job description")
+        await extractor.extract(title="A Title", description="job description")
 
 
 @pytest.mark.asyncio
@@ -119,7 +138,7 @@ async def test_extract_handles_a_terse_description_without_fabricating_anything(
     client = FakeLlmClient(json.dumps({}))
     extractor = LlmJobRequirementsExtractor(client)
 
-    result = await extractor.extract("We're hiring.")
+    result = await extractor.extract(title="A Title", description="We're hiring.")
 
     assert result.degree_level is None
     assert result.clearance_level is None
@@ -146,7 +165,7 @@ async def test_extract_drops_malformed_entries_instead_of_crashing():
     client = FakeLlmClient(json.dumps(payload))
     extractor = LlmJobRequirementsExtractor(client)
 
-    result = await extractor.extract("messy description")
+    result = await extractor.extract(title="A Title", description="messy description")
 
     assert result.degree_level is None
     assert result.degree_required is None
@@ -162,7 +181,7 @@ async def test_extract_drops_max_years_when_it_contradicts_min_years():
     client = FakeLlmClient(json.dumps(payload))
     extractor = LlmJobRequirementsExtractor(client)
 
-    result = await extractor.extract("job description")
+    result = await extractor.extract(title="A Title", description="job description")
 
     assert result.min_years_experience == 8
     assert result.max_years_experience is None
@@ -184,7 +203,7 @@ async def test_employment_type_and_term_are_read():
     }
     result = await LlmJobRequirementsExtractor(
         FakeLlmClient(json.dumps(payload))
-    ).extract("text")
+    ).extract(title="A Title", description="text")
 
     assert result.employment_type is EmploymentType.INTERNSHIP
     assert result.hiring_term == HiringTerm(season=TermSeason.SUMMER, year=2027)
@@ -200,7 +219,7 @@ async def test_a_season_with_no_year_keeps_the_season():
     payload = {"employment_type": "internship", "hiring_term_season": "summer"}
     result = await LlmJobRequirementsExtractor(
         FakeLlmClient(json.dumps(payload))
-    ).extract("text")
+    ).extract(title="A Title", description="text")
 
     assert result.hiring_term == HiringTerm(season=TermSeason.SUMMER)
     assert result.hiring_term is not None
@@ -214,7 +233,7 @@ async def test_a_year_with_no_season_is_dropped_entirely():
     payload = {"hiring_term_year": 2027}
     result = await LlmJobRequirementsExtractor(
         FakeLlmClient(json.dumps(payload))
-    ).extract("text")
+    ).extract(title="A Title", description="text")
 
     assert result.hiring_term is None
 
@@ -226,7 +245,7 @@ async def test_an_implausible_year_costs_the_year_not_the_term():
     payload = {"hiring_term_season": "fall", "hiring_term_year": 27}
     result = await LlmJobRequirementsExtractor(
         FakeLlmClient(json.dumps(payload))
-    ).extract("text")
+    ).extract(title="A Title", description="text")
 
     assert result.hiring_term == HiringTerm(season=TermSeason.FALL)
 
@@ -237,14 +256,16 @@ async def test_an_unrecognized_employment_type_is_dropped(value):
     payload = {"employment_type": value}
     result = await LlmJobRequirementsExtractor(
         FakeLlmClient(json.dumps(payload))
-    ).extract("text")
+    ).extract(title="A Title", description="text")
 
     assert result.employment_type is None
 
 
 @pytest.mark.asyncio
 async def test_a_posting_with_neither_field_extracts_neither():
-    result = await LlmJobRequirementsExtractor(FakeLlmClient("{}")).extract("text")
+    result = await LlmJobRequirementsExtractor(FakeLlmClient("{}")).extract(
+        title="A Title", description="text"
+    )
 
     assert result.employment_type is None
     assert result.hiring_term is None

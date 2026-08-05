@@ -23,6 +23,7 @@ from src.application.dtos.job_ingestion_dtos import (
     IngestBoardJobsInput,
     TargetBoard,
 )
+from src.application.dtos.job_requirements_dtos import ExtractJobRequirementsInput
 from src.application.dtos.llm_dtos import LlmCompletionInput
 from src.application.exceptions import ErasureNotAcknowledgedError
 from src.application.ports.llm_client_port import LlmTaskType
@@ -31,9 +32,13 @@ from src.application.use_cases.create_job_application import (
 )
 from src.application.use_cases.erase_user_data import EraseUserData
 from src.application.use_cases.export_user_data import ExportUserData
+from src.application.use_cases.extract_job_requirements import (
+    ExtractJobRequirements,
+)
 from src.application.use_cases.get_llm_completion import GetLlmCompletion
 from src.application.use_cases.ingest_aggregator_jobs import IngestAggregatorJobs
 from src.application.use_cases.ingest_board_jobs import IngestBoardJobs
+from src.domain.entities.job_posting import JobPosting
 from src.domain.services.ats_board_locator import identify_ats_board
 from src.domain.value_objects.ats_provider import AtsProvider
 from src.infrastructure.ats_boards.ashby_board_client import AshbyBoardClient
@@ -42,6 +47,9 @@ from src.infrastructure.ats_boards.lever_board_client import LeverBoardClient
 from src.infrastructure.config import get_settings
 from src.infrastructure.job_aggregators.adzuna_client import AdzunaJobAggregatorClient
 from src.infrastructure.llm.anthropic_client import AnthropicLlmClient
+from src.infrastructure.llm.llm_job_requirements_extractor import (
+    LlmJobRequirementsExtractor,
+)
 from src.infrastructure.observability import configure_logging
 from src.infrastructure.persistence.consent_repository_impl import (
     SqlAlchemyConsentRepository,
@@ -220,6 +228,104 @@ async def _ingest_board(args: argparse.Namespace) -> None:
         raise SystemExit(f"{len(output.failed_boards)} board(s) could not be read")
 
 
+def _matches_narrowing(posting: JobPosting, args: argparse.Namespace) -> bool:
+    """Whether this posting is in the slice the operator asked for.
+
+    Narrowing happens here rather than in the repository because it is a
+    maintenance convenience, not a query the application needs: the point is to
+    extract a small, inspectable slice first, and filtering an already-loaded page
+    of postings is enough for that. Adding parameters to
+    `JobPostingRepository.list_missing_requirements` would change an interface
+    twelve test doubles implement, to serve one command.
+    """
+    if args.company and args.company.strip().lower() not in posting.company.lower():
+        return False
+    return not (
+        args.title_like and args.title_like.strip().lower() not in posting.title.lower()
+    )
+
+
+async def _extract_requirements(args: argparse.Namespace) -> None:
+    """Read a bounded batch of postings' descriptions into structured
+    requirements.
+
+    Exists because the only other trigger is the Celery beat sweep, which takes
+    200 at a time every ten minutes and cannot be inspected or held back. Each
+    posting costs one LLM call, so `--limit` is required rather than defaulted:
+    an accidental run over the whole corpus is a real bill.
+
+    `--dry-run` still pays for the calls — it is the model's reading that costs,
+    not the write — but stores nothing, so a bad prompt can be found before it
+    fills the database with wrong answers.
+    """
+    settings = get_settings()
+    async with async_session_factory() as session:
+        repository = SqlAlchemyJobPostingRepository(session)
+        use_case = ExtractJobRequirements(
+            repository=repository,
+            extractor=LlmJobRequirementsExtractor(AnthropicLlmClient(settings)),
+        )
+
+        # `list_missing_requirements` is naturally incremental — it selects only
+        # rows whose requirements are NULL — so a run never pays twice for a
+        # posting and an interrupted run simply resumes. `--re-extract` opts out
+        # of that, for when the extraction schema itself has changed.
+        if args.re_extract:
+            candidates = await repository.list_active(limit=args.scan)
+        else:
+            candidates = await repository.list_missing_requirements(limit=args.scan)
+
+        selected = [p for p in candidates if _matches_narrowing(p, args)][: args.limit]
+
+        if not selected:
+            print(
+                f"Nothing to extract: scanned {len(candidates)} posting(s) and none "
+                "matched. Try --scan higher, or relax --company/--title-like."
+            )
+            return
+
+        mode = "DRY RUN — nothing will be saved" if args.dry_run else "writing results"
+        print(f"Extracting {len(selected)} posting(s) — {mode}\n")
+
+        extracted = 0
+        failed = 0
+        for posting in selected:
+            try:
+                output = await use_case.execute(
+                    ExtractJobRequirementsInput(job_posting_id=posting.id)
+                )
+            except Exception as exc:  # noqa: BLE001 - one posting never sinks a batch
+                failed += 1
+                print(
+                    f"  FAILED  {posting.company[:18]:20} {posting.title[:40]:42} "
+                    f"{type(exc).__name__}"
+                )
+                continue
+
+            if args.dry_run:
+                # Undo the use case's write. The use case persists by design (the
+                # sweep needs it to), so a dry run has to put the row back rather
+                # than ask the use case to behave differently.
+                posting.requirements = None
+                await repository.update(posting)
+
+            r = output.requirements
+            extracted += 1
+            print(
+                f"  {posting.company[:18]:20} {posting.title[:38]:40} "
+                f"type={r.employment_type or '-'} term={r.hiring_term or '-'} "
+                f"fn={r.job_function or '-'} "
+                f"standing={r.student_status_requirement or '-'} "
+                f"degree={r.degree_level or '-'}"
+            )
+
+        print(f"\nExtracted {extracted}, failed {failed}.")
+        if args.dry_run:
+            print("Dry run: no requirements were stored.")
+        remaining = await repository.list_missing_requirements(limit=10_000)
+        print(f"{len(remaining)} posting(s) still have no requirements.")
+
+
 async def _export_data(args: argparse.Namespace) -> None:
     """Write a complete portable copy of a user's data to stdout as JSON.
 
@@ -365,6 +471,51 @@ def main() -> None:
         help="File of 'Company,board-url-or-provider:token' lines; # comments allowed.",
     )
     ingest_board.set_defaults(func=_ingest_board)
+
+    extract_requirements = sub.add_parser(
+        "extract-requirements",
+        help=(
+            "Read job descriptions into structured requirements. One LLM call "
+            "per posting, so --limit is required."
+        ),
+    )
+    extract_requirements.add_argument(
+        "--limit",
+        type=int,
+        required=True,
+        help=(
+            "How many postings to extract. One LLM call each — no default, on purpose."
+        ),
+    )
+    extract_requirements.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print what would be extracted and store nothing. Still costs the calls.",
+    )
+    extract_requirements.add_argument(
+        "--company", default=None, help="Only postings whose company contains this."
+    )
+    extract_requirements.add_argument(
+        "--title-like", default=None, help="Only postings whose title contains this."
+    )
+    extract_requirements.add_argument(
+        "--re-extract",
+        action="store_true",
+        help=(
+            "Include postings already extracted, overwriting them. For when the "
+            "extraction schema has changed."
+        ),
+    )
+    extract_requirements.add_argument(
+        "--scan",
+        type=int,
+        default=2000,
+        help=(
+            "How many postings to load before narrowing. Raise it if --company or "
+            "--title-like matches nothing in the first page."
+        ),
+    )
+    extract_requirements.set_defaults(func=_extract_requirements)
 
     llm_ping = sub.add_parser(
         "llm-ping", help="Send one prompt through the LLM integration layer"

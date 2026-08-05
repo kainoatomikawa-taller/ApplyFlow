@@ -36,4 +36,20 @@ class JobRequirementsMapper:
             required_skills=list(requirements.required_skills),
             preferred_skills=list(requirements.preferred_skills),
             preferences=list(requirements.preferences),
+            employment_type=(
+                requirements.employment_type.value
+                if requirements.employment_type
+                else None
+            ),
+            hiring_term=(
+                requirements.hiring_term.label if requirements.hiring_term else None
+            ),
+            job_function=(
+                requirements.job_function.value if requirements.job_function else None
+            ),
+            student_status_requirement=(
+                requirements.student_status_requirement.value
+                if requirements.student_status_requirement
+                else None
+            ),
         )

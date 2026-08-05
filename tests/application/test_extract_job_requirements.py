@@ -70,7 +70,7 @@ class FakeExtractor(JobRequirementsExtractorPort):
         self.requirements = requirements
         self.calls: list[str] = []
 
-    async def extract(self, description: str) -> JobRequirements:
+    async def extract(self, *, title: str, description: str) -> JobRequirements:
         self.calls.append(description)
         return self.requirements
 

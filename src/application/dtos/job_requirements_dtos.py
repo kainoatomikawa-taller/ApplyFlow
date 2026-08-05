@@ -28,6 +28,16 @@ class JobRequirementsOutput:
     required_skills: list[str] = field(default_factory=list)
     preferred_skills: list[str] = field(default_factory=list)
     preferences: list[str] = field(default_factory=list)
+    # What the posting *is*, rather than what it demands of the candidate.
+    # Defaulted and placed last so the existing constructions of this DTO did not
+    # all have to change when employment type, term and function were added.
+    employment_type: str | None = None
+    #: "Summer 2027", or "Summer" when the year is unstated. A rendered label
+    #: rather than season/year parts: every consumer so far wants to display it,
+    #: and the domain is the one place that should decide the wording.
+    hiring_term: str | None = None
+    job_function: str | None = None
+    student_status_requirement: str | None = None
 
 
 @dataclass(frozen=True)

@@ -28,13 +28,20 @@ class JobRequirementsExtractorPort(ABC):
     requirements extractor."""
 
     @abstractmethod
-    async def extract(self, description: str) -> JobRequirements:
-        """Extract structured requirement attributes from a job posting's
-        raw description text.
+    async def extract(self, *, title: str, description: str) -> JobRequirements:
+        """Extract structured requirement attributes from a job posting.
 
-        Never invents a value the description doesn't support — an
-        attribute the text doesn't mention, or states only ambiguously, is
-        left `None`/empty on the returned `JobRequirements` rather than
-        guessed. Raises `src.application.exceptions.ExternalServiceError`
-        if the call fails or the model's response cannot be interpreted.
+        Takes the title as well as the description, and the title is not
+        optional garnish: it is the most information-dense field a posting has.
+        The hiring term is usually stated *only* there — "Accounting Intern
+        (Fall 2026)", "Software Engineering Intern - Summer 2027" — as is the
+        employment type, and often the clearest signal of function. Extracting
+        from the description alone silently lost all of that, which is how a
+        posting with the term in its title came back with no term at all.
+
+        Never invents a value the text doesn't support — an attribute it
+        doesn't mention, or states only ambiguously, is left `None`/empty on
+        the returned `JobRequirements` rather than guessed. Raises
+        `src.application.exceptions.ExternalServiceError` if the call fails or
+        the model's response cannot be interpreted.
         """

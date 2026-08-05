@@ -155,6 +155,12 @@ class ProfileResponse(BaseModel):
 
 
 class JobRequirementsResponse(BaseModel):
+    #: What the posting is — engagement, term, function, standing demanded.
+    #: Defaulted because a posting whose requirements predate extraction has none.
+    employment_type: str | None = None
+    hiring_term: str | None = None
+    job_function: str | None = None
+    student_status_requirement: str | None = None
     degree_level: str | None
     degree_required: bool | None
     clearance_level: str | None

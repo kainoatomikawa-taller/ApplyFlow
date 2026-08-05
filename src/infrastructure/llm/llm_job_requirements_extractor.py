@@ -124,9 +124,14 @@ class LlmJobRequirementsExtractor(JobRequirementsExtractorPort):
     def __init__(self, llm_client: LlmClientPort) -> None:
         self._llm_client = llm_client
 
-    async def extract(self, description: str) -> JobRequirements:
+    async def extract(self, *, title: str, description: str) -> JobRequirements:
+        # Title first and labelled, so the model reads it as the posting's own
+        # headline rather than as the opening line of the body. Terms and
+        # employment types live there far more reliably than in the prose.
         raw = await self._llm_client.complete(
-            description, task_type=LlmTaskType.EXTRACTION, system=_SYSTEM_PROMPT
+            f"Job title: {title}\n\nJob description:\n{description}",
+            task_type=LlmTaskType.EXTRACTION,
+            system=_SYSTEM_PROMPT,
         )
         payload = self._decode(raw)
 

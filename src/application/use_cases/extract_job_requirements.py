@@ -40,7 +40,9 @@ class ExtractJobRequirements:
         if job_posting is None:
             raise JobPostingNotFoundError(dto.job_posting_id)
 
-        requirements = await self._extractor.extract(job_posting.description)
+        requirements = await self._extractor.extract(
+            title=job_posting.title, description=job_posting.description
+        )
         job_posting.set_requirements(requirements)
         await self._repository.update(job_posting)
 
